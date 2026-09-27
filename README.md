@@ -39,6 +39,17 @@ The first cell builds the dataset (about 15 seconds). Everyone gets identical da
    - `EMBEDDING_MODEL`: if the workspace blocks huggingface.co, download the `sentence-transformers/all-MiniLM-L6-v2` model folder once, put it in a volume, and set this to that path. Without it, session 7 falls back to a weaker method and says so.
 5. **Compute.** A recent **ML runtime (LTS)** is the easy choice; it includes pandas 2+, PyArrow, scikit-learn, spaCy, and sentence-transformers. Serverless also works if the volume is configured. Sessions 1 through 4 need pandas 2.0 or newer, which the setup cell checks.
 
+### Databricks Free Edition (for dry runs)
+
+Free Edition is serverless-only and limits outbound internet, so a few settings matter:
+
+1. **Clone:** Workspace > Create > Git folder, paste the repo's HTTPS URL. A public repo needs no Git credentials.
+2. **Environment:** open a notebook, open the Environment panel on the right, and pick environment version 4 or newer (pandas 2.2). Versions 1-3 ship pandas 1.5 and the setup cell will stop and say so. To make it the default for every notebook: Settings > Workspace admin > Compute > Base environments for serverless compute.
+3. **Volume:** Catalog > `workspace` > `default` > Create > Volume, named `lunch_and_learn`. Then in `lnl/config.py` set `DATABRICKS_VOLUME = "/Volumes/workspace/default/lunch_and_learn"`, `DATABRICKS_CATALOG = "workspace"`, `DATABRICKS_SCHEMA = "default"`, commit, and pull in the Git folder.
+4. **Text sessions:** the spaCy model ships in `wheels/`, so session 6 doesn't need github.com. Session 7's sentence-transformer model is not in the Standard environment and Hugging Face may be blocked; expect the fallback method unless you stage the model in the volume (`EMBEDDING_MODEL`).
+
+Free Edition is for learning and doesn't permit commercial use. Use it with this mock data only.
+
 ## What's in the repo
 
 ```
@@ -51,6 +62,7 @@ lnl/                course helper package; each session's cleansing lives here o
   spark.py          session 5    text.py         sessions 6-7
   trust.py          the Trust Test questions      check.py        exercise checkers
 generator/          gen_hero_offenders.py builds the dataset and the conduct-notes answer key
+wheels/             spaCy's small English model, so session 6 works without github.com access
 tools/set_repo.py   one-time repo URL update
 ```
 

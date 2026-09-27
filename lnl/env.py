@@ -9,7 +9,8 @@ from pathlib import Path
 from . import config
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-IS_DATABRICKS = "DATABRICKS_RUNTIME_VERSION" in os.environ
+# /Workspace exists on every Databricks compute type, serverless (and Free Edition) included
+IS_DATABRICKS = "DATABRICKS_RUNTIME_VERSION" in os.environ or Path("/Workspace").is_dir()
 IS_COLAB = "COLAB_RELEASE_TAG" in os.environ or "google.colab" in sys.modules
 
 SESSION_TITLES = {
@@ -66,7 +67,9 @@ def _check_core() -> None:
     if major < 2:
         raise RuntimeError(
             f"This course needs pandas 2.0 or newer; this environment has {pd.__version__}. "
-            "On Databricks, use a recent ML runtime (LTS) or serverless; in Colab this won't happen.")
+            "On Databricks serverless (including Free Edition): open the Environment panel on the right, "
+            "set the environment version to 4 or newer, click Apply, and run this cell again. "
+            "On classic compute: use a recent ML runtime (LTS).")
     ensure("pyarrow")
 
 

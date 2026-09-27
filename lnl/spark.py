@@ -10,6 +10,13 @@ def get_spark():
     warnings.filterwarnings("ignore", message=".*PySpark does not yet fully support pandas.*")
     from pyspark.sql import SparkSession
     if env.IS_DATABRICKS:
+        try:  # Databricks notebooks (serverless too) already have a session called `spark`
+            from IPython import get_ipython
+            existing = get_ipython().user_ns.get("spark")
+            if existing is not None:
+                return existing
+        except Exception:
+            pass
         return SparkSession.builder.getOrCreate()
     os.environ.setdefault("SPARK_LOCAL_IP", "127.0.0.1")   # quiets hostname warnings in Colab
     spark = (SparkSession.builder.master("local[*]").appName("lunch-and-learn")

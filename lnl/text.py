@@ -87,11 +87,18 @@ def load_spacy():
     try:
         return spacy.load("en_core_web_sm", disable=["parser", "ner"])
     except OSError:
+        pass
+    # The repo ships the model's wheel, so this works where github.com is blocked (e.g. Databricks Free Edition)
+    bundled = sorted((env.REPO_ROOT / "wheels").glob("en_core_web_sm-*.whl"))
+    if bundled:
+        print("Installing the small English model from the course files (one-time)...")
+        env.pip_install(str(bundled[-1]))
+    else:
         print("Downloading the small English model (one-time)...")
         from spacy.cli import download
         download("en_core_web_sm")
-        importlib.invalidate_caches()
-        return spacy.load("en_core_web_sm", disable=["parser", "ner"])
+    importlib.invalidate_caches()
+    return spacy.load("en_core_web_sm", disable=["parser", "ner"])
 
 
 def tokenize(notes: pd.Series, nlp) -> list:
