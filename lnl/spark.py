@@ -5,7 +5,7 @@ from . import config, env
 
 
 def get_spark():
-    """The cluster's Spark on Databricks; a small local Spark in Colab or Jupyter."""
+    """The notebook's Spark on Databricks; a small local Spark when testing outside Databricks."""
     import warnings
     warnings.filterwarnings("ignore", message=".*PySpark does not yet fully support pandas.*")
     from pyspark.sql import SparkSession
@@ -18,7 +18,7 @@ def get_spark():
         except Exception:
             pass
         return SparkSession.builder.getOrCreate()
-    os.environ.setdefault("SPARK_LOCAL_IP", "127.0.0.1")   # quiets hostname warnings in Colab
+    os.environ.setdefault("SPARK_LOCAL_IP", "127.0.0.1")   # quiets hostname warnings when testing locally
     spark = (SparkSession.builder.master("local[*]").appName("lunch-and-learn")
              .config("spark.ui.enabled", "false")
              .config("spark.ui.showConsoleProgress", "false")
@@ -49,10 +49,15 @@ def read_raw(spark):
 def show(df, n: int = 10):
     """Databricks' interactive table when available, otherwise a regular table."""
     if env.IS_DATABRICKS:
-        display(df.limit(n))  # noqa: F821  (display is built into Databricks notebooks)
-    else:
-        from IPython.display import display as ipy_display
-        ipy_display(df.limit(n).toPandas())
+        try:  # Databricks puts `display` in the notebook, not in imported modules, so fetch it from there
+            from IPython import get_ipython
+            databricks_display = get_ipython().user_ns.get("display")
+            if databricks_display is not None:
+                return databricks_display(df.limit(n))
+        except Exception:
+            pass
+    from IPython.display import display as ipy_display
+    ipy_display(df.limit(n).toPandas())
 
 
 def check_ids(df):

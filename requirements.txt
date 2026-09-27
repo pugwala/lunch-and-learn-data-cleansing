@@ -1,4 +1,4 @@
-# Most of this is preinstalled on Databricks ML runtimes and in Google Colab.
+# Most of this is preinstalled on Databricks runtimes and serverless environments.
 # The setup cell installs anything a session needs that's missing, so staff never run pip themselves.
 pandas>=2.0
 pyarrow>=14

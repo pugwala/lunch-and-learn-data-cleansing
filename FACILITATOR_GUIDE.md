@@ -1,5 +1,56 @@
 # Facilitator Guide
 
+## Before the first session: setup and dry run
+
+The point of the dry run is simple: every number you show the room has already matched on your screen, so you can tell people with confidence that theirs will match too. Work top to bottom.
+
+### 1. Finish the repo (10 minutes)
+
+- [ ] Make sure the repo has the latest `lnl/spark.py` (it fixes the table display in session 5 on Databricks).
+- [ ] Check the top level of the repo shows four folders (`generator`, `lnl`, `notebooks`, `wheels`) and `README.md`, `FACILITATOR_GUIDE.md`, `requirements.txt`.
+
+### 2. Set up Databricks Free Edition (15 minutes)
+
+- [ ] Create the volume: **Catalog > workspace > default > Create > Volume**, name `lunch_and_learn`, type managed.
+- [ ] Nothing to edit: `lnl/config.py` ships set for Free Edition (`workspace` / `default` / `lunch_and_learn`).
+- [ ] Clone or refresh the course: **Workspace > your user folder > Create > Git folder**, paste the repo's HTTPS URL. If the Git folder already exists, open its Git dialog and click **Pull**.
+- [ ] Make pandas 2.2 the default: **Settings > Workspace admin > Compute > Base environments for serverless compute**, then star environment version 4 or newer.
+
+### 3. Dry run every session (about 45 minutes each)
+
+Run each notebook top to bottom once with the blanks empty, the way a student will: every "Your turn" cell should ask you to fill in the blank, and nothing should show a red error. Then fill in the answers from the bottom of the notebook and check that each checker says Correct.
+
+| Session | Must match | Also expect |
+|---|---|---|
+| 1 | Exercise 1 = 22; Q1 goes 1,536 to 2,991 | Setup cell builds the data in about 15 seconds |
+| 2 | Index: tdcj_number, unique: True; exercise 3 = 8,499 | Nulls: CSV 0, Parquet 81,039 |
+| 3 | 1,633 centuries corrected; 8 birth dates flagged | Flagged rows labeled by TDCJ number |
+| 4 | Restitution 1,333,587,950.77; 1,086 exceptions; all 8 Trust Test answers changed | Exceptions list keyed by TDCJ number |
+| 5 | "tdcj_number is a valid record ID"; reconciliation 16 of 16 | A Delta table line naming workspace.default; a "skip" line on a constraint is fine |
+| 6 | Final F1 about 0.898 | First run installs spaCy (a minute or two); attempt 4 may differ slightly |
+| 7 | Few-shot scores highest | The notebook prints which embedding method loaded; on Free Edition expect the fallback |
+
+- [ ] Sessions 1 to 5 match exactly. The data comes from a fixed seed, so a different number means something is wrong, not random.
+- [ ] Sessions 6 and 7 are close; small differences there come from library versions.
+- [ ] Time the hands-on part of each session at a newcomer's pace; it should fit in 28 minutes.
+- [ ] Practice the recovery move: **Run > Clear state**, then run all cells from the top.
+
+### 4. Pilot with one non-technical colleague
+
+- [ ] Ask someone who fits your audience to do session 1 with only the notebook, no help. Watch where they pause; those are the moments to say out loud in the room.
+- [ ] Fix or explain anything that confused them before the kickoff.
+
+### 5. Decide where students will work
+
+Recommended: the agency Databricks workspace, where an admin sets the default environment, volume, catalog and schema once and nobody in the room configures anything. Free Edition is fine for a dry run but doesn't permit commercial use, so check with the agency before using it for staff training. If students use their own Free Edition accounts, signing up, cloning the repo and setting the environment version become pre-work, and the pilot should test that path.
+
+- [ ] Decide, and run the pilot on that same path.
+
+### 6. Share and schedule
+
+- [ ] Fill in the kickoff slides' placeholders: [date], [time], [room], [workspace link], [folder path].
+- [ ] Share the course site and the slides. The site includes instructor keys; every notebook already has its answers at the bottom.
+
 ## Every session
 
 **Before:** start the compute 10 minutes early (a cold Databricks cluster can take 5 or more minutes), then run the notebook top to bottom once yourself so the dataset is already generated and any environment surprises happen to you, not the room.
@@ -8,9 +59,10 @@
 
 **Common snags:**
 - *"NameError: PATHS is not defined"*: they skipped the setup cell. Run it.
-- *Weird results after editing a cell out of order*: restart (Colab: Runtime → Restart session; Databricks: Run → Clear state) and run from the top.
-- *Colab asks to "Run anyway" for a GitHub notebook*: expected. The notebook is from our repo.
-- *The setup cell says REPO_URL needs setting*: the one-time setup in the README wasn't finished.
+- *Weird results after editing a cell out of order*: choose **Run → Clear state** and run from the top.
+- *The setup cell says it can't find the course files*: the notebook was opened from outside the course's Git folder. Open it from inside the Git folder.
+- *"This course needs pandas 2.0 or newer"*: the notebook is on an old serverless environment. Open the Environment panel on the right, pick version 4 or newer, click Apply, and rerun the setup cell.
+- *Session 5 prints "No Unity Catalog volume configured"*: the volume is missing or its path in `lnl/config.py` has a typo. The session still runs; it hands the data to Spark through pandas.
 
 All numbers below come from seed 2026 with 100,000 rows. If someone's numbers differ, they've edited something upstream.
 
@@ -87,11 +139,7 @@ All numbers below come from seed 2026 with 100,000 rows. If someone's numbers di
 | Total restitution (#2) | 1,333,587,950.77 |
 | Reconciliation | 16 of 16 match, including distinct TDCJ numbers = rows |
 
-**Talking points:** Spark's `trim()` leaving tabs behind and Spark's `yy` meaning 2000-2099 are both examples of "same name, different behavior." Spark SQL is there for people who think in SQL; point it out explicitly. This session runs slower in Colab (a local Spark starts up); start it early.
-
-## Session 6 · Text I
-
-**Point to land:** rules are transparent and brittle; always score against an answer key.
+**Talking points:** Spark's `trim()` leaving tabs behind and Spark's `yy` meaning 2000-2099 are both examples of "same name, different behavior." Spark SQL is there for people who think in SQL; point it out explicitly. The first Spark command takes a moment on serverless; start compute early.
 
 | Attempt | F1 |
 |---|---|

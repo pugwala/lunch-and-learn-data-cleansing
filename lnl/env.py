@@ -11,7 +11,6 @@ from . import config
 REPO_ROOT = Path(__file__).resolve().parent.parent
 # /Workspace exists on every Databricks compute type, serverless (and Free Edition) included
 IS_DATABRICKS = "DATABRICKS_RUNTIME_VERSION" in os.environ or Path("/Workspace").is_dir()
-IS_COLAB = "COLAB_RELEASE_TAG" in os.environ or "google.colab" in sys.modules
 
 SESSION_TITLES = {
     1: "Meet the Mess", 2: "Cleansing", 3: "Dates", 4: "Types and the Payoff",
@@ -21,10 +20,9 @@ SESSION_TITLES = {
 
 def environment_name() -> str:
     if IS_DATABRICKS:
-        return f"Databricks (runtime {os.environ.get('DATABRICKS_RUNTIME_VERSION')})"
-    if IS_COLAB:
-        return "Google Colab"
-    return "Local Jupyter"
+        runtime = os.environ.get("DATABRICKS_RUNTIME_VERSION")
+        return f"Databricks (runtime {runtime})" if runtime else "Databricks (serverless)"
+    return "Local Jupyter (instructor testing)"
 
 
 def data_dir() -> Path:
