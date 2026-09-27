@@ -12,10 +12,10 @@ SEED = 2026
 # ---- Databricks only (recommended). Leave blank to fall back to local files. -----------------
 # A Unity Catalog volume the class can write to. Spark on serverless or shared compute can only
 # read files that live in a volume, so session 5 needs this on those compute types.
-DATABRICKS_VOLUME = ""    # e.g. "/Volumes/sandbox/lunch_and_learn/raw"; Free Edition: "/Volumes/workspace/default/lunch_and_learn"
+DATABRICKS_VOLUME = "/Volumes/workspace/default/lunch_and_learn"    # e.g. "/Volumes/sandbox/lunch_and_learn/raw"; Free Edition: "/Volumes/workspace/default/lunch_and_learn"
 # Catalog and schema where session 5 writes each person's cleansed Delta table.
-DATABRICKS_CATALOG = ""   # e.g. "sandbox"; Free Edition: "workspace"
-DATABRICKS_SCHEMA = ""    # e.g. "lunch_and_learn"; Free Edition: "default"
+DATABRICKS_CATALOG = "workspace"   # e.g. "sandbox"; Free Edition: "workspace"
+DATABRICKS_SCHEMA = "default"    # e.g. "lunch_and_learn"; Free Edition: "default"
 
 # Session 7 embedding model: a Hugging Face model name, or a folder path if the network blocks
 # huggingface.co (download the model folder once, put it in a volume, and point this at it,
