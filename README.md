@@ -60,6 +60,8 @@ lnl/                course helper package; each session's cleansing lives here o
   trust.py          the Trust Test questions      check.py        exercise checkers
 generator/          gen_hero_offenders.py builds the dataset and the conduct-notes answer key
 wheels/             spaCy's small English model, so session 6 works without github.com access
+docs/               student-handout.pdf, the 10-page student handout, ready to print
+extras/             supply_orders_type_conversion.ipynb + mock_supply_orders.csv: a standalone type-conversion walkthrough (keep the two files together)
 ```
 
 ## The dataset

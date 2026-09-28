@@ -1,0 +1,41 @@
+order_id, facility ,item_description, order_date,order_time , quantity ,unit_price, rush_order,received 
+PO-26000,Ellis Unit   ,Copy Paper Case 10 ream   ,	08/21/2026,07:00 AM, 5,42.75   ,Y,T
+PO-26001,  Estelle Unit, Cisco SFP-10G-SR Transceiver   ,	06/26/2026 ,  05:45 PM, 5 ,1249.50,N,F
+PO-26002,	Huntsville Unit   ,"Mop Head, Looped ",07/19/2026   ,  07:12 AM   ,"  1,200   ", $ 6.10   ,Y,T
+PO-26003,Ellis Unit ,  Toner Cartridge HP 58A ,  06/09/2026,  06:45 AM , 4   ,  $112.40   , y ,t
+PO-26004,	Ellis Unit ,  Radio Holster   , 08/27/2026   ,  04:00 PM, 4,  22.35 ,N,T
+PO-26005,	Goree Unit ,	Radio Holster,  07/05/2026, 07:05 AM   ,  12   ,	22.35   ,N,T
+PO-26006,Huntsville Unit, Cat6 Patch Cable 10ft   , 07/22/2026   ,	11:05 AM   ,100 ,	3.99   ,N,F
+PO-26007,  Goree Unit   ,  Cisco SFP-10G-SR Transceiver, 13/45/2026 , 02:12 PM ,1   ,"  $1,249.50   ",N,T
+PO-26008,  Ellis Unit,Copy Paper Case 10 ream   ,  06/23/2026 ,02:00 PM,  100 , 42.75,,T
+PO-26009, Ferguson Unit,	Industrial Floor Cleaner 1 gal   , 07/01/2026 ,	03:00 PM, 50   ,  $14.25 ,Y,T
+PO-26010, Huntsville Unit,"First Aid Kit, Class B ",08/25/2026   , 04:12 PM   , 100,64.0   ,Y,F
+PO-26011, Huntsville Unit ,	Industrial Floor Cleaner 1 gal, 08/20/2026   ,	06:05 AM,	1 , $ 14.25,N,F
+PO-26012,Estelle Unit   ,"Mop Head, Looped",	06/13/2026   ,  , 24, 6.1   ,N,T
+PO-26013,Ellis Unit ,Cat6 Patch Cable 10ft,07/28/2026, 08:15 AM,	10 ,	3.99,Y,T
+PO-26014,	Wynne Unit ,	Batteries AA (24 pk)   ,	07/22/2026, 06:05 AM , 1,17.89   ,n,?
+PO-26015,Huntsville Unit,Radio Holster   ,07/11/2026   , 06:00 AM ,50   , 22.35   ,N,F
+PO-26016, Wynne Unit   ,  Industrial Floor Cleaner 1 gal,  08/16/2026 , 06:30 AM   ,  24 ,  $ 14.25,N,F
+PO-26017, Ferguson Unit   ,  Radio Holster,  06/02/2026, 01:30 PM ,  2,	$22.35   ,N,T
+PO-26018,Goree Unit,  Cisco SFP-10G-SR Transceiver,08/30/2026   , 10:30 AM , TBD ," $ 1,249.50   ",N,T
+PO-26019,Wynne Unit,	Copy Paper Case 10 ream ,07/14/2026,  09:45 AM,  100,	42.75   ,N,T
+PO-26020, Goree Unit   ,Nitrile Gloves (Box/100) , 08/30/2026 , 12:30 PM,  2 ,$8.49 ,N,F
+PO-26021, Ferguson Unit, Industrial Floor Cleaner 1 gal,	06/27/2026, 04:05 PM   ,  12 , 14.25 ,Y, f 
+PO-26022, Estelle Unit,	Industrial Floor Cleaner 1 gal ,  06/21/2026, 06:45 PM, 24 ,  $14.25 ,N,T
+PO-26023,  Goree Unit,"Mop Head, Looped ", 06/09/2026   ,  06:12 PM,100   , call vendor ,N,T
+PO-26024, Ferguson Unit ,Cisco SFP-10G-SR Transceiver   ,	07/11/2026, 12:30 PM ,	1,  1249.5   ,N,T
+PO-26025,	Goree Unit ,	Industrial Floor Cleaner 1 gal   ,  07/11/2026   , 04:50 PM,	10   ,	$ 14.25   ,N,T
+PO-26026,  Wynne Unit,	Copy Paper Case 10 ream   ,  06/23/2026 ,	03:30 PM , 24   ,	$42.75   ,Y,T
+PO-26027, Huntsville Unit   ,  Copy Paper Case 10 ream, 06/22/2026,04:00 PM, 100 ,$ 42.75 ,N,T
+PO-26028, Estelle Unit,Toner Cartridge HP 58A,	07/24/2026, 04:30 PM   ,	5, 112.4,N,F
+PO-26029,	Estelle Unit   ,"	First Aid Kit, Class B",	07/29/2026 ,  08:50 AM, 2.5 ,	$ 64.00   ,N,T
+PO-26030,  Wynne Unit ,Industrial Floor Cleaner 1 gal, 07/01/2026,	10:15 AM   , 10   , 14.25,N ,
+PO-26031, Huntsville Unit ,	Cisco SFP-10G-SR Transceiver   ,07/24/2026   ,	12:12 PM ,5 ,  1249.5 ,N,T
+PO-26032, Estelle Unit ,	Cisco SFP-10G-SR Transceiver ,07/24/2026 ,  02:45 PM   ,	10   , 1249.50 ,N,T
+PO-26033,	Huntsville Unit,	Nitrile Gloves (Box/100),,	03:30 PM , 24 ,  $8.49 ,Y,T
+PO-26034,Estelle Unit   ,Batteries AA (24 pk) , 07/19/2026   ,10:50 AM   ,10, $17.89,Y,F
+PO-26035,Goree Unit   , Toner Cartridge HP 58A ,  06/03/2026 , 03:05 PM   ,2,  112.4,N,T
+PO-26036, Goree Unit, Radio Holster,  08/14/2026   ,06:12 AM   ,24 ,	22.35   ,N,T
+PO-26037,Estelle Unit ,"  Mop Head, Looped   ",	07/18/2026   , 07:30 AM , 1   ,  6.1   ,N,T
+PO-26038, Wynne Unit,"  First Aid Kit, Class B ", 08/08/2026 ,	06:15 PM ,24 ,  $ 64.00,N,T
+PO-26039,  Ferguson Unit   ,Copy Paper Case 10 ream   , 08/02/2026, 09:12 AM   ,	12 , $ 42.75   ,N,T

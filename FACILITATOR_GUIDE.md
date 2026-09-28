@@ -7,7 +7,8 @@ The point of the dry run is simple: every number you show the room has already m
 ### 1. Finish the repo (10 minutes)
 
 - [ ] Make sure the repo has the latest `lnl/` folder, including `lnl/domains.py` and the crosswalk files in `lnl/reference/`, and the latest generator. The data file's name includes a version number, so the first setup cell after a pull rebuilds the data once (about 15 seconds).
-- [ ] Check the top level of the repo shows four folders (`generator`, `lnl`, `notebooks`, `wheels`) and `README.md`, `FACILITATOR_GUIDE.md`, `requirements.txt`.
+- [ ] Check the top level of the repo shows six folders (`docs`, `extras`, `generator`, `lnl`, `notebooks`, `wheels`) and `README.md`, `FACILITATOR_GUIDE.md`, `requirements.txt`.
+- [ ] When the student handout changes, export it again and replace `docs/student-handout.pdf`, so the printed copy matches.
 
 ### 2. Set up Databricks Free Edition (15 minutes)
 
