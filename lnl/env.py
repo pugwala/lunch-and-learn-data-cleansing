@@ -34,8 +34,12 @@ def data_dir() -> Path:
     return path
 
 
+# Bump whenever the generator's output changes, so a data file cached from an older version is never reused.
+DATA_VERSION = 4
+
+
 def paths() -> dict:
-    stem = f"hero_offender_data_s{config.SEED}_r{config.ROWS}"
+    stem = f"hero_offender_data_v{DATA_VERSION}_s{config.SEED}_r{config.ROWS}"
     d = data_dir()
     return {"data": d / f"{stem}.csv", "answer_key": d / f"{stem}_answer_key.csv", "dir": d}
 

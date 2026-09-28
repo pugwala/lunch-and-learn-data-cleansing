@@ -1,6 +1,6 @@
 # Data Cleansing Lunch & Learn
 
-Seven 45-minute hands-on sessions that take report writers from "I loaded a CSV" to "I can prove these numbers are right." Everyone works on the same 100,000-row mock offender dataset (superheroes and villains, so there's zero chance of real data leaking), built on purpose to contain the problems our real source systems have: padded blanks, nine date formats, two-digit years, leading zeros, money written six ways, Y/N and T/F flags mixed in one column, and free-text officer notes.
+Seven 45-minute hands-on sessions that take report writers from "I loaded a CSV" to "I can prove these numbers are right." Everyone works on the same 100,000-row mock offender dataset (superheroes and villains, so there's zero chance of real data leaking), built on purpose to contain the problems our real source systems have: padded blanks, nine date formats, two-digit years, leading zeros, money written six ways, Y/N and T/F flags mixed in one column, race, religion, gang (STG) and offense codes spelled dozens of ways, encoding damage in names, and free-text officer notes with web-form leftovers.
 
 > ⚠️ **Mock data only.** Nothing in this course may ever be run against real offender data outside approved TDCJ systems.
 
@@ -9,10 +9,10 @@ Seven 45-minute hands-on sessions that take report writers from "I loaded a CSV"
 | # | Notebook | What people learn |
 |---|---|---|
 | 1 | Meet the Mess | Look around a dataset; watch default loading give confident wrong answers (the Trust Test) |
-| 2 | Cleansing | Load as text, strip and null, "unknown" codes and the data dictionary, casing, names, keys, Parquet vs CSV |
+| 2 | Cleansing | Load as text, strip and null, "unknown" codes and the data dictionary, text repair, names, keys, coded values mapped through crosswalks (race, religion, STG affiliation, offense and violence codes), sensitive attributes, Parquet vs CSV |
 | 3 | Dates | Profile shapes, explicit formats, century rules for two-digit years, impossible dates, cross-record checks |
-| 4 | Types and the Payoff | Integers, exact money, time of day, yes/no (including single-character Y/N and T/F flags), ordered codes; the Trust Test rerun |
-| 5 | PySpark | The same pipeline in Spark and Spark SQL, reconciled with pandas to the cent, saved as a Delta table |
+| 4 | Types and the Payoff | Integers, exact money, time of day, yes/no (including single-character Y/N and T/F flags), ordered codes, rules that span two columns; the Trust Test rerun |
+| 5 | PySpark | The same pipeline in Spark and Spark SQL, with the same crosswalk files, reconciled with pandas to the cent, saved as a Delta table |
 | 6 | Text I: Finding "Good" | Keyword → case → whole word → lemma → vocabulary → negation → domain exclusions, each scored against an answer key |
 | 7 | Text II: Meaning Over Words | Embeddings, semantic search, zero-shot and few-shot classification, topic modeling, AI governance |
 
@@ -54,6 +54,8 @@ lnl/                course helper package; each session's cleansing lives here o
   env.py            environment detection, dependency checks, dataset generation
   pipeline.py       load_naive(), load_raw(), clean_through(n), answer_key()
   cleaning.py       session 2    dates.py        session 3    conversions.py  session 4
+  domains.py        session 2: text repair, coded values, exceptions and cross-record checks
+  reference/        the crosswalks: race, religion, STG groups, NIBRS offense codes, violence codes (CSV)
   spark.py          session 5    text.py         sessions 6-7
   trust.py          the Trust Test questions      check.py        exercise checkers
 generator/          gen_hero_offenders.py builds the dataset and the conduct-notes answer key
@@ -62,12 +64,28 @@ wheels/             spaCy's small English model, so session 6 works without gith
 
 ## The dataset
 
-23 columns, 100,000 rows, seed 2026. Highlights: `tdcj_number`, the record ID (8 digits with leading zeros, never repeated; the index from session 2 on), and `sid_number`, also with leading zeros; names in random casing; dates in nine formats with two-digit years and a few impossible birth dates (Wonder Woman, 1213); `intake_time` in seven formats; `disciplinary_points` as `3`, `03`, `3.0`, `3 pts`, `three`; `restitution_owed` with `$`, `USD`, `(12.00)` credits, and `-` for zero; `escape_risk` with a dozen spellings of yes and no; **`protective_custody`** as single-character Y/N from a legacy system mixed with T/F from a newer one; **`dampener_required`** as single-character T/F; and `conduct_notes`, free-text officer notes whose true sentiment is in a separate answer key used only for scoring. About 3% of every column is blank or whitespace-only.
+27 columns, 100,000 rows, seed 2026. Highlights: `tdcj_number`, the record ID (written as 8 digits with leading zeros and never repeated; from session 2 on it is checked, stored as a whole number, BIGINT, and used as the index), and `sid_number`, written and stored the same way; names in random casing; dates in nine formats with two-digit years and a few impossible birth dates (Wonder Woman, 1213); `intake_time` in seven formats; `disciplinary_points` as `3`, `03`, `3.0`, `3 pts`, `three`; `restitution_owed` with `$`, `USD`, `(12.00)` credits, and `-` for zero; `escape_risk` with a dozen spellings of yes and no; **`protective_custody`** as single-character Y/N from a legacy system mixed with T/F from a newer one; **`dampener_required`** as single-character T/F; and `conduct_notes`, free-text officer notes whose true sentiment is in a separate answer key used only for scoring.
+
+Seven data domains carry realistic damage:
+
+| Domain | Column(s) | What's wrong with it | Standardized in session 2 as |
+|---|---|---|---|
+| Names | `last_name`, `first_name`, `alias` | random casing, accents typed only sometimes (García / GARCIA), encoding damage (MUÃ‘OZ) | `*_std` (upper case, accents folded) |
+| Race and ethnicity | `race` | 66 spellings (W, WHITE, Caucasian, W - WHITE, W/H…), legacy combined boxes, a few codes on no list | `race_code` (agency letter code) and `race_omb` (2024 federal categories) |
+| Religious affiliation | `religion` | 80 spellings (RC, R.C., Cath, CATHLIC…), `NONE` vs `N/A` vs `DECLINED` | `religion_group`, `religion_family` |
+| STG affiliation | `stg_affiliation` | fictional villain groups under many aliases, status written into the same field (`SUSP: H.Y.D.R.A.`, `INTERGANG (C)`), two groups in one cell | `stg_group`, `stg_status` |
+| Offense codes | `offense_code`, `primary_offense` | NIBRS codes in lower case, with hyphens or spaces, `290.0` from a spreadsheet, lost leading zeros (`9B`), descriptions typed into the code field | `offense_code_std`, `offense_against` |
+| Violence codes | `violence_code` | NV/V1/V2/V3 as `V-2`, `v2`, `2`, `N/V`, plus codes that don't exist (`V4`); some disagree with the offense | `violence_code_std` |
+| Free text | `conduct_notes` | `<br>`, `&nbsp;`, curly quotes, doubled spaces, encoding damage (`â€™`) | repaired in place |
+
+Race and religion are assigned at random, independently of every other column, and are never inferred. The STG groups are fictional. The crosswalks in `lnl/reference/` are the course's stand-in for reference data the data owner would maintain.
+
+About 3% of every column is blank or whitespace-only.
 
 To regenerate or make a different size: `python generator/gen_hero_offenders.py 100000 data.csv 2026`.
 
 ## How this was tested
 
-All seven notebooks were executed end to end, both as delivered (blanks unfilled) and with the answer keys filled in, on pandas 3.0 with PySpark 4.2 in local mode. Sessions 1 through 4 were also run on pandas 2.2 with identical results. The Spark pipeline matches pandas on all 16 reconciliation metrics.
+All seven notebooks were executed end to end, both as delivered (blanks unfilled) and with the answer keys filled in, on pandas 3.0 with PySpark 4.2 in local mode. Sessions 1 through 4 were also run on pandas 2.2 with identical results. The Spark pipeline matches pandas on all 22 reconciliation metrics, and on every standardized coded value, record by record.
 
 Not yet tested: an actual Databricks workspace, and the sentence-transformer path in session 7 (the test environment couldn't reach Hugging Face, so the fallback method ran instead). Do a dry run of each notebook on your compute before the first session.

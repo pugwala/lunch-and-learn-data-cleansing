@@ -1,0 +1,27 @@
+code,offense,crime_against
+09A,Murder and Nonnegligent Manslaughter,Person
+09B,Negligent Manslaughter,Person
+100,Kidnapping/Abduction,Person
+11A,Rape,Person
+120,Robbery,Property
+13A,Aggravated Assault,Person
+13B,Simple Assault,Person
+13C,Intimidation,Person
+200,Arson,Property
+210,Extortion/Blackmail,Property
+220,Burglary/Breaking & Entering,Property
+23H,All Other Larceny,Property
+240,Motor Vehicle Theft,Property
+250,Counterfeiting/Forgery,Property
+26A,False Pretenses/Swindle/Confidence Game,Property
+26C,Impersonation,Property
+26G,Hacking/Computer Invasion,Property
+270,Embezzlement,Property
+280,Stolen Property Offenses,Property
+290,Destruction/Damage/Vandalism of Property,Property
+35A,Drug/Narcotic Violations,Society
+520,Weapon Law Violations,Society
+90C,Disorderly Conduct,Group B
+90D,Driving Under the Influence,Group B
+90J,Trespass of Real Property,Group B
+90Z,All Other Offenses,Group B

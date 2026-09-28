@@ -79,6 +79,13 @@ def s2_ex3(answer):
     _verdict(answer, expected, 'df.groupby("sid_number").size() counts records per person; how many are > 1?')
 
 
+def s2_ex4(answer):
+    df = _stage(2)
+    expected = int((df["stg_group"].eq("HYDRA") & df["stg_status"].eq("Confirmed")).sum())
+    _verdict(answer, expected, 'two conditions joined with &: df["stg_group"] == "HYDRA" and '
+                               'df["stg_status"] == "Confirmed". A bare "HYDRA" is Unverified, not Confirmed.')
+
+
 # ---- Session 3 ------------------------------------------------------------------------------
 def s3_ex1(answer):
     from .dates import TWO_DIGIT, parse_dates

@@ -28,10 +28,10 @@ FALSE_VALUES = {"N", "NO", "0", "FALSE", "F"}
 
 ORDERED = {
     "custody_level": ["G1", "G2", "G3", "G4", "G5"],
-    "violence_code": ["NV", "V1", "V2", "V3"],
+    "violence_code_std": ["NV", "V1", "V2", "V3"],   # the standardized code from session 2; violence_code stays as written
     "threat_level": ["DELTA", "BETA", "ALPHA", "OMEGA"],
 }
-UNORDERED = ["gender"]
+UNORDERED = ["gender", "race_code", "religion_family", "stg_status", "offense_against"]
 
 
 def to_integer(series: pd.Series):
@@ -124,7 +124,9 @@ def session4(df: pd.DataFrame) -> pd.DataFrame:
 
 def exceptions(before: pd.DataFrame) -> pd.DataFrame:
     """Every value that didn't convert, one row each, keyed by TDCJ number: the list to send back to the
-    data owner. `before` is the data going into session 4 (indexed by tdcj_number)."""
+    data owner. `before` is the data going into session 4 (indexed by tdcj_number). The TDCJ numbers are
+    padded back to 8 digits because this list goes to people."""
+    from .cleaning import format_id
     failed = {
         "disciplinary_points": to_integer(before["disciplinary_points"])[1],
         "restitution_owed": to_money(before["restitution_owed"])[1],
@@ -138,7 +140,9 @@ def exceptions(before: pd.DataFrame) -> pd.DataFrame:
         rows = before.loc[mask.fillna(False).astype(bool), [col]].rename(columns={col: "value as written"})
         rows.insert(0, "column", col)
         parts.append(rows)
-    return pd.concat(parts).sort_index(kind="stable")
+    result = pd.concat(parts).sort_index(kind="stable")
+    result.index = format_id(result.index)
+    return result
 
 
 def conversion_report(before: pd.DataFrame) -> pd.DataFrame:

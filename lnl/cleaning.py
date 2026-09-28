@@ -1,4 +1,5 @@
-"""Session 2: cleansing. Whitespace, codes that mean 'unknown', casing, names, keys, multi-value fields."""
+"""Session 2: cleansing. Whitespace, codes that mean 'unknown', casing, names, keys, multi-value fields.
+Coded domains (race, religion, STG, offense and violence codes) and free-text repair live in domains.py."""
 import re
 
 import pandas as pd
@@ -13,10 +14,16 @@ NULL_TOKENS = {
     "protective_custody": ["U"],
 }
 
-# The record ID. One TDCJ number per incarceration: 8 digits, leading zeros included, never repeated.
-# It is text, never a number, and from session 2 on it is the DataFrame's index.
+# The IDs. One TDCJ number per incarceration (never repeated) and one SID per person. Source systems write
+# both as 8-digit text with leading zeros ("02381457"). Our tables store them as whole numbers: BIGINT in
+# Spark/Delta, Int64 in pandas, so 02381457 is stored as 2381457. The rule: check the text first, convert
+# on purpose, and pad back to 8 digits (format_id) wherever people read an ID or a text-based system has to
+# match it. From session 2 on, tdcj_number is the DataFrame's index.
 RECORD_ID = "tdcj_number"
+ID_COLUMNS = ["tdcj_number", "sid_number"]
 ID_PATTERN = r"\d{8}"
+ID_WIDTH = 8
+ID_MAX = 99_999_999
 
 NAME_PARTICLES = {"DE", "LA", "DA", "DEL", "VAN", "VON", "DU", "DOS", "DI", "LE"}
 NAME_SUFFIXES = {"JR": "Jr", "SR": "Sr", "II": "II", "III": "III", "IV": "IV"}
@@ -47,10 +54,21 @@ def apply_null_tokens(df: pd.DataFrame, tokens: dict = None) -> pd.DataFrame:
 
 
 def standardize_names(df: pd.DataFrame) -> pd.DataFrame:
-    """Add *_std columns (uppercase, single spaces) for matching. Originals stay for display."""
+    """Add *_std columns (uppercase, accents folded, single spaces) for matching: GARCÍA and Garcia both
+    become GARCIA. Originals, accents included, stay for display."""
+    from .domains import fold_accents
     out = df.copy()
     for col in ["last_name", "first_name", "alias"]:
-        out[f"{col}_std"] = out[col].str.upper().str.replace(r"\s+", " ", regex=True)
+        out[f"{col}_std"] = fold_accents(out[col]).str.upper().str.replace(r"\s+", " ", regex=True)
+    return out
+
+
+def repair_text_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Undo encoding and web-form damage in names and officer notes (see domains.repair_text)."""
+    from .domains import TEXT_COLUMNS, repair_text
+    out = df.copy()
+    for col in TEXT_COLUMNS:
+        out[col] = repair_text(out[col])
     return out
 
 
@@ -88,8 +106,36 @@ def record_ids(df: pd.DataFrame) -> pd.Series:
     return df.index.to_series() if df.index.name == RECORD_ID else df[RECORD_ID]
 
 
+def ids_to_numbers(series: pd.Series):
+    """8-digit ID text ("02381457") -> whole numbers (Int64: 2381457). Blanks stay blank.
+    Returns (ids, failed_mask): any non-blank value that isn't exactly 8 digits fails instead of being guessed."""
+    looks_right = series.str.fullmatch(ID_PATTERN, na=False).astype(bool)
+    ids = pd.to_numeric(series.where(looks_right), errors="coerce").astype("Int64")
+    return ids, series.notna() & ~looks_right
+
+
+def id_value(text) -> int:
+    """One ID as people write it ("02381457") -> the stored whole number (2381457), with the same 8-digit check.
+    Use it to look a record up: df.loc[cleaning.id_value("02381457")]."""
+    text = str(text).strip()
+    if not re.fullmatch(ID_PATTERN, text):
+        raise ValueError(f"{text!r} is not an 8-digit ID")
+    return int(text)
+
+
+def format_id(ids):
+    """Stored ID(s) -> 8-digit text with the leading zeros back, for people and text-based systems.
+    Works on one value, a column, or the index."""
+    if isinstance(ids, pd.Index):
+        return pd.Index(format_id(ids.to_series()).array, name=ids.name)
+    if isinstance(ids, pd.Series):
+        return ids.astype("Int64").astype("string").str.zfill(ID_WIDTH)
+    return ids if pd.isna(ids) else f"{int(ids):0{ID_WIDTH}d}"
+
+
 def set_record_id(df: pd.DataFrame) -> pd.DataFrame:
-    """Make tdcj_number the index, after proving it is a real ID: present, 8 digits, never repeated.
+    """Prove tdcj_number is a real ID (present, 8 digits, never repeated), convert the TDCJ and SID numbers
+    to whole numbers on purpose, then make tdcj_number the index.
     Refuses (raises) instead of guessing if any record fails."""
     if df.index.name == RECORD_ID:
         return df
@@ -102,7 +148,21 @@ def set_record_id(df: pd.DataFrame) -> pd.DataFrame:
     failed = {name: count for name, count in problems.items() if count}
     if failed:
         raise ValueError(f"tdcj_number can't be the record ID yet: {failed}. Fix these with the data owner first.")
-    return df.set_index(RECORD_ID, verify_integrity=True)
+    out = df.copy()
+    for col in ID_COLUMNS:
+        if col in out.columns:
+            out[col], bad = ids_to_numbers(out[col])
+            if bad.any():
+                raise ValueError(f"{int(bad.sum())} {col} values aren't 8 digits. Fix these with the data owner first.")
+    return out.set_index(RECORD_ID, verify_integrity=True)
+
+
+def _not_valid_ids(ids: pd.Series) -> int:
+    """How many non-blank IDs aren't valid 8-digit IDs, whether still text or already converted."""
+    ids = ids.dropna()
+    if pd.api.types.is_numeric_dtype(ids):
+        return int(((ids < 1) | (ids > ID_MAX)).sum())
+    return int((~ids.astype(str).str.fullmatch(ID_PATTERN)).sum())
 
 
 def key_checks(df: pd.DataFrame) -> pd.DataFrame:
@@ -115,9 +175,9 @@ def key_checks(df: pd.DataFrame) -> pd.DataFrame:
     checks = {
         "TDCJ number missing": int(tdcj.isna().sum()),
         "TDCJ number duplicated": int(tdcj.dropna().duplicated().sum()),
-        "TDCJ number not 8 digits": int((~tdcj.dropna().str.fullmatch(r"\d{8}")).sum()),
+        "TDCJ number not a valid 8-digit ID": _not_valid_ids(tdcj),
         "SID missing": int(sid.isna().sum()),
-        "SID not 8 digits": int((~sid.dropna().str.fullmatch(r"\d{8}")).sum()),
+        "SID not a valid 8-digit ID": _not_valid_ids(sid),
         "SIDs with conflicting last names": conflicts,
         "People (SIDs) with more than one record": int((per_sid > 1).sum()),
     }
@@ -139,5 +199,7 @@ def session2(df: pd.DataFrame) -> pd.DataFrame:
     df = strip_and_null(df)
     df = set_record_id(df)
     df = apply_null_tokens(df)
+    df = repair_text_columns(df)
     df = standardize_names(df)
-    return df
+    from .domains import standardize_domains
+    return standardize_domains(df)

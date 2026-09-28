@@ -1,0 +1,68 @@
+source_value,religion_group,religion_family
+AGNOSTIC,Atheist/Agnostic,No religion
+ATHEIST,Atheist/Agnostic,No religion
+BAPTIS,Baptist,Christian
+BAPTIST,Baptist,Christian
+SBC,Baptist,Christian
+SOUTHERN BAPTIST,Baptist,Christian
+BUDDHISM,Buddhist,Buddhist
+BUDDHIST,Buddhist,Buddhist
+ZEN,Buddhist,Buddhist
+CATH,Catholic,Christian
+CATHLIC,Catholic,Christian
+CATHOLIC,Catholic,Christian
+RC,Catholic,Christian
+ROMAN CATHOLIC,Catholic,Christian
+CHURCH OF CHRIST,Church of Christ,Christian
+COC,Church of Christ,Christian
+DECLINED,Declined,Declined
+REFUSED,Declined,Declined
+HINDU,Hindu,Hindu
+HINDUISM,Hindu,Hindu
+JEHOVAH WITNESS,Jehovah's Witness,Christian
+JEHOVAH'S WITNESS,Jehovah's Witness,Christian
+JW,Jehovah's Witness,Christian
+JEWISH,Jewish,Jewish
+JUDAISM,Jewish,Jewish
+LATTER-DAY SAINT,Latter-day Saint,Christian
+LDS,Latter-day Saint,Christian
+MORMON,Latter-day Saint,Christian
+METHODIST,Methodist,Christian
+UMC,Methodist,Christian
+UNITED METHODIST,Methodist,Christian
+ISLAM,Muslim,Muslim
+ISLAMIC,Muslim,Muslim
+MUSLIM,Muslim,Muslim
+MUSLIM (SUNNI),Muslim,Muslim
+SHIA,Muslim,Muslim
+SUNNI,Muslim,Muslim
+NATION OF ISLAM,Nation of Islam,Muslim
+NOI,Nation of Islam,Muslim
+NAS,Native American,Native American
+NATIVE AMERICAN,Native American,Native American
+NATIVE AMERICAN SPIRITUALITY,Native American,Native American
+NO PREF,No preference,No religion
+NO PREFERENCE,No preference,No religion
+NO RELIGION,No preference,No religion
+NONE,No preference,No religion
+CHRISTIAN,Non-denominational Christian,Christian
+CHRISTIAN-NON-DENOM,Non-denominational Christian,Christian
+NON-DENOM,Non-denominational Christian,Christian
+NON-DENOMINATIONAL,Non-denominational Christian,Christian
+NONDENOM,Non-denominational Christian,Christian
+EASTERN ORTHODOX,Orthodox Christian,Christian
+GREEK ORTHODOX,Orthodox Christian,Christian
+ORTHODOX,Orthodox Christian,Christian
+OTHER,Other,Other
+AOG,Pentecostal,Christian
+ASSEMBLY OF GOD,Pentecostal,Christian
+PENTECOSTAL,Pentecostal,Christian
+PROT,Protestant,Christian
+PROTESTANT,Protestant,Christian
+?,Unknown,Unknown
+N/A,Unknown,Unknown
+UNK,Unknown,Unknown
+UNKNOWN,Unknown,Unknown
+PAGAN,Wiccan/Pagan,Pagan
+WICCA,Wiccan/Pagan,Pagan
+WICCAN,Wiccan/Pagan,Pagan

@@ -1,0 +1,55 @@
+source_value,race_code,race_omb
+A,A,Asian
+A/PI,A,Needs review: Asian and Pacific Islander recorded together
+API,A,Needs review: Asian and Pacific Islander recorded together
+ASIAN,A,Asian
+ASIAN/PACIFIC ISLANDER,A,Needs review: Asian and Pacific Islander recorded together
+NATIVE HAWAIIAN,A,Native Hawaiian or Pacific Islander
+PAC ISL,A,Native Hawaiian or Pacific Islander
+PACIFIC ISLANDER,A,Native Hawaiian or Pacific Islander
+AFR AMER,B,Black or African American
+AFRICAN AMERICAN,B,Black or African American
+B,B,Black or African American
+B-BLACK,B,Black or African American
+BLACK,B,Black or African American
+BLK,B,Black or African American
+DECLINED,D,Declined
+DECLINED TO STATE,D,Declined
+REFUSED,D,Declined
+B/H,H,Black or African American; Hispanic or Latino
+BLACK HISPANIC,H,Black or African American; Hispanic or Latino
+H,H,Hispanic or Latino
+H-HISPANIC,H,Hispanic or Latino
+HISP,H,Hispanic or Latino
+HISPANIC,H,Hispanic or Latino
+LATINO,H,Hispanic or Latino
+LATINO/A,H,Hispanic or Latino
+MEXICAN AMERICAN,H,Hispanic or Latino
+W/H,H,White; Hispanic or Latino
+WHITE HISPANIC,H,White; Hispanic or Latino
+WHITE-HISPANIC,H,White; Hispanic or Latino
+ALASKA NATIVE,I,American Indian or Alaska Native
+AMER IND,I,American Indian or Alaska Native
+AMERICAN INDIAN,I,American Indian or Alaska Native
+I,I,American Indian or Alaska Native
+NATIVE AMERICAN,I,American Indian or Alaska Native
+2+,O,Multiracial (details not recorded)
+MULTI,O,Multiracial (details not recorded)
+MULTIRACIAL,O,Multiracial (details not recorded)
+O,O,Needs review: no matching federal category
+OTHER,O,Needs review: no matching federal category
+TWO OR MORE,O,Multiracial (details not recorded)
+?,U,Unknown
+U,U,Unknown
+UNK,U,Unknown
+UNKNOWN,U,Unknown
+ARAB,W,Middle Eastern or North African
+CAUC,W,White
+CAUCASIAN,W,White
+MENA,W,Middle Eastern or North African
+MIDDLE EASTERN,W,Middle Eastern or North African
+NORTH AFRICAN,W,Middle Eastern or North African
+W,W,White
+W-WHITE,W,White
+WHITE,W,White
+WHT,W,White

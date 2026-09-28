@@ -20,6 +20,19 @@ Everything is fictional and deliberately dirty:
     some lowercase, "U" for unknown
   - dampener_required: single-character T/F, some lowercase, rare "?"
   - conduct_notes: free-text officer notes; true sentiment is written to a separate answer key
+  v4 coded domains (for crosswalks to reference data):
+  - race: TDCJ-style letters mixed with words, abbreviations, legacy combined values (W/H, API) and
+    values the old codes can't express (Middle Eastern, Multiracial); a few people's race differs across records
+  - religion: many spellings and abbreviations of each faith group (RC, SBC, NOI, LDS), NONE vs DECLINED vs UNK
+  - stg_affiliation: fictional villain groups with abbreviations and the status (confirmed, suspected, former)
+    written into the same field; blank vs NONE; a few two-group cells
+  - offense_code: FBI NIBRS offense codes with case, separator and Excel damage (13a, 13-A, 290.0, 9B for 09B),
+    descriptions typed into the code field, invalid codes, and a few valid codes that contradict the violence code
+  - violence_code: NV/V1/V2/V3 plus v1, V-1, bare digits, NON-VIOLENT and a few unmappable values
+  - names: accented Hispanic surnames (GARCÍA vs GARCIA) and some mojibake (MUÃ‘OZ)
+  - conduct_notes: web-form and encoding damage (<br>, &nbsp;, double spaces, curly quotes, â€™)
+  Race, religion and STG are assigned at random, independently of every other column: no pattern in them
+  means anything.
 """
 import calendar
 import csv
@@ -41,12 +54,19 @@ rng = random.Random(DEFAULT_SEED)
 case_rng = random.Random(DEFAULT_SEED + 1)   # name casing
 v2_rng = random.Random(DEFAULT_SEED + 2)     # v2 columns; separate so v1 columns never change
 v3_rng = random.Random(DEFAULT_SEED + 3)     # single-character flags; separate so earlier columns never change
+v4_rng = random.Random(DEFAULT_SEED + 4)     # coded domains and text damage; separate so earlier values never change
 
 HEADER = ["tdcj_number", "sid_number", "last_name", "first_name", "alias", "date_of_birth", "gender",
           "unit_location", "custody_level", "violence_code", "threat_level", "superpower",
           "primary_offense", "housing_restriction", "sentence_date", "projected_release_date"]
 HEADER_V2 = ["intake_time", "disciplinary_points", "restitution_owed", "escape_risk",
              "protective_custody", "dampener_required", "conduct_notes"]
+# Column order in the file: the v4 domain columns sit next to the columns they belong with.
+HEADER_OUT = ["tdcj_number", "sid_number", "last_name", "first_name", "alias", "date_of_birth", "gender",
+              "race", "religion", "unit_location", "custody_level", "violence_code", "threat_level",
+              "stg_affiliation", "superpower", "primary_offense", "offense_code", "housing_restriction",
+              "sentence_date", "projected_release_date", "intake_time", "disciplinary_points", "restitution_owed",
+              "escape_risk", "protective_custody", "dampener_required", "conduct_notes"]
 
 # ---------------------------------------------------------------------------------------------
 # The 10 rows reviewed earlier, kept verbatim at the top of the file
@@ -753,6 +773,280 @@ def v3_nulls(values: list) -> list:
     return out
 
 
+# ---------------------------------------------------------------------------------------------
+# v4 coded domains and text damage. Everything here uses v4_rng only, so every earlier value is unchanged.
+# Race, religion and STG are drawn per person at random, independently of everything else.
+# ---------------------------------------------------------------------------------------------
+# concept: (weight per person, [(spelling as a source system writes it, weight), ...])
+RACE_CONCEPTS = {
+    "W": (29, [("W", 50), ("WHITE", 15), ("White", 10), ("w", 5), ("Caucasian", 8), ("CAUC", 4), ("WHT", 4),
+               ("W - WHITE", 4)]),
+    "B": (32, [("B", 50), ("BLACK", 15), ("Black", 8), ("b", 5), ("African American", 10), ("AFR AMER", 4),
+               ("BLK", 5), ("B - BLACK", 3)]),
+    "H": (31, [("H", 50), ("HISPANIC", 15), ("Hispanic", 8), ("h", 4), ("Latino", 6), ("LATINO/A", 3), ("HISP", 6),
+               ("Mexican American", 4), ("H - HISPANIC", 4)]),
+    "A": (1.0, [("A", 50), ("ASIAN", 25), ("Asian", 15), ("a", 10)]),
+    "API": (0.4, [("Asian/Pacific Islander", 50), ("API", 30), ("A/PI", 20)]),
+    "PI": (0.2, [("Pacific Islander", 50), ("Native Hawaiian", 30), ("PAC ISL", 20)]),
+    "I": (0.5, [("I", 45), ("AMERICAN INDIAN", 20), ("Native American", 20), ("AMER IND", 10), ("Alaska Native", 5)]),
+    "MENA": (0.5, [("Middle Eastern", 40), ("Arab", 20), ("MENA", 20), ("North African", 20)]),
+    "O": (0.8, [("O", 60), ("OTHER", 30), ("Other", 10)]),
+    "MULTI": (0.5, [("Multiracial", 40), ("TWO OR MORE", 30), ("Multi", 20), ("2+", 10)]),
+    "WH": (1.2, [("W/H", 60), ("WHITE HISPANIC", 25), ("White-Hispanic", 15)]),
+    "BH": (0.3, [("B/H", 60), ("BLACK HISPANIC", 40)]),
+    "U": (1.2, [("U", 40), ("UNK", 25), ("UNKNOWN", 20), ("?", 15)]),
+    "D": (0.6, [("DECLINED", 50), ("Refused", 25), ("Declined to state", 25)]),
+}
+RACE_JUNK = ["SEE BOOKING", "XX", "Z"]
+
+RELIGION_GROUPS = {
+    "Catholic": (22, ["CATHOLIC", "Catholic", "Roman Catholic", "RC", "R.C.", "Cath", "CATHLIC"]),
+    "Baptist": (18, ["BAPTIST", "Baptist", "Southern Baptist", "SBC", "Baptis"]),
+    "Non-denominational Christian": (12, ["CHRISTIAN", "Christian", "NON-DENOMINATIONAL", "Non-Denom", "NONDENOM",
+                                          "Christian - Non-Denom"]),
+    "Protestant": (5, ["PROTESTANT", "Protestant", "Prot"]),
+    "Methodist": (3, ["METHODIST", "United Methodist", "UMC"]),
+    "Pentecostal": (4, ["PENTECOSTAL", "Assembly of God", "AOG"]),
+    "Church of Christ": (3, ["CHURCH OF CHRIST", "COC"]),
+    "Jehovah's Witness": (2, ["JEHOVAH'S WITNESS", "Jehovah Witness", "JW"]),
+    "Latter-day Saint": (1, ["LDS", "Mormon", "LATTER-DAY SAINT"]),
+    "Orthodox Christian": (0.5, ["ORTHODOX", "Greek Orthodox", "Eastern Orthodox"]),
+    "Muslim": (5, ["MUSLIM", "Muslim", "Islam", "ISLAMIC", "Muslim (Sunni)", "Sunni", "Shia"]),
+    "Nation of Islam": (0.5, ["NATION OF ISLAM", "NOI"]),
+    "Jewish": (1, ["JEWISH", "Jewish", "Judaism"]),
+    "Buddhist": (0.8, ["BUDDHIST", "Buddhism", "Zen"]),
+    "Hindu": (0.3, ["HINDU", "Hinduism"]),
+    "Native American": (1, ["NATIVE AMERICAN", "Native American Spirituality", "NAS"]),
+    "Wiccan/Pagan": (0.8, ["WICCA", "Wiccan", "Pagan"]),
+    "Atheist/Agnostic": (2, ["ATHEIST", "Atheist", "Agnostic"]),
+    "Other": (1, ["OTHER", "Other"]),
+    "No preference": (14, ["NONE", "None", "NO PREF", "No Preference", "NO RELIGION"]),
+    "Declined": (2, ["DECLINED", "Refused"]),
+    "Unknown": (2, ["UNKNOWN", "UNK", "N/A", "?"]),
+}
+RELIGION_JUNK = ["JEDI", "ASGARDIAN", "SEE CHAPLAIN"]
+
+# Fictional villain organizations only; aliases as different source screens abbreviate them
+STG_GROUPS = {
+    "HYDRA": ["HYDRA", "Hydra", "H.Y.D.R.A.", "HYD"],
+    "A.I.M.": ["AIM", "A.I.M.", "Advanced Idea Mechanics"],
+    "Legion of Doom": ["LEGION OF DOOM", "Legion of Doom", "LOD", "L.O.D."],
+    "Hellfire Club": ["HELLFIRE CLUB", "Hellfire Club", "HFC"],
+    "Brotherhood of Mutants": ["BROTHERHOOD OF MUTANTS", "Brotherhood of Evil Mutants", "BROTHERHOOD", "BOM"],
+    "Masters of Evil": ["MASTERS OF EVIL", "MOE"],
+    "Sinister Six": ["SINISTER SIX", "Sinister 6", "SIN6"],
+    "Injustice League": ["INJUSTICE LEAGUE", "IJL"],
+    "The Hand": ["THE HAND", "Hand"],
+    "Serpent Society": ["SERPENT SOCIETY", "Serpent Soc"],
+    "Intergang": ["INTERGANG"],
+    "League of Assassins": ["LEAGUE OF ASSASSINS", "LOA"],
+}
+STG_WEIGHTS = [16, 10, 12, 8, 9, 9, 7, 7, 6, 6, 5, 5]
+STG_TEMPLATES = {
+    "confirmed": ["{a} - CONFIRMED", "CONFIRMED {a}", "{a} (C)"],
+    "suspected": ["SUSP {a}", "{a} (SUSPECTED)", "SUSP: {a}", "{a} (S)", "{a} - SUSPECTED"],
+    "former": ["FORMER {a}", "{a} - RENOUNCED", "EX-{a}", "{a} (FORMER)"],
+    "unverified": ["{a}"],   # a bare group name: nobody recorded the status
+}
+STG_NONE = (["NONE", "None", "N/A", "NO KNOWN AFFIL", "NO"], [45, 10, 20, 15, 10])
+STG_JUNK = ["PENDING REVIEW", "SEE STG OFFICE"]
+STG_RATE = 0.11          # share of procedural personas with an affiliation; the famous pool has none
+
+# FBI NIBRS offense codes for every offense description the generator writes
+NIBRS = {
+    "09B": "Person", "100": "Person", "13A": "Person", "13B": "Person", "13C": "Person",
+    "200": "Property", "220": "Property", "26C": "Property", "26G": "Property", "290": "Property",
+    "520": "Society", "90C": "Group B", "90J": "Group B", "90Z": "Group B",
+}
+NIBRS_BY_OFFENSE = {
+    "UNAUTH FLIGHT IN RESTRICTED AIRSPACE": "90Z", "SPEEDING >=500 MPH": "90Z", "UNLICENSED USE OF SUPERPOWERS": "90Z",
+    "UNL POSS PROHIBITED WEAPON (ALIEN TECH)": "520", "TRESPASS ON SECURE FACILITY": "90J",
+    "IMPERSONATION OF PUBLIC SERVANT": "26C", "BREACH OF COMPUTER SECURITY": "26G", "TAMPER W/EVID (TIME TRAVEL)": "90Z",
+    "UNAUTH INTERDIMENSIONAL TRAVEL": "90Z", "EVADING ARREST (FLIGHT)": "90Z", "OBSTRUCT HWY W/WEBBING": "90C",
+    "CRIM MISCHIEF >=$150K<$300K": "290", "CRIM MISCHIEF >=$300K": "290", "CRIM MISCHIEF >=$300K, HABITUAL": "290",
+    "ARSON (PYROKINETIC)": "200", "RECKLESS DAMAGE BY ENERGY BLAST": "290", "DESTRUCTION OF INFRASTRUCTURE (BRIDGE)": "290",
+    "BURGLARY OF VILLAIN LAIR": "220", "CRIM MISCHIEF BY WEATHER EVENT >=$150K<$300K": "290",
+    "VIGILANTISM W/GRAPPLING DEVICE": "13B", "ASSAULT ON HENCHMAN": "13B", "UNLAWFUL RESTRAINT OF SUSPECT": "100",
+    "COERCED CONFESSION W/TELEPATHY": "13C", "ASSAULT PUB SERV (MISTAKEN IDENTITY)": "13B",
+    "AGG ASSAULT W/SUPERPOWER": "13A", "AGG ASSAULT W/DEADLY WEAPON": "13A", "AGG ASSAULT W/ADAMANTIUM CLAWS": "13A",
+    "MANSLAUGHTER (COLLATERAL DAMAGE)": "09B",
+    # the ten reviewed rows use their own wording
+    "RECKLESS DAMAGE BY HEAT VISION >=$300K": "290", "COERCED CONFESSION W/LASSO": "13C",
+    "SPEEDING >=700 MPH IN SCHOOL ZONE": "90Z", "UNL POSS PROHIBITED WEAPON (POWER RING)": "520",
+    "UNAUTH ENTRY RESTRICTED AIRSPACE": "90Z",
+}
+OFFENSE_TYPED_AS_CODE = ["AGG ASSAULT", "CRIM MISCHIEF", "ASSAULT", "TRESPASS"]
+OFFENSE_JUNK = ["13X", "999", "XXX"]
+
+VIOLENCE_VARIANTS = {
+    "NV": ["nv", "N/V", "NON-VIOLENT", "Nonviolent", "N-V"],
+    "V1": ["v1", "V-1", "V 1", "1"], "V2": ["v2", "V-2", "V 2", "2"], "V3": ["v3", "V-3", "V 3", "3"],
+}
+VIOLENCE_JUNK = ["V4", "VV2", "?"]
+
+# Accented spellings of surnames in the procedural pool (source screens differ on accents)
+ACCENTED = {n.replace("Á", "A").replace("É", "E").replace("Í", "I").replace("Ó", "O").replace("Ú", "U")
+            .replace("Ñ", "N"): n for n in
+            ["GARCÍA", "RODRÍGUEZ", "MARTÍNEZ", "HERNÁNDEZ", "LÓPEZ", "GONZÁLEZ", "PÉREZ", "SÁNCHEZ", "RAMÍREZ",
+             "GÓMEZ", "DÍAZ", "GUTIÉRREZ", "JIMÉNEZ", "ÁLVAREZ", "VÁSQUEZ", "FERNÁNDEZ", "MUÑOZ", "TREVIÑO",
+             "DOMÍNGUEZ", "VÁZQUEZ", "MÉNDEZ", "GARCÍA-LÓPEZ"]}
+
+
+def _pick(pairs):
+    return v4_rng.choices([p[0] for p in pairs], [p[1] for p in pairs])[0]
+
+
+class DomainState:
+    """Per-person race, religion and STG, so a person's records mostly agree (as in real systems)."""
+
+    def __init__(self, famous_sids: set):
+        self.people = {}
+        self.famous_sids = famous_sids
+
+    def fields(self, sid: str, offense: str):
+        """Values for race, religion, stg_affiliation and offense_code for one record, before blanks."""
+        seen = sid in self.people
+        if not seen:
+            concepts = list(RACE_CONCEPTS)
+            person = {
+                "race": v4_rng.choices(concepts, [RACE_CONCEPTS[c][0] for c in concepts])[0],
+                "religion": v4_rng.choices(list(RELIGION_GROUPS), [g[0] for g in RELIGION_GROUPS.values()])[0],
+                "stg": None, "status": None,
+            }
+            if sid not in self.famous_sids and v4_rng.random() < STG_RATE:
+                person["stg"] = v4_rng.choices(list(STG_GROUPS), STG_WEIGHTS)[0]
+                person["status"] = v4_rng.choices(["confirmed", "suspected", "unverified", "former"], [35, 30, 25, 10])[0]
+            self.people[sid] = person
+        person = self.people[sid]
+
+        # race: the same person, spelled however this record's screen spelled it; a few records disagree
+        concept = person["race"]
+        if seen and v4_rng.random() < 0.012:
+            concept = v4_rng.choice([c for c in ("W", "B", "H") if c != concept])
+        race = v4_rng.choice(RACE_JUNK) if v4_rng.random() < 0.0005 else _pick(RACE_CONCEPTS[concept][1])
+
+        # religion: people can change faith between incarcerations; that's not an error
+        if seen and v4_rng.random() < 0.08:
+            person["religion"] = v4_rng.choices(list(RELIGION_GROUPS), [g[0] for g in RELIGION_GROUPS.values()])[0]
+        religion = (v4_rng.choice(RELIGION_JUNK) if v4_rng.random() < 0.001
+                    else v4_rng.choice(RELIGION_GROUPS[person["religion"]][1]))
+
+        # STG: status can move between records (suspected -> confirmed -> former)
+        if person["stg"] and seen and v4_rng.random() < 0.2:
+            person["status"] = {"suspected": "confirmed", "unverified": "confirmed",
+                                "confirmed": "former", "former": "former"}[person["status"]]
+        if v4_rng.random() < 0.0005:
+            stg = v4_rng.choice(STG_JUNK)
+        elif person["stg"]:
+            alias = v4_rng.choice(STG_GROUPS[person["stg"]])
+            if v4_rng.random() < 0.003:
+                other = v4_rng.choice([g for g in STG_GROUPS if g != person["stg"]])
+                alias = f"{alias}/{v4_rng.choice(STG_GROUPS[other])}"   # two groups in one cell
+            stg = v4_rng.choice(STG_TEMPLATES[person["status"]]).format(a=alias)
+        else:
+            stg = v4_rng.choices(*STG_NONE)[0]
+
+        return [race, religion, stg, offense_code_as_written(NIBRS_BY_OFFENSE[offense])]
+
+
+def offense_code_as_written(code: str) -> str:
+    roll = v4_rng.random()
+    if roll < 0.005:
+        return v4_rng.choice([c for c in NIBRS if c != code])          # valid code, wrong offense
+    if roll < 0.017:
+        return v4_rng.choice(OFFENSE_TYPED_AS_CODE)                     # description typed into the code field
+    if roll < 0.020:
+        return v4_rng.choice(OFFENSE_JUNK)
+    if code.startswith("0") and v4_rng.random() < 0.4:
+        return code[1:]                                                 # 09B -> 9B: the leading zero dropped
+    if roll < 0.050 and code[-1].isalpha():
+        return code.lower()
+    if roll < 0.080:
+        if code.isdigit():
+            return code + ".0"                                          # opened and saved in Excel
+        return code[:-1] + v4_rng.choice(["-", " "]) + code[-1]
+    return code
+
+
+def dirty_violence(value: str) -> str:
+    """Only non-blank, canonical values get respelled; blanks stay blank."""
+    if value not in VIOLENCE_VARIANTS:
+        return value
+    roll = v4_rng.random()
+    if roll < 0.001:
+        return v4_rng.choice(VIOLENCE_JUNK)
+    if roll < 0.06:
+        return v4_rng.choice(VIOLENCE_VARIANTS[value])
+    return value
+
+
+def _mojibake(text: str):
+    """How UTF-8 text looks after a system reads it as Windows-1252. None if that can't happen cleanly."""
+    try:
+        return text.encode("utf-8").decode("cp1252")
+    except UnicodeDecodeError:
+        return None
+
+
+def accent_name(cased: str) -> str:
+    """Some screens keep Spanish accents, some don't; a few records carry encoding damage too."""
+    base = cased.upper()
+    if base not in ACCENTED or v4_rng.random() >= 0.30:
+        return cased
+    accented = ACCENTED[base]
+    out = "".join(a.lower() if c.islower() else a for c, a in zip(cased, accented))
+    if v4_rng.random() < 0.08:
+        damaged = _mojibake(out)
+        if damaged and all(ch in "ÃÂ‘“‰±³©¡º\xad" or ord(ch) < 128 for ch in damaged):
+            return damaged
+    return out
+
+
+def dirty_note(note: str) -> str:
+    """Web-form and encoding damage. Every change here is undone exactly by session 2's text repair."""
+    roll = v4_rng.random()
+    if roll < 0.03 and ". " in note:
+        return note.replace(". ", ".<br>", 1)
+    if roll < 0.05 and " " in note:
+        return note.replace(" ", "&nbsp;", 1)
+    if roll < 0.08 and " " in note:
+        i = v4_rng.choice([i for i, ch in enumerate(note) if ch == " "])
+        return note[:i] + "  " + note[i + 1:]
+    if roll < 0.10:
+        return " " + note + "  "
+    if roll < 0.13 and ("'" in note or " - " in note):
+        smart = note.replace("'", "’").replace(" - ", " – ")
+        return (_mojibake(smart) or smart) if v4_rng.random() < 0.5 else smart
+    return note
+
+
+def v4_nulls(values: list) -> list:
+    out = []
+    for v in values:
+        roll = v4_rng.random()
+        if roll < TRUE_NULL_RATE:
+            out.append("")
+        elif roll < TRUE_NULL_RATE + PADDED_NULL_RATE:
+            out.append(" " * v4_rng.randint(1, 8))
+        else:
+            out.append(v)
+    return out
+
+
+def assemble(v1: list, domains: list, extra: list, flags: list) -> list:
+    """v1 (16 columns) + v4 domains + v2 + flags, in HEADER_OUT order; applies the v4 damage."""
+    v1 = list(v1)
+    if v1[2].strip():
+        v1[2] = accent_name(v1[2])
+    v1[9] = dirty_violence(v1[9])
+    note = extra[4]
+    if note.strip():
+        note = dirty_note(note)
+    race, religion, stg, offense_code = domains
+    return (v1[0:7] + [race, religion] + v1[7:11] + [stg] + v1[11:13] + [offense_code] + v1[13:16]
+            + extra[:4] + flags + [note])
+
+
 def generate(rows: int = DEFAULT_ROWS, out: str = DEFAULT_OUT, seed: int = DEFAULT_SEED,
              answer_key: str = None) -> dict:
     """Write the dataset (and the conduct-notes answer key). Same seed = identical files."""
@@ -760,6 +1054,7 @@ def generate(rows: int = DEFAULT_ROWS, out: str = DEFAULT_OUT, seed: int = DEFAU
     case_rng.seed(seed + 1)
     v2_rng.seed(seed + 2)
     v3_rng.seed(seed + 3)
+    v4_rng.seed(seed + 4)
     if answer_key is None:
         answer_key = str(out).replace(".csv", "") + "_answer_key.csv"
     ROWS = rows
@@ -803,14 +1098,16 @@ def generate(rows: int = DEFAULT_ROWS, out: str = DEFAULT_OUT, seed: int = DEFAU
     rng.shuffle(records)
 
     key_rows = []
-    with open(out, "w", newline="") as fh:
+    state = DomainState({f["sid"] for f in famous})
+    with open(out, "w", newline="", encoding="utf-8") as fh:
         w = csv.writer(fh, lineterminator="\n")
-        w.writerow(HEADER + HEADER_V2)
+        w.writerow(HEADER_OUT)
         for r in REVIEWED:
             extra, label = v2_fields(r[8], r[9], r[11], r[12], r[6], r[4])
             extra = v2_nulls(extra)
             flags = v3_nulls(flag_fields(r[10], r[11]))
-            w.writerow(r + extra[:4] + flags + extra[4:])
+            domains = v4_nulls(state.fields(r[1], r[12]))
+            w.writerow(assemble(r, domains, extra, flags))
             key_rows.append((r[0], label if extra[-1].strip() else "no_note"))
         for r in records:
             row = [r["tdcj"], r["sid"], mix_case(r["last"]), mix_case(r["first"]), r["alias"],
@@ -825,10 +1122,11 @@ def generate(rows: int = DEFAULT_ROWS, out: str = DEFAULT_OUT, seed: int = DEFAU
             extra, label = v2_fields(r["custody"], r["vcode"], r["powers"], r["offense"], r["gender"], r["alias"])
             extra = v2_nulls(extra)
             flags = v3_nulls(flag_fields(r["threat"], r["powers"]))
-            w.writerow(row + extra[:4] + flags + extra[4:])
+            domains = v4_nulls(state.fields(r["sid"], r["offense"]))
+            w.writerow(assemble(row, domains, extra, flags))
             key_rows.append((r["tdcj"], label if extra[-1].strip() else "no_note"))
 
-    with open(answer_key, "w", newline="") as fh:
+    with open(answer_key, "w", newline="", encoding="utf-8") as fh:
         w = csv.writer(fh, lineterminator="\n")
         w.writerow(["tdcj_number", "conduct_label"])
         w.writerows(key_rows)

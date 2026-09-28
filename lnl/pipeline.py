@@ -15,8 +15,13 @@ def load_raw() -> pd.DataFrame:
 
 
 def answer_key() -> pd.DataFrame:
-    """True sentiment of each conduct note. Only the text sessions use this, for scoring."""
-    return pd.read_csv(env.paths()["answer_key"], dtype=str)
+    """True sentiment of each conduct note. Only the text sessions use this, for scoring.
+    Its TDCJ numbers are converted exactly like the main data's, so the two join: a text key and a
+    number key never match."""
+    from .cleaning import ids_to_numbers
+    key = pd.read_csv(env.paths()["answer_key"], dtype=str)
+    key["tdcj_number"], _ = ids_to_numbers(key["tdcj_number"])
+    return key
 
 
 def clean_through(session: int) -> pd.DataFrame:

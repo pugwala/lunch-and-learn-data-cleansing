@@ -1,6 +1,8 @@
 """The Trust Test: questions a warden might ask, answered naively (session 1) and correctly (session 4)."""
 import pandas as pd
 
+from .cleaning import id_value
+
 QUESTIONS = {
     "Q1": "Records missing a custody level",
     "Q2": "Distinct gender values",
@@ -35,7 +37,7 @@ def typed_answers(df: pd.DataFrame) -> dict:
         "Q2": int(df["gender"].nunique(dropna=False)),
         "Q3": int((df["last_name_std"] == "KENT").sum()),
         "Q4": str(df["projected_release_date"].min()),
-        "Q5": "02381457" in df.index,   # the TDCJ number is the index from session 2 on
+        "Q5": id_value("02381457") in df.index,   # the index holds TDCJ numbers as whole numbers
         "Q6": round(float(trusted_ages.mean()), 1),
         "Q7": int(df["escape_risk"].sum()),
         "Q8": int(df["protective_custody"].sum()),
