@@ -31,6 +31,9 @@ Everything is fictional and deliberately dirty:
   - violence_code: NV/V1/V2/V3 plus v1, V-1, bare digits, NON-VIOLENT and a few unmappable values
   - names: accented Hispanic surnames (GARCÍA vs GARCIA) and some mojibake (MUÃ‘OZ)
   - conduct_notes: web-form and encoding damage (<br>, &nbsp;, double spaces, curly quotes, â€™)
+  v5 locations:
+  - unit_location: the unit written as its name, its 3-letter legacy code, UPPER or lower case, with "Unit"
+    appended, without "City", misspelled or punctuated differently, plus a few values that aren't units at all
   Race, religion and STG are assigned at random, independently of every other column: no pattern in them
   means anything.
 """
@@ -55,6 +58,7 @@ case_rng = random.Random(DEFAULT_SEED + 1)   # name casing
 v2_rng = random.Random(DEFAULT_SEED + 2)     # v2 columns; separate so v1 columns never change
 v3_rng = random.Random(DEFAULT_SEED + 3)     # single-character flags; separate so earlier columns never change
 v4_rng = random.Random(DEFAULT_SEED + 4)     # coded domains and text damage; separate so earlier values never change
+v5_rng = random.Random(DEFAULT_SEED + 5)     # unit locations; separate so earlier values never change
 
 HEADER = ["tdcj_number", "sid_number", "last_name", "first_name", "alias", "date_of_birth", "gender",
           "unit_location", "custody_level", "violence_code", "threat_level", "superpower",
@@ -1033,9 +1037,86 @@ def v4_nulls(values: list) -> list:
     return out
 
 
+# ---------------------------------------------------------------------------------------------
+# v5 locations. Everything here uses v5_rng only, so every earlier value is unchanged.
+# ---------------------------------------------------------------------------------------------
+def _unit_codes(names) -> dict:
+    """A 3-letter legacy code per unit, assigned deterministically (sorted names, first free candidate)."""
+    codes, taken = {}, set()
+    for name in sorted(names):
+        words = [w for w in "".join(ch if ch.isalpha() or ch == " " else " " for ch in name.upper()).split() if w]
+        letters = "".join(words)
+        candidates = []
+        if len(words) > 1:
+            candidates.append(words[0][:2] + words[1][0])
+        candidates.append(letters[:3])
+        candidates += [letters[0] + a + b for i, a in enumerate(letters[1:], 1) for b in letters[i + 1:]]
+        code = next(c for c in candidates if len(c) == 3 and c not in taken)
+        codes[name] = code
+        taken.add(code)
+    return codes
+
+
+UNIT_NAMES = sorted(set(CITIES) | {line.split("|")[4] for line in FAMOUS.strip().splitlines()})
+UNIT_CODES = _unit_codes(UNIT_NAMES)
+# Misspellings and punctuation people actually type, per unit
+UNIT_VARIANTS = {
+    "Pittsburgh": ["Pittsburg"], "Philadelphia": ["Philly", "Phila."], "Hell's Kitchen": ["Hells Kitchen", "Hell’s Kitchen"],
+    "K'un-Lun": ["Kun-Lun", "Kun Lun"], "Winston-Salem": ["Winston Salem"], "Wilkes-Barre": ["Wilkes Barre"],
+    "St. Louis": ["Saint Louis"], "St. Charles": ["Saint Charles"], "St. Roch": ["Saint Roch"],
+    "Rio de Janeiro": ["Rio"], "New York": ["NYC", "New York City"], "Los Angeles": ["L.A."],
+    "Annandale-on-Hudson": ["Annandale on Hudson"], "Ust-Ordynsky": ["Ust Ordynsky"], "Zenn-La": ["Zenn La"],
+    "Themyscira": ["Themyscria"], "Metropolis": ["Metropolous"], "Gotham City": ["Gothem City"],
+    "Bludhaven": ["Blüdhaven"], "Birnin Zana": ["Birnin-Zana"], "Mexico City": ["CDMX"],
+}
+UNIT_JUNK = ["IN TRANSIT", "TBD", "UNASSIGNED", "XX"]
+
+
+def unit_short_name(name: str):
+    """'Gotham City' -> 'Gotham'. Not for Mexico City, where the short form names a country."""
+    return name[:-5] if name.endswith(" City") and name != "Mexico City" else None
+
+
+def dirty_location(name: str) -> str:
+    """One unit as a source system might write it. Only called for non-blank values."""
+    if name not in UNIT_CODES:
+        return name
+    roll = v5_rng.random()
+    if roll < 0.003:
+        return v5_rng.choice(UNIT_JUNK)
+    if roll < 0.06:
+        return UNIT_CODES[name]                                   # the legacy system's 3-letter code
+    if roll < 0.12:
+        return name.upper()
+    if roll < 0.13:
+        return name.lower()
+    if roll < 0.16:
+        return f"{name} Unit"
+    if roll < 0.19 and unit_short_name(name):
+        return unit_short_name(name)
+    if roll < 0.23 and name in UNIT_VARIANTS:
+        return v5_rng.choice(UNIT_VARIANTS[name])
+    return name
+
+
+def unit_crosswalk_rows() -> list:
+    """(spelling, unit_name, unit_code) for every spelling the data owner has agreed to; written to
+    lnl/reference/unit_crosswalk.csv. Case doesn't matter: the course matches on a normalized key."""
+    rows = []
+    for name in UNIT_NAMES:
+        code = UNIT_CODES[name]
+        spellings = [name, code, f"{name} Unit"] + UNIT_VARIANTS.get(name, [])
+        if unit_short_name(name):
+            spellings.append(unit_short_name(name))
+        rows += [(s, name, code) for s in spellings]
+    return rows
+
+
 def assemble(v1: list, domains: list, extra: list, flags: list) -> list:
-    """v1 (16 columns) + v4 domains + v2 + flags, in HEADER_OUT order; applies the v4 damage."""
+    """v1 (16 columns) + v4 domains + v2 + flags, in HEADER_OUT order; applies the v4 and v5 damage."""
     v1 = list(v1)
+    if v1[7].strip():
+        v1[7] = dirty_location(v1[7])
     if v1[2].strip():
         v1[2] = accent_name(v1[2])
     v1[9] = dirty_violence(v1[9])
@@ -1055,6 +1136,7 @@ def generate(rows: int = DEFAULT_ROWS, out: str = DEFAULT_OUT, seed: int = DEFAU
     v2_rng.seed(seed + 2)
     v3_rng.seed(seed + 3)
     v4_rng.seed(seed + 4)
+    v5_rng.seed(seed + 5)
     if answer_key is None:
         answer_key = str(out).replace(".csv", "") + "_answer_key.csv"
     ROWS = rows

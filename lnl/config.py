@@ -21,3 +21,16 @@ EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 
 # Sample size for the text sessions (spaCy and embeddings are slow on 100k notes on a laptop CPU).
 TEXT_SAMPLE_SIZE = 10_000
+
+# ---- Enterprise track (the notebooks in enterprise/, on the agency Databricks workspace) -----------------
+# Mock data only, like the rest of the course. 00_preflight checks every one of these settings.
+ENTERPRISE_CATALOG = ""            # a catalog you can create a schema in, e.g. "dmo_sandbox" (ask an admin)
+ENTERPRISE_SCHEMA = "lnl_{user}"   # {user} becomes your user name, so each person gets their own schema
+ENTERPRISE_VOLUME = "landing"      # created inside that schema: raw files land here, the pipeline reads them
+ENTERPRISE_SERVERLESS = True       # serverless notebooks, jobs and pipelines; False = classic compute below
+ENTERPRISE_CLUSTER_ID = ""         # classic only: an all-purpose cluster for the job's notebook task
+ENTERPRISE_PIPELINE_POLICY_ID = "" # classic only: a cluster policy for the pipeline, if your admins require one
+RESTRICTED_GROUP = ""              # account group allowed to see race and religion, e.g. "dmo-restricted"
+ANALYST_GROUP = ""                 # account group that gets read access to the published view
+ALERT_EMAILS = []                  # who gets job-failure email; empty = you
+ALERT_DESTINATIONS = []            # display names of notification destinations an admin set up (PagerDuty, webhook)

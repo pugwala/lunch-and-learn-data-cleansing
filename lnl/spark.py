@@ -94,24 +94,27 @@ def repair_text(df):
 
 
 def domain_key(col):
-    """Same key as domains.domain_key: upper case, no periods, single spaces, no spaces around - / and :."""
+    """Same key as domains.domain_key: upper case, no periods, straight apostrophes, single spaces, no spaces
+    around - / and :."""
     from pyspark.sql import functions as F
-    key = F.regexp_replace(F.upper(col), r"\.", "")
+    key = F.regexp_replace(F.regexp_replace(F.upper(col), r"\.", ""), "[’‘]", "'")
     key = F.trim(F.regexp_replace(key, r"\s+", " "))
     return F.regexp_replace(key, r"\s*([-/:])\s*", "$1")
 
 
-def apply_domains(df):
+def apply_domains(df, reference=None):
     """Session 2's coded domains in Spark: the same reference tables, joined instead of mapped.
     Adds race_code, race_omb, religion_group, religion_family, stg_group, stg_status, offense_code_std,
-    offense_against and violence_code_std. Raw columns stay as written."""
+    offense_against, violence_code_std, unit_name and unit_code. Raw columns stay as written.
+    `reference(name)` returns a crosswalk as a Spark DataFrame; by default the CSV files in lnl/reference/ are
+    used, and the enterprise track passes a function that reads the governed copies in Unity Catalog."""
     from pyspark.sql import functions as F
     from . import domains
     spark = df.sparkSession
+    load = reference or (lambda name: spark.createDataFrame(domains.reference(name)))
 
     def ref(name, key_col, key_name):
-        table = spark.createDataFrame(domains.reference(name)).withColumnRenamed(key_col, key_name)
-        return F.broadcast(table)
+        return F.broadcast(load(name).withColumnRenamed(key_col, key_name))
 
     out = df.withColumn("_race", domain_key(F.col("race"))).join(
         ref("race_crosswalk", "source_value", "_race"), "_race", "left")
@@ -139,6 +142,8 @@ def apply_domains(df):
     out = out.withColumn("_violence", domain_key(F.col("violence_code"))).join(
         ref("violence_codes", "source_value", "_violence").withColumnRenamed("violence_code", "violence_code_std"),
         "_violence", "left")
+    out = out.withColumn("_unit", domain_key(F.col("unit_location"))).join(
+        ref("unit_crosswalk", "source_value", "_unit"), "_unit", "left")
     added = [c for cols in domains.DOMAIN_COLUMNS.values() for c in cols]
     return out.select(*df.columns, *added)                 # original columns first, in their original order
 

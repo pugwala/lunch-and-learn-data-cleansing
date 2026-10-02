@@ -1,0 +1,96 @@
+# Declarative Automation Bundle (formerly "Databricks Asset Bundles") for the enterprise track.
+#
+# UNTESTED TEMPLATE. It declares the same pipeline and job that 02_pipeline and 04_job_and_alerts create
+# with the SDK, as files you can review, version and deploy. It has not been deployed to the agency
+# workspace yet: validate it there before relying on it.
+#
+# How to deploy without a command line: open this file in the workspace (the course's Git folder,
+# enterprise/databricks.yml), click the Deployments icon in the left pane, choose the "dev" target, and
+# click Deploy. Workspace deployments are source-linked: they run the files in your Git folder.
+#
+# Before you deploy:
+#   1. Run 00_preflight and 01_unity_catalog first. The bundle creates the pipeline and the job; it does
+#      not create the schema, the landing volume, the reference tables or the first delivery.
+#   2. Set "catalog" below (the same value as ENTERPRISE_CATALOG in lnl/config.py).
+#   3. Use the notebooks OR the bundle against one schema, not both. Two pipelines can't publish the same
+#      tables: if you already ran 02_pipeline, delete that pipeline first (Jobs & Pipelines -> the
+#      pipeline -> Delete), or point "schema" at a different one.
+#   4. Check that "schema" resolves to the schema 00_preflight printed. Both are built from your user
+#      name, but the two rules can differ for unusual names. If they do, type the schema name in.
+
+bundle:
+  name: lnl_enterprise_track
+
+variables:
+  catalog:
+    description: Catalog where you can create schemas (ENTERPRISE_CATALOG in lnl/config.py).
+  schema:
+    description: Your schema, created by 01_unity_catalog.
+  course_root:
+    description: The course's Git folder, so the pipeline can import the cleansing rules in lnl/.
+  alert_destination_id:
+    description: ID of a notification destination for PagerDuty or a ServiceNow webhook (an admin creates it).
+    default: ""
+
+targets:
+  dev:
+    mode: development          # prefixes names with [dev you], keeps schedules paused, runs pipelines in development mode
+    default: true
+    variables:
+      catalog: ""              # <- set this
+      schema: lnl_${workspace.current_user.short_name}
+      course_root: /Workspace/Users/${workspace.current_user.userName}/lunch-and-learn-data-cleansing
+
+resources:
+  pipelines:
+    lnl_hero_offenders:
+      name: lnl_hero_offenders_${workspace.current_user.short_name}
+      catalog: ${var.catalog}
+      schema: ${var.schema}
+      serverless: true
+      channel: CURRENT
+      continuous: false
+      libraries:
+        - file:
+            path: ./pipeline/hero_offenders.py
+      configuration:
+        lnl.course_root: ${var.course_root}
+        lnl.landing_path: /Volumes/${var.catalog}/${var.schema}/landing/hero_offenders
+        lnl.reference_schema: ${var.catalog}.${var.schema}
+      tags:
+        course: lunch-and-learn
+        data: mock
+
+  jobs:
+    lnl_hero_offenders_daily:
+      name: lnl_hero_offenders_daily_${workspace.current_user.short_name}
+      description: "Lunch & Learn enterprise track: refresh the mock-data pipeline, then check data quality."
+      max_concurrent_runs: 1
+      tasks:
+        - task_key: refresh_pipeline
+          pipeline_task:
+            pipeline_id: ${resources.pipelines.lnl_hero_offenders.id}
+        - task_key: validate_quality
+          depends_on:
+            - task_key: refresh_pipeline
+          notebook_task:
+            notebook_path: ./tasks/validate_quality.ipynb
+            base_parameters:
+              run_id: "{{job.run_id}}"
+              course_root: ${var.course_root}
+      schedule:
+        quartz_cron_expression: "0 50 5 * * ?"     # 5:50 AM Central, before the workday
+        timezone_id: America/Chicago
+        pause_status: PAUSED
+      email_notifications:
+        on_failure:
+          - ${workspace.current_user.userName}
+        no_alert_for_skipped_runs: true
+      # Uncomment once an admin has created the PagerDuty or ServiceNow destination and you've set
+      # alert_destination_id (Settings -> Notifications shows the ID):
+      # webhook_notifications:
+      #   on_failure:
+      #     - id: ${var.alert_destination_id}
+      tags:
+        course: lunch-and-learn
+        data: mock

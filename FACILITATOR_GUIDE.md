@@ -7,7 +7,7 @@ The point of the dry run is simple: every number you show the room has already m
 ### 1. Finish the repo (10 minutes)
 
 - [ ] Make sure the repo has the latest `lnl/` folder, including `lnl/domains.py` and the crosswalk files in `lnl/reference/`, and the latest generator. The data file's name includes a version number, so the first setup cell after a pull rebuilds the data once (about 15 seconds).
-- [ ] Check the top level of the repo shows six folders (`docs`, `extras`, `generator`, `lnl`, `notebooks`, `wheels`) and `README.md`, `FACILITATOR_GUIDE.md`, `requirements.txt`.
+- [ ] Check the top level of the repo shows seven folders (`docs`, `enterprise`, `extras`, `generator`, `lnl`, `notebooks`, `wheels`) and `README.md`, `FACILITATOR_GUIDE.md`, `requirements.txt`.
 - [ ] When the student handout changes, export it again and replace `docs/student-handout.pdf`, so the printed copy matches.
 
 ### 2. Set up Databricks Free Edition (15 minutes)
@@ -24,7 +24,7 @@ Run each notebook top to bottom once with the blanks empty, the way a student wi
 | Session | Must match | Also expect |
 |---|---|---|
 | 1 | Exercise 1 = 22; Q1 goes 1,536 to 2,991 | Setup cell builds the data in about 15 seconds |
-| 2 | Index: tdcj_number, type: Int64, unique: True; exercise 3 = 8,499; exercise 4 = 554 | Text lookup False, `id_value` lookup True; 1,700 coded values on the exceptions list; nulls: CSV 0, Parquet 123,226 |
+| 2 | Index: tdcj_number, type: Int64, unique: True; exercise 3 = 8,499; exercise 4 = 554 | Text lookup False, `id_value` lookup True; 1,966 coded values on the exceptions list; nulls: CSV 0, Parquet 129,704 |
 | 3 | 1,633 centuries corrected; 8 birth dates flagged | Flagged rows labeled by TDCJ number |
 | 4 | Restitution 1,333,587,950.77; 1,086 exceptions; 228 offense/violence conflicts; all 8 Trust Test answers changed | Exceptions list keyed by TDCJ number, padded to 8 digits |
 | 5 | "tdcj_number is a valid record ID (BIGINT)"; reconciliation 22 of 22 | A Delta table line naming workspace.default; a "skip" line on a constraint is fine. If a table was saved by an earlier version of the course, it is replaced (new columns, BIGINT IDs) |
@@ -78,7 +78,7 @@ All numbers below come from seed 2026 with 100,000 rows. If someone's numbers di
 | Q2 distinct genders: as loaded → after strip | 19 → 3 |
 | Missing gender after strip (#2) | 2,995 |
 | Most common unit (#3) | Cleveland |
-| Distinct values as loaded: race / religion / STG / offense / violence | 74 / 86 / 459 / 59 / 40 |
+| Distinct values as loaded: unit / race / religion / STG / offense / violence | 393 / 74 / 86 / 459 / 59 / 40 |
 
 **Talking points:** pandas turned `tdcj_number` into an integer on its own and left `sid_number` as text. The problem isn't the number type (our tables store both IDs as BIGINT); it's that nobody chose it or checked it. Ask the room what happens when a number key is joined to a text key from another system. The `protective_custody` peek sets up session 4: a column that should have two values has more than a dozen. The coded-columns peek sets up session 2: four violence codes written 40 ways, and pandas' defaults quietly turning STG `N/A` and `None` ("no known affiliation," a real answer) into missing for about 25,700 records.
 
@@ -101,13 +101,16 @@ All numbers below come from seed 2026 with 100,000 rows. If someone's numbers di
 | HYDRA: `== "HYDRA"` as written / any HYDRA / Confirmed (#4) | 113 / 1,608 / 554 |
 | STG status: None / Confirmed / Suspected / Unverified / Former / blank | 86,526 / 3,612 / 3,046 / 2,612 / 1,091 / 3,113 |
 | Offense 13A, offense 09B, violence V3: as written → standardized | 11,531 → 12,318; 1,301 → 2,257; 13,880 → 14,795 |
-| Coded values on the exceptions list | 1,700 (offense 1,379, violence 104, religion 86, STG 77 including 30 two-group cells, race 54) |
+| Gotham City: as written → `unit_name` | 1,365 → 1,766 (GOTHAM CITY, GOC, Gotham, Gothem City, Gotham City Unit…) |
+| Unit values on no list | 266 (TBD 73, IN TRANSIT 73, XX 68, UNASSIGNED 52) |
+| Coded values on the exceptions list | 1,966 (offense 1,379, unit 266, violence 104, religion 86, STG 77 including 30 two-group cells, race 54) |
 | People (SIDs) with more than one race code | 113 |
-| Nulls after a CSV round trip vs Parquet | 0 vs 123,226 |
+| Nulls after a CSV round trip vs Parquet | 0 vs 129,704 |
 
 **Talking points:** spend real time on `NONE` versus blank; it's the single most transferable idea in the series. Ask what a blank flag means in their own systems: an unchecked box (No) or unknown? Most people have never asked. Then land the ID point: `set_record_id` proves `tdcj_number` is present, 8 digits and never repeated, converts the TDCJ and SID numbers to whole numbers (BIGINT), and makes the TDCJ number the index. It stops rather than guessing if any record fails. Show both lookups side by side: typing `"02381457"` finds nothing and `id_value("02381457")` finds Superman. That's the whole lesson: a text key and a number key only match when both sides are converted the same way. From there every output is labeled by TDCJ number, IDs shown to people are padded back to 8 digits with `format_id`, and saves keep the index (no `index=False`).
 
-Then the coded values. The idea to land is the **crosswalk**: a reference table the data owner agrees to, kept in Git, that the code only looks values up in. Ask the room who owns the reference tables in their own systems, and where the list of valid codes actually lives. Three moments to slow down on:
+Then the coded values. The idea to land is the **crosswalk**: a reference table the data owner agrees to, kept in Git, that the code only looks values up in. Ask the room who owns the reference tables in their own systems, and where the list of valid codes actually lives. Four moments to slow down on:
+- **A unit code typed where a name belongs still names a unit; `IN TRANSIT` doesn't.** `GOC`, `GOTHAM CITY` and `Gothem City` all map to Gotham City through the unit crosswalk. `IN TRANSIT`, `TBD` and `XX` aren't units at all: they're statuses or placeholders, so they go back to the data owner instead of into the crosswalk.
 - **`N/A` means different things in different columns.** In STG it means no known affiliation (a real answer); in religion it means not recorded. One global list of "null words" would get one of them wrong.
 - **A bare STG group name is Unverified, not Confirmed.** STG status feeds housing and classification, so a guess here affects a person. The groups are fictional villains; say so if anyone asks.
 - **Race and religion are sensitive.** Standardize what was recorded, restrict access, and never infer either one from a name or anything else. In the mock data they're assigned at random, so any pattern someone "finds" in them is noise. Race gets two outputs, the agency letter code and the 2024 federal (OMB) categories, and old combined values like Asian/Pacific Islander say "Needs review" instead of being guessed into one.
@@ -160,7 +163,7 @@ Religion changing between a person's records is allowed (people change faith); r
 | Distinct genders: raw / `trim()` / regex | 19 / 5 / 4 |
 | Missing gender (#1) | 2,995 |
 | Total restitution (#2) | 1,333,587,950.77 |
-| Reconciliation | 22 of 22 match, including distinct TDCJ numbers = rows, the TDCJ hash total, confirmed STG records (3,612), unrecognized coded values (1,700) and offense/violence conflicts (228) |
+| Reconciliation | 22 of 22 match, including distinct TDCJ numbers = rows, the TDCJ hash total, confirmed STG records (3,612), unrecognized coded values (1,966) and offense/violence conflicts (228) |
 
 **Talking points:** Spark's `trim()` leaving tabs behind and Spark's `yy` meaning 2000-2099 are both examples of "same name, different behavior." Spark SQL is there for people who think in SQL; point it out explicitly. The hash total (the sum of every TDCJ number) is the one legitimate time to add IDs: as a checksum that both sides hold the same records. Both engines read the same crosswalk files, so a fix to reference data fixes both. The first Spark command takes a moment on serverless; start compute early.
 
@@ -187,3 +190,21 @@ Religion changing between a person's records is allowed (people change faith); r
 Results depend on which embedding method loads (the notebook prints it). In testing with the fallback method (Latent Semantic Analysis), few-shot with 300 labels scored F1 0.947 against 0.899 for the session 6 rules, and zero-shot scored 0.588. Expect zero-shot to be clearly better with the sentence-transformer model; few-shot should stay on top either way. Dry-run this session on your compute so you know which numbers the room will see.
 
 **Talking points:** negation is a known weak spot for embeddings; if semantic search surfaces *not a good day*, use it. Close with the governance point: real conduct notes are criminal justice information, and any AI Function or model use goes through AI governance review first.
+
+## After the series: the enterprise track
+
+`enterprise/` is optional and runs only on the agency workspace: Unity Catalog, a Lakeflow pipeline with expectations, masks on race and religion, a scheduled job that alerts, and data-quality monitoring. It's for people who finished sessions 1 to 5, working at their own pace (six notebooks, about three hours), not a room session. [`enterprise/README.md`](enterprise/README.md) has setup and the admin asks; `00_preflight` checks them.
+
+Nothing in the track has run on a Databricks workspace yet, so do it yourself before you recommend it. On the dry run, expect:
+
+| Notebook | Must match |
+|---|---|
+| 02, first update | bronze 100,000; silver 100,000; quarantine 0 |
+| 02, event log and `gold_quality_summary` | the session numbers: offense 1,379, unit 266, violence 104, religion 86, STG 77, race 54; 1,086 values that didn't convert; 228 offense/violence conflicts; 8 birth dates |
+| 02, after batch 2 | silver 101,000: only the new file was read |
+| 04, first job run | SUCCESS, every check PASS in `quality_results` |
+| 04, batch 3 | 3 records in `silver_quarantine`, the run FAILED, and a failure email (and a PagerDuty incident, if a destination is set) |
+| 04, after the review | SUCCESS |
+| 03 | race and religion masked, unless you're in `RESTRICTED_GROUP`; two of the four units visible |
+
+If a number differs, the pipeline and the sessions have drifted apart: `lnl/spark_pipeline.py` should give the session numbers exactly.

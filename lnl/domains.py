@@ -1,6 +1,6 @@
 """Session 2: coded domains and free text.
 
-Race, religion, STG affiliation, offense codes and violence codes arrive spelled many ways. Each one is mapped
+Unit locations, race, religion, STG affiliation, offense codes and violence codes arrive spelled many ways. Each one is mapped
 to agreed reference data (the CSV files in lnl/reference/) instead of being guessed at in code. Anything a
 crosswalk doesn't know goes on an exceptions list for the data owner. Free text (names and officer notes)
 gets its web-form and encoding damage repaired first, so matching and searching see what was actually typed.
@@ -36,6 +36,7 @@ DOMAIN_COLUMNS = {                       # raw column -> the standardized column
     "stg_affiliation": ["stg_group", "stg_status"],
     "offense_code": ["offense_code_std", "offense_against"],
     "violence_code": ["violence_code_std"],
+    "unit_location": ["unit_name", "unit_code"],
 }
 
 # STG status written into the same field as the group. A bare group name means nobody recorded a status:
@@ -81,9 +82,10 @@ def fold_accents(series: pd.Series) -> pd.Series:
 
 # ---- Coded domains ----------------------------------------------------------------------------
 def domain_key(series: pd.Series) -> pd.Series:
-    """The spelling-insensitive key every crosswalk is keyed on: upper case, no periods, single spaces,
-    no spaces around - / and :. "H.Y.D.R.A." -> HYDRA, "W - WHITE" -> W-WHITE, "susp: hydra" -> SUSP:HYDRA."""
-    key = series.str.upper().str.replace(".", "", regex=False)
+    """The spelling-insensitive key every crosswalk is keyed on: upper case, no periods, straight apostrophes,
+    single spaces, no spaces around - / and :. "H.Y.D.R.A." -> HYDRA, "W - WHITE" -> W-WHITE, "susp: hydra" ->
+    SUSP:HYDRA, "Hell’s Kitchen" -> HELL'S KITCHEN."""
+    key = series.str.upper().str.replace(".", "", regex=False).str.replace("[’‘]", "'", regex=True)
     key = key.str.replace(r"\s+", " ", regex=True).str.strip()
     return key.str.replace(r"\s*([-/:])\s*", r"\1", regex=True)
 
@@ -121,6 +123,9 @@ def standardize_domains(df: pd.DataFrame) -> pd.DataFrame:
     out["offense_code_std"] = code.where(code.isin(reference("nibrs_offenses")["code"]))
     out["offense_against"] = _lookup(out["offense_code_std"], "nibrs_offenses", "code", "crime_against")
     out["violence_code_std"] = _lookup(domain_key(out["violence_code"]), "violence_codes", "source_value", "violence_code")
+    unit = domain_key(out["unit_location"])
+    out["unit_name"] = _lookup(unit, "unit_crosswalk", "source_value", "unit_name")
+    out["unit_code"] = _lookup(unit, "unit_crosswalk", "source_value", "unit_code")
     return out
 
 
