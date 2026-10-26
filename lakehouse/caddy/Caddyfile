@@ -8,6 +8,7 @@
 #   https://<LAKE_TS_HOST>/fuseki/    Fuseki SPARQL (reads open, writes need its writer user; served under /fuseki)
 #   https://<LAKE_TS_HOST>/prometheus/  Prometheus (basic auth below, the Dagster login; it has none of its own)
 #   https://<LAKE_TS_HOST>/grafana/   Grafana (its own login; GF_SERVER_SERVE_FROM_SUB_PATH, so the path is kept)
+#   https://<LAKE_TS_HOST>/alertmanager/  Alertmanager (basic auth below, the Dagster login; it has none of its own)
 #
 # The tls block gets a real certificate from tailscaled, whose socket compose.yaml mounts in. Without it Caddy asks
 # Let's Encrypt directly, which can't see a private *.ts.net name. No browser warnings, nothing to trust by hand.
@@ -48,5 +49,11 @@
 	}
 	handle /grafana* {
 		reverse_proxy grafana:3000
+	}
+	handle /alertmanager* {
+		basic_auth {
+			{$DAGSTER_UI_USER} {$DAGSTER_UI_HASH}
+		}
+		reverse_proxy alertmanager:9093
 	}
 }

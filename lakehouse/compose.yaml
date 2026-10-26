@@ -518,6 +518,28 @@ services:
       timeout: 10s
       start_period: 180s
 
+  # Alerts from Prometheus's rules (monitoring/prometheus/rules/), at https://<LAKE_TS_HOST>/alertmanager/ behind
+  # basic auth. Every alert goes to the "undecided" receiver, which sends nothing, until Ian picks PagerDuty or email.
+  alertmanager:
+    profiles: [core]
+    image: prom/alertmanager:${ALERTMANAGER_TAG:-v0.34.1}
+    restart: unless-stopped
+    user: "1000:100"
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --storage.path=/alertmanager
+      - --web.external-url=https://${LAKE_TS_HOST:?run scripts/bootstrap.sh, which sets it from Tailscale}/alertmanager/
+      - --cluster.listen-address=   # one instance: no gossip port
+    volumes:
+      - ./monitoring/alertmanager:/etc/alertmanager:ro   # the folder, not the file
+      - ${LAKE_ROOT:-/lake}/alertmanager:/alertmanager
+    expose:
+      - "9093"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:9093/alertmanager/-/healthy"]
+      interval: 30s
+      timeout: 10s
+
   caddy:
     profiles: [core]
     image: caddy:${CADDY_TAG:-2}
@@ -543,6 +565,7 @@ services:
       - fuseki
       - prometheus
       - grafana
+      - alertmanager
 
 volumes:
   catalog-pg-data:

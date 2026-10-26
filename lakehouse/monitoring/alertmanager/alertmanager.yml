@@ -1,0 +1,13 @@
+# Alertmanager for the home-lab lakehouse (Phase 6). Where alerts go is still Ian's call (PagerDuty, email or both),
+# so every alert ends at "undecided", a receiver with no integrations: it sends nothing anywhere, and alerts show at
+# /alertmanager/ and in Grafana meanwhile. To start sending, add an integration to a receiver (for PagerDuty,
+# pagerduty_configs with routing_key_file pointing at a file outside this repo) and route to it.
+route:
+  receiver: undecided
+  group_by: [alertname, pipeline, site]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+
+receivers:
+  - name: undecided
