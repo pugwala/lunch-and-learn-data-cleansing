@@ -45,10 +45,12 @@ TABLE_COMMENTS = {
 
 # ---- Connection ---------------------------------------------------------------------------------
 def catalog() -> str:
+    """Where the lake's catalog is: LAKE_CATALOG (ducklake:postgres:... on the VM), else a DuckDB file in the data dir."""
     return os.environ.get("LAKE_CATALOG", str(env.data_dir() / "lake.duckdb"))
 
 
 def is_ducklake() -> bool:
+    """True when the catalog is DuckLake (on the VM); False for a plain DuckDB file (a laptop or the sandbox)."""
     return catalog().startswith("ducklake:")
 
 
@@ -107,6 +109,7 @@ def lake_ro_connect():
 
 
 def ensure_schemas(con) -> None:
+    """Create the lake's schemas (ref, bronze, silver, gold, ops) if they're missing."""
     for schema in SCHEMAS:
         con.execute(f"CREATE SCHEMA IF NOT EXISTS {LAKE}.{schema}")
 
@@ -191,6 +194,7 @@ def trust_test_table(naive: pd.DataFrame, typed: pd.DataFrame) -> pd.DataFrame:
 
 # ---- Loading ------------------------------------------------------------------------------------
 def _replace(con, table: str, view: str, frame=None) -> None:
+    """Replace a lake table with the rows of a view, registering a pandas frame under that view's name first if given."""
     if frame is not None:
         con.register(view, frame)
     con.execute(f"DROP TABLE IF EXISTS {LAKE}.{table}")
@@ -217,6 +221,7 @@ def _write_comments(con) -> None:
 
 
 def load_reference(con) -> int:
+    """Land every course reference CSV as ref.<name> (all text), plus ref.null_tokens; returns how many tables."""
     count = 0
     for path in sorted(domains_reference_dir().glob("*.csv")):
         table = f"ref.{path.stem}"
@@ -234,6 +239,7 @@ def load_reference(con) -> int:
 
 
 def domains_reference_dir() -> Path:
+    """The course's folder of reference CSVs (lnl.domains.REFERENCE_DIR)."""
     from lnl import domains
     return domains.REFERENCE_DIR
 

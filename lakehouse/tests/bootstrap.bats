@@ -4,6 +4,7 @@
 #   bats lakehouse/tests/bootstrap.bats
 # BOOTSTRAP=<path> tests a different copy of the script (used to prove each test fails when its behaviour breaks).
 
+# setup: before each test, a throwaway repo with the script under test, stub commands first on PATH, and a full .env.
 setup() {
   T=$BATS_TEST_TMPDIR
   REPO=$T/repo

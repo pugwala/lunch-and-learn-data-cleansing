@@ -398,6 +398,7 @@ docker compose --profile core exec -T catalog-pg dropdb -U postgres ducklake_res
 | Alerting (Alertmanager 0.34.1, 17 rules): 7 acceptance tests (`pytest lakehouse/acceptance/test_alerting.py`), each seen failing first; a failed `monitoring_selftest` raised `JobFailing` and a passing run resolved it | On the VM |
 | Nightly catalog backup: 6 acceptance tests (`pytest lakehouse/acceptance/test_backup.py`), each seen failing first; a restore drill matched the live catalog row for row | On the VM |
 | Pinned versions: 28 acceptance tests (`pytest lakehouse/acceptance/test_pins.py`) and 2 bats tests, each seen failing first; the jupyter image was shown by layer match to be built on the `2026-10-12` base, and `daily_lake` and `notebook_smoke` succeeded on it | On the VM |
+| Docstring rule (every Python function and class has a docstring, every shell function a comment above it): 2 acceptance tests (`pytest lakehouse/acceptance/test_docstrings.py`), seen failing first on 23 Python and 9 shell functions written before the rule | On the VM |
 
 ## Next phases
 

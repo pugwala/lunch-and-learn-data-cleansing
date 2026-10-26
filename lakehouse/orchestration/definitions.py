@@ -67,6 +67,8 @@ PARITY_CHECK = "matches_course_numbers"
 
 
 class LoadConfig(dg.Config):
+    """Run config for load_lake (and so for daily_lake and regenerate_lake)."""
+
     regenerate: bool = False
     """Rebuild the CSV from the seed before loading (normally the cached file is reused)."""
 
@@ -80,6 +82,8 @@ class LoadConfig(dg.Config):
                                    description="All 19 lakehouse/tests checks match FACILITATOR_GUIDE.md")],
 )
 def load_lake(context: dg.AssetExecutionContext, config: LoadConfig):
+    """Land ref, bronze and silver (lake.run), report each table, push the load's numbers, then run the blocking
+    parity check: the 19 lakehouse/tests checks against FACILITATOR_GUIDE.md."""
     metrics = lake.run(regenerate=config.regenerate)
     context.log.info(f"Loaded run {metrics['run_id']}: {metrics['rows_silver']:,} rows, "
                      f"{metrics['exceptions']:,} flagged values, snapshot {metrics['snapshot_id']}")
@@ -119,16 +123,19 @@ class GoldTranslator(DagsterDbtTranslator):
     """dbt models become gold/<model>; sources keep [schema, table] so they match load_lake."""
 
     def get_asset_key(self, dbt_resource_props):
+        """gold/<model> for a dbt model; dagster-dbt's default ([schema, table]) for a source."""
         if dbt_resource_props["resource_type"] == "model":
             return dg.AssetKey(["gold", dbt_resource_props["name"]])
         return super().get_asset_key(dbt_resource_props)
 
     def get_group_name(self, dbt_resource_props):
+        """Models go in the gold group; sources keep whatever group load_lake gave them."""
         return "gold" if dbt_resource_props["resource_type"] == "model" else None
 
 
 @dbt_assets(manifest=dbt_project.manifest_path, project=dbt_project, dagster_dbt_translator=GoldTranslator())
 def gold(context: dg.AssetExecutionContext, dbt: DbtCliResource):
+    """dbt build: every gold model and its tests, streamed to Dagster as materializations and checks."""
     yield from dbt.cli(["build"], context=context).stream()
 
 
@@ -231,6 +238,8 @@ def push_run_failure(context: dg.RunFailureSensorContext):
 
 
 class SelftestConfig(dg.Config):
+    """Run config for monitoring_selftest."""
+
     fail: bool = False
     """True makes the run fail on purpose, to exercise the failure sensor and the alert on it."""
 

@@ -30,13 +30,21 @@ CONTAINER_UID=1000 CONTAINER_GID=100                                    # jovyan
 BACKUP_UID=999 BACKUP_GID=999   # catalog-backup's postgres user: the dumps hold every app database, so not uid 1000
 FAILED=()
 
+# step TITLE: print a step heading.
 step() { printf '\n\033[1m== %s\033[0m\n' "$*"; }
+# ok MESSAGE: report a check that passed.
 ok()   { printf '  \033[32mok\033[0m    %s\n' "$*"; }
+# did MESSAGE: report something this run changed.
 did()  { printf '  \033[36mdone\033[0m  %s\n' "$*"; }
+# warn MESSAGE: report a problem that doesn't fail the run.
 warn() { printf '  \033[33mwarn\033[0m  %s\n' "$*"; }
+# bad MESSAGE: report a failed check; the run exits 1 at the end, after every check has had its say.
 bad()  { printf '  \033[31mFAIL\033[0m  %s\n' "$*"; FAILED+=("$*"); }
+# die MESSAGE: stop now, with the message on stderr.
 die()  { printf '\n\033[31m%s\033[0m\n' "$*" >&2; exit 1; }
+# dc ARGS: docker compose for the core profile.
 dc()   { docker compose --profile core "$@"; }
+# env_val KEY: KEY's value in .env (the last one, quotes stripped), or empty when it's missing.
 env_val() { { grep -E "^$1=" .env 2>/dev/null || true; } | tail -1 | cut -d= -f2- | sed -e "s/^'//" -e "s/'$//"; }   # missing key = empty, not a pipefail exit
 
 # .env must stay owner-only. Anything that rewrites it (sed -i, editors) makes a new file, and new files here

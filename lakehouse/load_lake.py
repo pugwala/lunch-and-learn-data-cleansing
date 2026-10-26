@@ -16,6 +16,7 @@ from lakehouse import lake  # noqa: E402
 
 
 def main() -> int:
+    """Run one load, print a summary line and then the metrics as JSON (the last line); returns the exit code."""
     metrics = lake.run(regenerate="--regenerate" in sys.argv[1:])
     print(f"Loaded run {metrics['run_id']}: {metrics['rows_silver']:,} silver rows, "
           f"{metrics['exceptions']:,} flagged values on {metrics['records_with_exceptions']:,} records, "
