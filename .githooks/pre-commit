@@ -1,0 +1,4 @@
+#!/bin/bash
+# Pre-commit hook: refuse a commit that would link this mock course to a real organization.
+# Turn it on once per clone:  git config core.hooksPath .githooks
+exec "$(git rev-parse --show-toplevel)/tools/tieback_check.sh" --staged

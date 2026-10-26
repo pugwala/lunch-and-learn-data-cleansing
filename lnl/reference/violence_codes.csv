@@ -1,0 +1,19 @@
+source_value,violence_code
+N-V,NV
+N/V,NV
+NON VIOLENT,NV
+NON-VIOLENT,NV
+NONVIOLENT,NV
+NV,NV
+1,V1
+V 1,V1
+V-1,V1
+V1,V1
+2,V2
+V 2,V2
+V-2,V2
+V2,V2
+3,V3
+V 3,V3
+V-3,V3
+V3,V3

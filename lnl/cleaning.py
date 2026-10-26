@@ -1,0 +1,205 @@
+"""Session 2: cleansing. Whitespace, codes that mean 'unknown', casing, names, keys, multi-value fields.
+Coded domains (race, religion, STG, offense and violence codes) and free-text repair live in domains.py."""
+import re
+
+import pandas as pd
+
+# Data dictionary: text the source system uses to mean "unknown", per column.
+# Note what is NOT here: housing_restriction "NONE" means "no restriction required". That's a real
+# answer, not missing data, so it stays. Decide these with the data owner, never by guessing.
+NULL_TOKENS = {
+    "disciplinary_points": ["N/A"],
+    "escape_risk": ["U", "UNK"],
+    "intake_time": ["99:99"],
+    "protective_custody": ["U"],
+}
+
+# The IDs. One offender number per incarceration (never repeated) and one SID per person. Source systems write
+# both as 8-digit text with leading zeros ("02381457"). Our tables store them as whole numbers: BIGINT in
+# Spark/Delta, Int64 in pandas, so 02381457 is stored as 2381457. The rule: check the text first, convert
+# on purpose, and pad back to 8 digits (format_id) wherever people read an ID or a text-based system has to
+# match it. From session 2 on, offender_number is the DataFrame's index.
+RECORD_ID = "offender_number"
+ID_COLUMNS = ["offender_number", "sid_number"]
+ID_PATTERN = r"\d{8}"
+ID_WIDTH = 8
+ID_MAX = 99_999_999
+
+NAME_PARTICLES = {"DE", "LA", "DA", "DEL", "VAN", "VON", "DU", "DOS", "DI", "LE"}
+NAME_SUFFIXES = {"JR": "Jr", "SR": "Sr", "II": "II", "III": "III", "IV": "IV"}
+NAME_EXCEPTIONS = {"MACDONALD": "MacDonald"}
+
+
+def text_columns(df: pd.DataFrame) -> list:
+    """Columns holding text. Works on pandas 2 (object dtype) and pandas 3 (str dtype)."""
+    return list(df.select_dtypes(include=["object", "string"]).columns)
+
+
+def strip_and_null(df: pd.DataFrame) -> pd.DataFrame:
+    """Trim spaces/tabs from both ends of every text value, then turn empty text into a real null."""
+    out = df.copy()
+    for col in text_columns(out):
+        stripped = out[col].str.strip()
+        out[col] = stripped.mask(stripped == "")
+    return out
+
+
+def apply_null_tokens(df: pd.DataFrame, tokens: dict = None) -> pd.DataFrame:
+    """Replace documented 'unknown' codes with real nulls, column by column."""
+    out = df.copy()
+    for col, values in (tokens or NULL_TOKENS).items():
+        if col in out.columns:
+            out[col] = out[col].mask(out[col].str.upper().isin([v.upper() for v in values]))
+    return out
+
+
+def standardize_names(df: pd.DataFrame) -> pd.DataFrame:
+    """Add *_std columns (uppercase, accents folded, single spaces) for matching: GARCÍA and Garcia both
+    become GARCIA. Originals, accents included, stay for display."""
+    from .domains import fold_accents
+    out = df.copy()
+    for col in ["last_name", "first_name", "alias"]:
+        out[f"{col}_std"] = fold_accents(out[col]).str.upper().str.replace(r"\s+", " ", regex=True)
+    return out
+
+
+def repair_text_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Undo encoding and web-form damage in names and officer notes (see domains.repair_text)."""
+    from .domains import TEXT_COLUMNS, repair_text
+    out = df.copy()
+    for col in TEXT_COLUMNS:
+        out[col] = repair_text(out[col])
+    return out
+
+
+def _cap_word(word: str) -> str:
+    if word in NAME_EXCEPTIONS:
+        return NAME_EXCEPTIONS[word]
+    if "-" in word:
+        return "-".join(_cap_word(p) for p in word.split("-"))
+    if "'" in word:
+        head, tail = word.split("'", 1)
+        return head.capitalize() + "'" + tail.capitalize()
+    if word.startswith("MC") and len(word) > 3:
+        return "Mc" + word[2:].capitalize()
+    return word.capitalize()
+
+
+def display_name(name):
+    """Rule-based proper case for reports: MCDONALD -> McDonald, DE LA CRUZ -> De la Cruz.
+    No rule set is perfect, which is why matching always uses the *_std columns instead."""
+    if not isinstance(name, str):
+        return name
+    out = []
+    for i, word in enumerate(name.upper().split()):
+        if word.rstrip(".") in NAME_SUFFIXES:
+            out.append(NAME_SUFFIXES[word.rstrip(".")])
+        elif word in NAME_PARTICLES and i > 0:
+            out.append(word.lower())
+        else:
+            out.append(_cap_word(word))
+    return " ".join(out)
+
+
+def record_ids(df: pd.DataFrame) -> pd.Series:
+    """The offender numbers, whether they are still a column or already the index."""
+    return df.index.to_series() if df.index.name == RECORD_ID else df[RECORD_ID]
+
+
+def ids_to_numbers(series: pd.Series):
+    """8-digit ID text ("02381457") -> whole numbers (Int64: 2381457). Blanks stay blank.
+    Returns (ids, failed_mask): any non-blank value that isn't exactly 8 digits fails instead of being guessed."""
+    looks_right = series.str.fullmatch(ID_PATTERN, na=False).astype(bool)
+    ids = pd.to_numeric(series.where(looks_right), errors="coerce").astype("Int64")
+    return ids, series.notna() & ~looks_right
+
+
+def id_value(text) -> int:
+    """One ID as people write it ("02381457") -> the stored whole number (2381457), with the same 8-digit check.
+    Use it to look a record up: df.loc[cleaning.id_value("02381457")]."""
+    text = str(text).strip()
+    if not re.fullmatch(ID_PATTERN, text):
+        raise ValueError(f"{text!r} is not an 8-digit ID")
+    return int(text)
+
+
+def format_id(ids):
+    """Stored ID(s) -> 8-digit text with the leading zeros back, for people and text-based systems.
+    Works on one value, a column, or the index."""
+    if isinstance(ids, pd.Index):
+        return pd.Index(format_id(ids.to_series()).array, name=ids.name)
+    if isinstance(ids, pd.Series):
+        return ids.astype("Int64").astype("string").str.zfill(ID_WIDTH)
+    return ids if pd.isna(ids) else f"{int(ids):0{ID_WIDTH}d}"
+
+
+def set_record_id(df: pd.DataFrame) -> pd.DataFrame:
+    """Prove offender_number is a real ID (present, 8 digits, never repeated), convert the offender and SID numbers
+    to whole numbers on purpose, then make offender_number the index.
+    Refuses (raises) instead of guessing if any record fails."""
+    if df.index.name == RECORD_ID:
+        return df
+    ids = df[RECORD_ID]
+    problems = {
+        "missing": int(ids.isna().sum()),
+        "not 8 digits": int((~ids.dropna().str.fullmatch(ID_PATTERN)).sum()),
+        "repeated": int(ids.dropna().duplicated().sum()),
+    }
+    failed = {name: count for name, count in problems.items() if count}
+    if failed:
+        raise ValueError(f"offender_number can't be the record ID yet: {failed}. Fix these with the data owner first.")
+    out = df.copy()
+    for col in ID_COLUMNS:
+        if col in out.columns:
+            out[col], bad = ids_to_numbers(out[col])
+            if bad.any():
+                raise ValueError(f"{int(bad.sum())} {col} values aren't 8 digits. Fix these with the data owner first.")
+    return out.set_index(RECORD_ID, verify_integrity=True)
+
+
+def _not_valid_ids(ids: pd.Series) -> int:
+    """How many non-blank IDs aren't valid 8-digit IDs, whether still text or already converted."""
+    ids = ids.dropna()
+    if pd.api.types.is_numeric_dtype(ids):
+        return int(((ids < 1) | (ids > ID_MAX)).sum())
+    return int((~ids.astype(str).str.fullmatch(ID_PATTERN)).sum())
+
+
+def key_checks(df: pd.DataFrame) -> pd.DataFrame:
+    """Checks every report writer should run before trusting a join or a count."""
+    offender_num, sid = record_ids(df), df["sid_number"]
+    last_std = df["last_name_std"] if "last_name_std" in df else df["last_name"].str.upper()
+    known = df.assign(_last=last_std).dropna(subset=["sid_number", "_last"])
+    conflicts = int((known.groupby("sid_number")["_last"].nunique() > 1).sum())
+    per_sid = df.dropna(subset=["sid_number"]).groupby("sid_number").size()
+    checks = {
+        "Offender number missing": int(offender_num.isna().sum()),
+        "Offender number duplicated": int(offender_num.dropna().duplicated().sum()),
+        "Offender number not a valid 8-digit ID": _not_valid_ids(offender_num),
+        "SID missing": int(sid.isna().sum()),
+        "SID not a valid 8-digit ID": _not_valid_ids(sid),
+        "SIDs with conflicting last names": conflicts,
+        "People (SIDs) with more than one record": int((per_sid > 1).sum()),
+    }
+    return pd.DataFrame({"count": checks})
+
+
+def explode_powers(df: pd.DataFrame) -> pd.DataFrame:
+    """One row per (record, power) instead of 'FLIGHT;SUPER STRENGTH' packed into one cell."""
+    base = df if df.index.name == RECORD_ID else df.set_index(RECORD_ID)
+    long = base[["superpower"]].dropna().copy()
+    long["power"] = long["superpower"].str.split(";")
+    long = long.explode("power")
+    long["power"] = long["power"].str.strip()
+    return long[["power"]].reset_index()
+
+
+def session2(df: pd.DataFrame) -> pd.DataFrame:
+    """Everything taught in session 2, in order."""
+    df = strip_and_null(df)
+    df = set_record_id(df)
+    df = apply_null_tokens(df)
+    df = repair_text_columns(df)
+    df = standardize_names(df)
+    from .domains import standardize_domains
+    return standardize_domains(df)

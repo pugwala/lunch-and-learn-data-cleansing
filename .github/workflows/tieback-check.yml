@@ -1,0 +1,21 @@
+# Fails a push or pull request that would link this mock course to a real organization (tools/tieback_check.sh),
+# including text inside PDFs. The same check runs locally as a pre-commit hook: git config core.hooksPath .githooks
+name: tieback-check
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:   # also runnable by hand from the Actions tab
+
+permissions:
+  contents: read
+
+jobs:
+  tieback-check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: Install pypdf (to read PDF text)
+        run: python3 -m venv /tmp/venv && /tmp/venv/bin/pip install --quiet pypdf==6.20.0
+      - name: Check for tie-backs
+        run: PATH="/tmp/venv/bin:$PATH" bash tools/tieback_check.sh

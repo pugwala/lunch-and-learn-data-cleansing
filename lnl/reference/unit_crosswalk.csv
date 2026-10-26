@@ -1,0 +1,355 @@
+source_value,unit_name,unit_code
+AMB,Amnesty Bay,AMB
+AMNESTY BAY,Amnesty Bay,AMB
+AMNESTY BAY UNIT,Amnesty Bay,AMB
+ANC,Anchorage,ANC
+ANCHORAGE,Anchorage,ANC
+ANCHORAGE UNIT,Anchorage,ANC
+ANNANDALE ON HUDSON,Annandale-on-Hudson,ANO
+ANNANDALE-ON-HUDSON,Annandale-on-Hudson,ANO
+ANNANDALE-ON-HUDSON UNIT,Annandale-on-Hudson,ANO
+ANO,Annandale-on-Hudson,ANO
+ASG,Asgard,ASG
+ASGARD,Asgard,ASG
+ASGARD UNIT,Asgard,ASG
+ATL,Atlanta,ATL
+ATLANTA,Atlanta,ATL
+ATLANTA UNIT,Atlanta,ATL
+ATT,Attilan,ATT
+ATTILAN,Attilan,ATT
+ATTILAN UNIT,Attilan,ATT
+AUS,Austin,AUS
+AUSTIN,Austin,AUS
+AUSTIN UNIT,Austin,AUS
+BAL,Baltimore,BAL
+BALTIMORE,Baltimore,BAL
+BALTIMORE UNIT,Baltimore,BAL
+BAN,Bangalla,BAN
+BANGALLA,Bangalla,BAN
+BANGALLA UNIT,Bangalla,BAN
+BIRNIN ZANA,Birnin Zana,BIZ
+BIRNIN ZANA UNIT,Birnin Zana,BIZ
+BIRNIN-ZANA,Birnin Zana,BIZ
+BIZ,Birnin Zana,BIZ
+BLU,Bludhaven,BLU
+BLUDHAVEN,Bludhaven,BLU
+BLUDHAVEN UNIT,Bludhaven,BLU
+BLÜDHAVEN,Bludhaven,BLU
+BOS,Boston,BOS
+BOSTON,Boston,BOS
+BOSTON UNIT,Boston,BOS
+BRO,Brooklyn,BRO
+BROOKLYN,Brooklyn,BRO
+BROOKLYN UNIT,Brooklyn,BRO
+CAI,Cairo,CAI
+CAIRO,Cairo,CAI
+CAIRO UNIT,Cairo,CAI
+CAL,Caldecott,CAL
+CALDECOTT,Caldecott,CAL
+CALDECOTT UNIT,Caldecott,CAL
+CAC,Calvin City,CAC
+CALVIN,Calvin City,CAC
+CALVIN CITY,Calvin City,CAC
+CALVIN CITY UNIT,Calvin City,CAC
+CEN,Centerport,CEN
+CENTERPORT,Centerport,CEN
+CENTERPORT UNIT,Centerport,CEN
+CENTERVILLE,Centerville,CET
+CENTERVILLE UNIT,Centerville,CET
+CET,Centerville,CET
+CEC,Central City,CEC
+CENTRAL,Central City,CEC
+CENTRAL CITY,Central City,CEC
+CENTRAL CITY UNIT,Central City,CEC
+CHI,Chicago,CHI
+CHICAGO,Chicago,CHI
+CHICAGO UNIT,Chicago,CHI
+CLE,Cleveland,CLE
+CLEVELAND,Cleveland,CLE
+CLEVELAND UNIT,Cleveland,CLE
+COAST,Coast City,COC
+COAST CITY,Coast City,COC
+COAST CITY UNIT,Coast City,COC
+COC,Coast City,COC
+COR,Cork,COR
+CORK,Cork,COR
+CORK UNIT,Cork,COR
+COO,Coronado,COO
+CORONADO,Coronado,COO
+CORONADO UNIT,Coronado,COO
+CRE,Cresskill,CRE
+CRESSKILL,Cresskill,CRE
+CRESSKILL UNIT,Cresskill,CRE
+CUM,Cumberland,CUM
+CUMBERLAND,Cumberland,CUM
+CUMBERLAND UNIT,Cumberland,CUM
+DAL,Dallas,DAL
+DALLAS,Dallas,DAL
+DALLAS UNIT,Dallas,DAL
+DAY,Dayton,DAY
+DAYTON,Dayton,DAY
+DAYTON UNIT,Dayton,DAY
+DEE,Deerfield,DEE
+DEERFIELD,Deerfield,DEE
+DEERFIELD UNIT,Deerfield,DEE
+DEERWOOD,Deerwood,DER
+DEERWOOD UNIT,Deerwood,DER
+DER,Deerwood,DER
+DEN,Denver,DEN
+DENVER,Denver,DEN
+DENVER UNIT,Denver,DEN
+DET,Detroit,DET
+DETROIT,Detroit,DET
+DETROIT UNIT,Detroit,DET
+DUN,Dundee,DUN
+DUNDEE,Dundee,DUN
+DUNDEE UNIT,Dundee,DUN
+EL PASO,El Paso,ELP
+EL PASO UNIT,El Paso,ELP
+ELP,El Paso,ELP
+FAC,Fawcett City,FAC
+FAWCETT,Fawcett City,FAC
+FAWCETT CITY,Fawcett City,FAC
+FAWCETT CITY UNIT,Fawcett City,FAC
+FLORAL PARK,Floral Park,FLP
+FLORAL PARK UNIT,Floral Park,FLP
+FLP,Floral Park,FLP
+FOD,Fond du Lac,FOD
+FOND DU LAC,Fond du Lac,FOD
+FOND DU LAC UNIT,Fond du Lac,FOD
+FRE,Freeland,FRE
+FREELAND,Freeland,FRE
+FREELAND UNIT,Freeland,FRE
+GAR,Gardendale,GAR
+GARDENDALE,Gardendale,GAR
+GARDENDALE UNIT,Gardendale,GAR
+GLE,Glenville,GLE
+GLENVILLE,Glenville,GLE
+GLENVILLE UNIT,Glenville,GLE
+GOC,Gotham City,GOC
+GOTHAM,Gotham City,GOC
+GOTHAM CITY,Gotham City,GOC
+GOTHAM CITY UNIT,Gotham City,GOC
+GOTHEM CITY,Gotham City,GOC
+GREENWICH VILLAGE,Greenwich Village,GRV
+GREENWICH VILLAGE UNIT,Greenwich Village,GRV
+GRV,Greenwich Village,GRV
+HAR,Harlem,HAR
+HARLEM,Harlem,HAR
+HARLEM UNIT,Harlem,HAR
+HELL'S KITCHEN,Hell's Kitchen,HES
+HELL'S KITCHEN UNIT,Hell's Kitchen,HES
+HELLS KITCHEN,Hell's Kitchen,HES
+HES,Hell's Kitchen,HES
+HEM,Hempstead,HEM
+HEMPSTEAD,Hempstead,HEM
+HEMPSTEAD UNIT,Hempstead,HEM
+HOU,Houma,HOU
+HOUMA,Houma,HOU
+HOUMA UNIT,Houma,HOU
+HOS,Houston,HOS
+HOUSTON,Houston,HOS
+HOUSTON UNIT,Houston,HOS
+HUB,Hub City,HUC
+HUB CITY,Hub City,HUC
+HUB CITY UNIT,Hub City,HUC
+HUC,Hub City,HUC
+IVT,Ivy Town,IVT
+IVY TOWN,Ivy Town,IVT
+IVY TOWN UNIT,Ivy Town,IVT
+JUC,Jump City,JUC
+JUMP,Jump City,JUC
+JUMP CITY,Jump City,JUC
+JUMP CITY UNIT,Jump City,JUC
+K'UN-LUN,K'un-Lun,KUN
+K'UN-LUN UNIT,K'un-Lun,KUN
+KUN,K'un-Lun,KUN
+KUN LUN,K'un-Lun,KUN
+KUN-LUN,K'un-Lun,KUN
+KEC,Keystone City,KEC
+KEYSTONE,Keystone City,KEC
+KEYSTONE CITY,Keystone City,KEC
+KEYSTONE CITY UNIT,Keystone City,KEC
+LAG,Lagos,LAG
+LAGOS,Lagos,LAG
+LAGOS UNIT,Lagos,LAG
+LIV,Liverpool,LIV
+LIVERPOOL,Liverpool,LIV
+LIVERPOOL UNIT,Liverpool,LIV
+LON,London,LON
+LONDON,London,LON
+LONDON UNIT,London,LON
+LA,Los Angeles,LOA
+LOA,Los Angeles,LOA
+LOS ANGELES,Los Angeles,LOA
+LOS ANGELES UNIT,Los Angeles,LOA
+LOE,Lower East Side,LOE
+LOWER EAST SIDE,Lower East Side,LOE
+LOWER EAST SIDE UNIT,Lower East Side,LOE
+MAL,Maldon,MAL
+MALDON,Maldon,MAL
+MALDON UNIT,Maldon,MAL
+MAN,Manhattan,MAN
+MANHATTAN,Manhattan,MAN
+MANHATTAN UNIT,Manhattan,MAN
+MET,Metropolis,MET
+METROPOLIS,Metropolis,MET
+METROPOLIS UNIT,Metropolis,MET
+METROPOLOUS,Metropolis,MET
+CDMX,Mexico City,MEC
+MEC,Mexico City,MEC
+MEXICO CITY,Mexico City,MEC
+MEXICO CITY UNIT,Mexico City,MEC
+MIA,Miami,MIA
+MIAMI,Miami,MIA
+MIAMI UNIT,Miami,MIA
+MID,Middleton,MID
+MIDDLETON,Middleton,MID
+MIDDLETON UNIT,Middleton,MID
+MIC,Midway City,MIC
+MIDWAY,Midway City,MIC
+MIDWAY CITY,Midway City,MIC
+MIDWAY CITY UNIT,Midway City,MIC
+MIL,Milwaukee,MIL
+MILWAUKEE,Milwaukee,MIL
+MILWAUKEE UNIT,Milwaukee,MIL
+MON,Montreal,MON
+MONTREAL,Montreal,MON
+MONTREAL UNIT,Montreal,MON
+MUM,Mumbai,MUM
+MUMBAI,Mumbai,MUM
+MUMBAI UNIT,Mumbai,MUM
+NAC,National City,NAC
+NATIONAL,National City,NAC
+NATIONAL CITY,National City,NAC
+NATIONAL CITY UNIT,National City,NAC
+NEA,New Asgard,NEA
+NEW ASGARD,New Asgard,NEA
+NEW ASGARD UNIT,New Asgard,NEA
+NEO,New Orleans,NEO
+NEW ORLEANS,New Orleans,NEO
+NEW ORLEANS UNIT,New Orleans,NEO
+NEW YORK,New York,NEY
+NEW YORK CITY,New York,NEY
+NEW YORK UNIT,New York,NEY
+NEY,New York,NEY
+NYC,New York,NEY
+NOG,Novi Grad,NOG
+NOVI GRAD,Novi Grad,NOG
+NOVI GRAD UNIT,Novi Grad,NOG
+NUEVA YORK,Nueva York,NUY
+NUEVA YORK UNIT,Nueva York,NUY
+NUY,Nueva York,NUY
+OPAL,Opal City,OPC
+OPAL CITY,Opal City,OPC
+OPAL CITY UNIT,Opal City,OPC
+OPC,Opal City,OPC
+OSL,Oslo,OSL
+OSLO,Oslo,OSL
+OSLO UNIT,Oslo,OSL
+PAT,Paterson,PAT
+PATERSON,Paterson,PAT
+PATERSON UNIT,Paterson,PAT
+PHI,Philadelphia,PHI
+PHILA,Philadelphia,PHI
+PHILADELPHIA,Philadelphia,PHI
+PHILADELPHIA UNIT,Philadelphia,PHI
+PHILLY,Philadelphia,PHI
+PHO,Phoenix,PHO
+PHOENIX,Phoenix,PHO
+PHOENIX UNIT,Phoenix,PHO
+PIT,Pittsburgh,PIT
+PITTSBURG,Pittsburgh,PIT
+PITTSBURGH,Pittsburgh,PIT
+PITTSBURGH UNIT,Pittsburgh,PIT
+POR,Portland,POR
+PORTLAND,Portland,POR
+PORTLAND UNIT,Portland,POR
+QUE,Queens,QUE
+QUEENS,Queens,QUE
+QUEENS UNIT,Queens,QUE
+RIC,Richmond,RIC
+RICHMOND,Richmond,RIC
+RICHMOND UNIT,Richmond,RIC
+RID,Rio de Janeiro,RID
+RIO,Rio de Janeiro,RID
+RIO DE JANEIRO,Rio de Janeiro,RID
+RIO DE JANEIRO UNIT,Rio de Janeiro,RID
+SAL,Salem,SAL
+SALEM,Salem,SAL
+SALEM UNIT,Salem,SAL
+SAA,San Antonio,SAA
+SAN ANTONIO,San Antonio,SAA
+SAN ANTONIO UNIT,San Antonio,SAA
+SAD,San Diego,SAD
+SAN DIEGO,San Diego,SAD
+SAN DIEGO UNIT,San Diego,SAD
+SAF,San Francisco,SAF
+SAN FRANCISCO,San Francisco,SAF
+SAN FRANCISCO UNIT,San Francisco,SAF
+SEA,Seattle,SEA
+SEATTLE,Seattle,SEA
+SEATTLE UNIT,Seattle,SEA
+SAINT CHARLES,St. Charles,STC
+ST CHARLES,St. Charles,STC
+ST CHARLES UNIT,St. Charles,STC
+STC,St. Charles,STC
+SAINT LOUIS,St. Louis,STL
+ST LOUIS,St. Louis,STL
+ST LOUIS UNIT,St. Louis,STL
+STL,St. Louis,STL
+SAINT ROCH,St. Roch,STR
+ST ROCH,St. Roch,STR
+ST ROCH UNIT,St. Roch,STR
+STR,St. Roch,STR
+STA,Star City,STA
+STAR,Star City,STA
+STAR CITY,Star City,STA
+STAR CITY UNIT,Star City,STA
+SYD,Sydney,SYD
+SYDNEY,Sydney,SYD
+SYDNEY UNIT,Sydney,SYD
+THE,Themyscira,THE
+THEMYSCIRA,Themyscira,THE
+THEMYSCIRA UNIT,Themyscira,THE
+THEMYSCRIA,Themyscira,THE
+TOK,Tokyo,TOK
+TOKYO,Tokyo,TOK
+TOKYO UNIT,Tokyo,TOK
+TOP,Topeka,TOP
+TOPEKA,Topeka,TOP
+TOPEKA UNIT,Topeka,TOP
+USO,Ust-Ordynsky,USO
+UST ORDYNSKY,Ust-Ordynsky,USO
+UST-ORDYNSKY,Ust-Ordynsky,USO
+UST-ORDYNSKY UNIT,Ust-Ordynsky,USO
+VOL,Volgograd,VOL
+VOLGOGRAD,Volgograd,VOL
+VOLGOGRAD UNIT,Volgograd,VOL
+WAV,Waverly,WAV
+WAVERLY,Waverly,WAV
+WAVERLY UNIT,Waverly,WAV
+WES,Westchester,WES
+WESTCHESTER,Westchester,WES
+WESTCHESTER UNIT,Westchester,WES
+WESTVIEW,Westview,WET
+WESTVIEW UNIT,Westview,WET
+WET,Westview,WET
+WIB,Wilkes-Barre,WIB
+WILKES BARRE,Wilkes-Barre,WIB
+WILKES-BARRE,Wilkes-Barre,WIB
+WILKES-BARRE UNIT,Wilkes-Barre,WIB
+WINSTON SALEM,Winston-Salem,WIS
+WINSTON-SALEM,Winston-Salem,WIS
+WINSTON-SALEM UNIT,Winston-Salem,WIS
+WIS,Winston-Salem,WIS
+WIN,Winzeldorf,WIN
+WINZELDORF,Winzeldorf,WIN
+WINZELDORF UNIT,Winzeldorf,WIN
+XEB,Xebel,XEB
+XEBEL,Xebel,XEB
+XEBEL UNIT,Xebel,XEB
+ZEL,Zenn-La,ZEL
+ZENN LA,Zenn-La,ZEL
+ZENN-LA,Zenn-La,ZEL
+ZENN-LA UNIT,Zenn-La,ZEL
