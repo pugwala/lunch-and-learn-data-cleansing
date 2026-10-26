@@ -2,6 +2,8 @@
 
     load_lake (Python)  -> ref.*, bronze.*, silver.*, ops.load_runs, then the parity check
     gold (dbt build)    -> gold.dim_*, gold.fct_offender_record, gold.dq_scorecard, plus dbt tests
+    notebook_smoke      -> runs the 7 course notebooks and lakehouse/08_from_lake.ipynb weekly (an op job, not
+                           an asset, so daily_lake's all-asset selection never picks it up)
 
 The parity check is blocking: if the lake stops matching the course's numbers, gold is not rebuilt. That's the
 home-lab version of a Lakeflow expectation set to stop the pipeline. dbt tests carry the same idea down a level:
@@ -12,6 +14,8 @@ Runs one at a time (dagster.yaml sets max_concurrent_runs: 1) because DuckLake w
 import os
 import subprocess
 import sys
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 import dagster as dg
@@ -122,9 +126,59 @@ daily_schedule = dg.ScheduleDefinition(
     default_status=dg.DefaultScheduleStatus.RUNNING,
     description="05:00 Central, done well before the 07:00 work day.")
 
+# ---- Weekly notebook smoke run --------------------------------------------------------------------------------
+# The course notebooks as delivered (exercise blanks unfilled, so their checkers print a prompt, not an error),
+# plus the lakehouse's own bridge notebook. Executed copies land in /lake/notebook-runs/<date>_<run>/.
+NOTEBOOKS = [*sorted((REPO / "notebooks").glob("0*.ipynb")), REPO / "lakehouse" / "08_from_lake.ipynb"]
+NOTEBOOK_RUNS = Path(os.environ.get("NOTEBOOK_RUNS", "/lake/notebook-runs"))
+
+
+def run_notebook(path: Path, out_dir: Path) -> dict:
+    """Execute one notebook with papermill into out_dir, from its own folder; return name, outcome and seconds."""
+    import papermill
+    started, error = time.time(), None
+    try:
+        papermill.execute_notebook(str(path), str(out_dir / path.name), cwd=str(path.parent), kernel_name="python3",
+                                   progress_bar=False)
+    except Exception as exc:   # papermill raises on the first failing cell; keep going with the other notebooks
+        lines = [line for line in str(exc).splitlines() if line.strip()]
+        error = f"{type(exc).__name__}: {lines[-1][:300] if lines else ''}"
+    return {"notebook": path.name, "ok": error is None, "seconds": round(time.time() - started, 1), "error": error}
+
+
+@dg.op(description="Run every course notebook and lakehouse/08_from_lake.ipynb; fail if any cell errors.")
+def run_notebooks(context: dg.OpExecutionContext):
+    """Run all notebooks into a dated folder, log each outcome, then fail listing any that broke."""
+    out_dir = NOTEBOOK_RUNS / f"{datetime.now(timezone.utc):%Y-%m-%d}_{context.run_id[:8]}"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    results = []
+    for path in NOTEBOOKS:
+        result = run_notebook(path, out_dir)
+        context.log.info(f"{result['notebook']}: {'ok' if result['ok'] else 'FAILED'} in {result['seconds']}s"
+                         + (f" ({result['error']})" if result["error"] else ""))
+        results.append(result)
+    table = "\n".join(f"| {r['notebook']} | {'ok' if r['ok'] else 'FAILED'} | {r['seconds']} |" for r in results)
+    metadata = {"folder": str(out_dir), "notebooks": dg.MetadataValue.md(f"| notebook | result | seconds |\n|---|---|---|\n{table}")}
+    failed = [r["notebook"] for r in results if not r["ok"]]
+    if failed:
+        raise dg.Failure(description=f"{len(failed)} notebook(s) failed: {', '.join(failed)}", metadata=metadata)
+    yield dg.Output(len(results), metadata=metadata)
+
+
+@dg.job(description="Run the 7 course notebooks and the lakehouse bridge notebook; any failing cell fails the run.")
+def notebook_smoke():
+    """One op: every notebook, in order."""
+    run_notebooks()
+
+
+notebook_smoke_schedule = dg.ScheduleDefinition(
+    name="notebook_smoke_schedule", job=notebook_smoke, cron_schedule="0 6 * * 0", execution_timezone="America/Chicago",
+    default_status=dg.DefaultScheduleStatus.RUNNING,
+    description="Sundays 06:00 Central, an hour after daily_lake, so the notebooks see a fresh lake.")
+
 defs = dg.Definitions(
     assets=[load_lake, gold],
-    jobs=[daily_lake, regenerate_lake],
-    schedules=[daily_schedule],
+    jobs=[daily_lake, regenerate_lake, notebook_smoke],
+    schedules=[daily_schedule, notebook_smoke_schedule],
     resources={"dbt": DbtCliResource(project_dir=dbt_project)},
 )

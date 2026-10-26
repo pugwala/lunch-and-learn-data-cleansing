@@ -80,7 +80,7 @@ def attach_lake_ro(con) -> None:
     lake_ro's password (LAKE_RO_PASSWORD) goes into a temporary default postgres secret, never the ATTACH string:
     DuckLake's connection errors print that string in full. The catalog session is tagged
     application_name=lakehouse-sql so it can be told apart from Cube's, which is also lake_ro.
-    USE only reaches the connection that runs it, so every new connection must call this (see lakehouse/sql.py)."""
+    USE only reaches the connection that runs it, so every new connection must call this (see lakehouse/sql_magic.py)."""
     if not catalog().startswith("ducklake:postgres:"):   # sandbox: a plain DuckDB file has no roles
         con.execute(f"ATTACH {_lit(catalog())} AS {LAKE} (READ_ONLY)")
         con.execute(f"USE {LAKE}")

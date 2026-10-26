@@ -205,6 +205,14 @@ else
   did "$(echo "$out" | grep -m1 '^Loaded run')"
 fi
 
+# Session 7's embedding model lives on the lake disk (HF_HOME) at a pinned revision, and the notebooks run offline.
+# Only this one command may download, so it turns HF_HUB_OFFLINE off for itself.
+if dc exec -T jupyter python lakehouse/scripts/stage_model.py --check >/dev/null 2>&1; then ok "embedding model staged"
+elif [ $CHECK = 1 ]; then bad "embedding model not staged (run bootstrap.sh without --check)"
+else model=$(dc exec -T -e HF_HUB_OFFLINE=0 jupyter python lakehouse/scripts/stage_model.py 2>&1) \
+       && did "$(echo "$model" | tail -1)" || bad "embedding model: $(echo "$model" | tail -1)"
+fi
+
 # Dashboards live in Superset's metadata database. dashboards.py creates or updates them through Superset's API,
 # so a fresh install gets them and a re-run changes nothing; --check only reports what's missing.
 if [ $CHECK = 1 ]; then dash=$(dc exec -T jupyter python lakehouse/superset/dashboards.py --check 2>&1)

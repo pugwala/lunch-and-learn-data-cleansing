@@ -2,7 +2,7 @@
 
     docker compose --profile core exec -T jupyter pytest -q lakehouse/acceptance/test_sql.py
 
-In any notebook, one line connects jupysql to the lake:   %load_ext lakehouse.sql
+In any notebook, one line connects jupysql to the lake:   %load_ext lakehouse.sql_magic
 then  %sql SELECT * FROM gold.trust_test  (or a %%sql cell) queries DuckLake directly. The lake is attached
 READ_ONLY as the lake_ro role. lake_ro's password comes from LAKE_RO_PASSWORD through a temporary DuckDB secret,
 never the ATTACH string, because DuckLake's connection errors print that string in full.
@@ -25,7 +25,7 @@ def shell():
     """A real IPython shell with the extension loaded, as a notebook kernel would have it."""
     from IPython.core.interactiveshell import InteractiveShell
     ip = InteractiveShell.instance()
-    ip.run_line_magic("load_ext", "lakehouse.sql")
+    ip.run_line_magic("load_ext", "lakehouse.sql_magic")
     yield ip
     InteractiveShell.clear_instance()
 
@@ -38,11 +38,14 @@ def sql(shell, query):
 # --- configuration ---------------------------------------------------------------------------------------------
 
 def test_jupyter_has_the_read_only_password_and_finds_the_extension():
-    """Compose gives Jupyter lake_ro's password, and notebooks in any folder can import lakehouse.sql."""
+    """Compose gives Jupyter lake_ro's password, and notebooks in any folder can import the extension, including
+    lakehouse/ itself, where a module named sql.py once hid jupysql's own `sql` package and recursed forever."""
     env = yaml.safe_load((LAKEHOUSE / "compose.yaml").read_text())["services"]["jupyter"]["environment"]
     assert "LAKE_RO_PASSWORD" in str(env.get("LAKE_RO_PASSWORD", ""))
-    r = subprocess.run(["python", "-c", "import lakehouse.sql"], cwd="/", capture_output=True, text=True)
-    assert r.returncode == 0, r.stderr
+    code = "import lakehouse.sql_magic, sql; assert 'site-packages' in sql.__file__, sql.__file__"
+    for folder in ("/", str(LAKEHOUSE)):
+        r = subprocess.run(["python", "-c", code], cwd=folder, capture_output=True, text=True)
+        assert r.returncode == 0, f"from {folder}: {r.stderr[-300:]}"
 
 
 # --- answers ---------------------------------------------------------------------------------------------------

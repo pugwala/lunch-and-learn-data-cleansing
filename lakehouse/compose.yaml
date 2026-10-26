@@ -10,7 +10,11 @@ x-lake-env: &lake-env
   LAKE_CATALOG: "ducklake:postgres:dbname=ducklake host=catalog-pg user=lake_rw"
   LAKE_DATA_PATH: /lake/data/
   PGPASSWORD: ${LAKE_RW_PASSWORD:?set LAKE_RW_PASSWORD in .env}
+  LAKE_RO_PASSWORD: ${LAKE_RO_PASSWORD:?set LAKE_RO_PASSWORD in .env}   # %load_ext lakehouse.sql_magic reads as lake_ro
   DBT_TARGET: lake
+  HF_HOME: /lake/models/huggingface   # session 7's model, staged at a pinned revision by bootstrap.sh
+  HF_HUB_OFFLINE: "1"                # notebooks never download from Hugging Face
+  PYTHONPATH: /home/jovyan/course     # a notebook in any folder can import lakehouse (and lnl)
 
 x-dagster: &dagster
   profiles: [core]
@@ -68,8 +72,6 @@ services:
       JUPYTER_TOKEN: ${JUPYTER_TOKEN:?set JUPYTER_TOKEN in .env}
       CUBE_SQL_PASSWORD: ${CUBE_SQL_PASSWORD:?set CUBE_SQL_PASSWORD in .env}   # for queries and acceptance tests via Cube
       SUPERSET_ADMIN_PASSWORD: ${SUPERSET_ADMIN_PASSWORD:?set SUPERSET_ADMIN_PASSWORD in .env}   # for the Superset acceptance test
-      LAKE_RO_PASSWORD: ${LAKE_RO_PASSWORD:?set LAKE_RO_PASSWORD in .env}   # %load_ext lakehouse.sql reads the lake as lake_ro
-      PYTHONPATH: /home/jovyan/course   # so a notebook in any folder can import lakehouse (and lnl)
     command: ["start-notebook.py", "--ServerApp.base_url=/jupyter/"]   # served at https://<tailscale name>/jupyter/
     volumes:
       - ..:/home/jovyan/course

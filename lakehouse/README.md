@@ -16,12 +16,14 @@ every number matches the Facilitator Guide. dbt builds gold, and Dagster runs it
 | `postgres/init/` | `01-roles.sh`: `ducklake`, `superset`, `dagster` databases and the `lake_rw` / `lake_ro` roles. `02-dagster.sh` and `03-superset.sh`: the Dagster and Superset roles (safe to re-run) |
 | `jupyter/Dockerfile` | `pyspark-notebook` + course requirements + DuckDB 1.5.6, dbt-duckdb, Dagster; extensions pre-installed. One image for every Python process, so DuckDB versions never drift |
 | `lake.py` | Helpers: `lake_connect()`, `lake_ro_connect()`, `run()`, `to_lake_frame()`, `exceptions_table()`, `trust_test_table()` |
-| `sql.py` | `%load_ext lakehouse.sql`: jupysql's `%sql` on the lake, read-only as `lake_ro` |
+| `sql_magic.py` | `%load_ext lakehouse.sql_magic`: jupysql's `%sql` on the lake, read-only as `lake_ro` |
 | `load_lake.py` | Generates the data if needed and lands reference, bronze and silver as one DuckLake snapshot |
 | `tests/test_parity.py` | 19 checks that the lake matches the Facilitator Guide's numbers |
 | `dbt/` | Gold models and tests (dbt-duckdb, attaches DuckLake) |
 | `orchestration/` | Dagster definitions and instance config |
 | `scripts/set-dagster-ui-password.sh` | Puts a login in front of the Dagster UI (it has none of its own) |
+| `scripts/stage_model.py` | Stages session 7's embedding model on the lake disk at a pinned revision (bootstrap.sh runs it) |
+| `08_from_lake.ipynb` | Session 8 for the lakehouse: the Trust Test answered in SQL over silver, checked against `gold.trust_test` |
 
 ## Tables
 
@@ -50,7 +52,10 @@ load_lake ──► parity check (blocking) ──► dbt build (gold models + t
 - **dbt test at `warn` severity fails** (reference lookups, the 95% quality floor) → recorded, the run succeeds.
   The floor fires today on `disciplinary_points` completeness (94.15%): blanks plus `N/A`.
 
-Jobs: `daily_lake` (scheduled 05:00 Central, on by default) and `regenerate_lake` (rebuilds the CSV first).
+Jobs: `daily_lake` (scheduled 05:00 Central, on by default), `regenerate_lake` (rebuilds the CSV first) and
+`notebook_smoke` (Sundays 06:00 Central, on by default): it runs the seven course notebooks as delivered plus
+`08_from_lake.ipynb` with papermill, saves the executed copies in `/lake/notebook-runs/<date>_<run>/`, and fails
+if any cell errors. It's an op job rather than an asset, so `daily_lake`'s all-asset selection never includes it.
 One run at a time, so DuckLake writers never race.
 
 ## Setup, upgrades and health checks: `scripts/bootstrap.sh`
@@ -115,7 +120,7 @@ otherwise load every secret in it), so give a container a setting through `compo
 From a notebook, the quickest way is SQL. One line connects jupysql to the lake, read-only, as `lake_ro`:
 
 ```
-%load_ext lakehouse.sql
+%load_ext lakehouse.sql_magic
 ```
 
 Then `%sql` for one line, or a cell that starts with `%%sql`:
@@ -138,7 +143,15 @@ con = lake.lake_ro_connect()
 con.sql("SELECT dimension, round(100 * sum(passed) / sum(checked), 2) AS pct FROM gold.dq_scorecard GROUP BY 1").df()
 ```
 
-Compose sets `PYTHONPATH=/home/jovyan/course` for Jupyter, so `lakehouse` imports from a notebook in any folder.
+Compose sets `PYTHONPATH=/home/jovyan/course` for Jupyter and Dagster, so `lakehouse` imports from a notebook in
+any folder. `08_from_lake.ipynb` is a worked example: the eight Trust Test questions in SQL over silver.
+
+### The course notebooks on the VM
+
+All seven run unmodified in the lakehouse's Jupyter. Session 7's embedding model (`all-MiniLM-L6-v2`, the one
+`lnl/config.py` names) is staged once on the lake disk by `bootstrap.sh` at a pinned revision, and compose sets
+`HF_HOME=/lake/models/huggingface` and `HF_HUB_OFFLINE=1`, so the notebooks never download anything and the
+model survives image rebuilds. The course's own setting is unchanged.
 
 dbt by hand, inside the Jupyter container:
 
@@ -190,15 +203,17 @@ single-file bind mount keeps showing the old one, which is how a Caddyfile chang
 | --- | --- |
 | Loader, 19 parity checks, DuckLake on Postgres, image build, Postgres roles | On the VM |
 | Dagster webserver and daemon with Postgres storage, their healthchecks, Caddy basic auth | On the VM |
-| `scripts/bootstrap.sh`: 22 bats tests (`bats lakehouse/tests/bootstrap.bats`, needs `apt install bats`), each shown to fail when the behaviour it covers is broken | On the VM, with stub commands; never touches the live stack |
+| `scripts/bootstrap.sh`: 25 bats tests (`bats lakehouse/tests/bootstrap.bats`, needs `apt install bats`), each shown to fail when the behaviour it covers is broken | On the VM, with stub commands; never touches the live stack |
 | dbt gold models and their tests (25 today), Dagster job (both jobs, plus the blocking check stopping gold) | Sandbox, against a plain DuckDB file |
 | Cube v1.8.3 over gold, read-only as `lake_ro`: 6 acceptance tests (`pytest lakehouse/acceptance/test_cube.py`); the restricted-column check was shown to fail on a deliberate leak | On the VM |
 | Superset 6.1.0 under `/superset`, Cube as its only database, the Trust Test dashboard: 6 acceptance tests (`pytest lakehouse/acceptance/test_superset.py`); the only-Cube check was shown to fail with a decoy database added | On the VM |
 | dbt on DuckLake: the first `daily_lake` run (load 7.5 s, gold 5.5 s, one expected `dq_score_floor` warning), checked by 14 acceptance tests: `docker compose --profile core exec -T jupyter pytest -q lakehouse/acceptance` | On the VM |
 | Trust Test from loader to dashboard (`silver.trust_test` → `gold.trust_test` → Cube → Superset): 1 parity check, 4 acceptance tests and 3 bats tests, each shown failing before the code existed | On the VM |
-| `%load_ext lakehouse.sql` (jupysql, read-only as `lake_ro`): 6 acceptance tests (`pytest lakehouse/acceptance/test_sql.py`), plus a real notebook kernel run from outside the repo; the password and read-only checks were shown to fail on deliberate breaks | On the VM |
+| `%load_ext lakehouse.sql_magic` (jupysql, read-only as `lake_ro`): 6 acceptance tests (`pytest lakehouse/acceptance/test_sql.py`), plus a real notebook kernel run from outside the repo; the password and read-only checks were shown to fail on deliberate breaks | On the VM |
+| Phase 3 notebooks: model staged offline, `08_from_lake.ipynb`, the `notebook_smoke` job: 7 acceptance tests (`pytest lakehouse/acceptance/test_notebooks.py`) and 3 bats tests, each seen failing first; the first smoke run (all 8 notebooks, 110 s) passed with session 5's 22 of 22 reconciliation and session 6's F1 0.898 | On the VM |
 
 ## Next phases
 
-Superset and Cube (semantic layer), then OpenMetadata (ontology), then the monitoring profile. See the plan
+Phases 0 to 3 are done and Phase 4 lacks only the MCP tools. Then OpenMetadata (ontology), then the monitoring
+profile. See the plan
 document for the order and the reasoning.

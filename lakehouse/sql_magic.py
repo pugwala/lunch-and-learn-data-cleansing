@@ -2,12 +2,13 @@
 
 In any notebook in the lakehouse's Jupyter:
 
-    %load_ext lakehouse.sql
+    %load_ext lakehouse.sql_magic
     %sql SELECT question_id, as_loaded, cleansed FROM gold.trust_test ORDER BY question_id
 
 or a whole cell starting with %%sql. Schemas are bronze, silver, gold, ref and ops (the lake is selected, so no
 "lake." prefix is needed). Nothing can be written: DuckLake is attached READ_ONLY, and lake_ro has read grants
-only. Course notebooks don't load this; it is opt-in.
+only. Course notebooks don't load this; it is opt-in. (Not named sql.py: in the lakehouse/ folder that
+name would hide jupysql's own `sql` package, and loading it would recurse forever.)
 """
 from sqlalchemy import create_engine, event
 

@@ -14,7 +14,7 @@ setup() {
   make_stubs
   export PATH="$T/bin:$PATH" FAKE_LOG=$T/calls.log
   export FAKE_MOUNT_SRC=/dev/fakelake FAKE_LAKE_DEV='' FAKE_MOUNTED_AT='' FAKE_BUILD_EXIT=0 FAKE_HAVE_DATA=yes
-  export FAKE_CURL_DOWN="" FAKE_DASH_EXIT=0
+  export FAKE_CURL_DOWN="" FAKE_DASH_EXIT=0 FAKE_MODEL_EXIT=0
   : > "$FAKE_LOG"
   cat > "$ENV" <<EOF
 POSTGRES_PASSWORD=pg-secret
@@ -44,6 +44,8 @@ case "$*" in
   *" ps --format {{.Service}} {{.Status}}"*) for s in catalog-pg jupyter dagster-webserver dagster-daemon cube superset caddy; do
                                                echo "$s Up 1 minute (healthy)"; done ;;
   *" ps --format {{.Status}} "*)             echo "Up 1 minute (healthy)" ;;
+  *"stage_model.py --check"*)                 exit "$FAKE_MODEL_EXIT" ;;
+  *"stage_model.py"*)                         echo "staged sentence-transformers/all-MiniLM-L6-v2 at 1110a24"; exit 0 ;;
   *"superset/dashboards.py"*)                 echo "Trust Test dashboard: up to date"; exit "$FAKE_DASH_EXIT" ;;
   *"exec -T jupyter python"*)                cat >/dev/null; echo "$FAKE_HAVE_DATA" ;;
   *pytest*)                                  echo "19 passed in 0.10s" ;;
@@ -282,4 +284,28 @@ set_env()       { sed -i "/^$1=/d" "$ENV"; [ $# = 1 ] || echo "$1=$2" >> "$ENV";
   run_bootstrap
   [ "$status" -eq 1 ]
   [[ $output == *"FAIL"*"dashboards"* ]]
+}
+
+# --- embedding model -------------------------------------------------------------------------------------------
+
+@test "stages the embedding model when it isn't on the lake disk yet" {
+  FAKE_MODEL_EXIT=1
+  run_bootstrap
+  [ "$status" -eq 0 ]
+  called "HF_HUB_OFFLINE=0 jupyter python lakehouse/scripts/stage_model.py$"
+}
+
+@test "leaves a staged embedding model alone" {
+  run_bootstrap
+  [ "$status" -eq 0 ]
+  called "stage_model.py --check"
+  not_called "stage_model.py$"
+}
+
+@test "--check reports a missing embedding model and downloads nothing" {
+  FAKE_MODEL_EXIT=1
+  run_bootstrap --check
+  [ "$status" -eq 1 ]
+  [[ $output == *"FAIL"*"embedding model"* ]]
+  not_called "stage_model.py$"
 }
