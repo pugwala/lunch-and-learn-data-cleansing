@@ -55,11 +55,15 @@ def test_offers_exactly_query_metric_and_define_term():
     assert {t["name"] for t in r.json()["result"]["tools"]} == {"query_metric", "define_term"}
 
 
-def test_server_holds_no_lake_credentials():
-    """The MCP container gets the MCP token and Cube's API secret only: Cube is its one way to the data."""
-    env = yaml.safe_load((LAKEHOUSE / "compose.yaml").read_text())["services"]["mcp"]["environment"]
-    assert {"MCP_TOKEN", "CUBEJS_API_SECRET"} <= set(env)
-    assert not any(k in env for k in ("PGPASSWORD", "LAKE_RO_PASSWORD", "LAKE_CATALOG", "LAKE_RW_PASSWORD"))
+def test_server_holds_no_lake_or_admin_credentials():
+    """The MCP container gets its token, Cube's API secret and the read-only mcp-reader's password for
+    OpenMetadata: no lake credentials, no OpenMetadata admin, and no glossary file (define_term reads OpenMetadata)."""
+    svc = yaml.safe_load((LAKEHOUSE / "compose.yaml").read_text())["services"]["mcp"]
+    env = svc["environment"]
+    assert {"MCP_TOKEN", "CUBEJS_API_SECRET", "OM_MCP_PASSWORD"} <= set(env)
+    assert not any(k in env for k in ("PGPASSWORD", "LAKE_RO_PASSWORD", "LAKE_CATALOG", "LAKE_RW_PASSWORD",
+                                      "OM_ADMIN_PASSWORD"))
+    assert not any("glossary" in str(v) for v in svc.get("volumes", []))
 
 
 # --- query_metric ----------------------------------------------------------------------------------------------
@@ -90,10 +94,10 @@ def test_unknown_metric_lists_the_real_ones():
     assert is_error and "record_count" in text
 
 
-def test_restricted_columns_are_out_of_reach():
-    """Race isn't in Cube's model (masking comes in Phase 5), so query_metric can't group by it."""
-    is_error, _, _ = call("query_metric", metric="record_count", group_by=["race"])
-    assert is_error
+def test_restricted_columns_come_back_masked():
+    """The MCP server's token has no groups, so a restricted column comes back masked: no race codes leak."""
+    is_error, result, _ = call("query_metric", metric="record_count", group_by=["race_code"])
+    assert not is_error and result["rows"] == [{"race_code": "***", "record_count": 100_000}]
 
 
 # --- define_term -----------------------------------------------------------------------------------------------

@@ -23,9 +23,9 @@ done
 
 SECRETS=(POSTGRES_PASSWORD LAKE_RW_PASSWORD LAKE_RO_PASSWORD DAGSTER_PG_PASSWORD JUPYTER_TOKEN
          CUBEJS_API_SECRET CUBE_SQL_PASSWORD SUPERSET_SECRET_KEY SUPERSET_PG_PASSWORD SUPERSET_ADMIN_PASSWORD
-         MCP_TOKEN)
-SERVICES=(catalog-pg jupyter dagster-webserver dagster-daemon cube superset mcp caddy)   # never a bare `up`: it also runs load-lake
-ROLE_SCRIPTS=(02-dagster.sh 03-superset.sh)   # app roles on catalog-pg; postgres/init/ only runs on an empty volume
+         MCP_TOKEN OM_DB_PASSWORD OM_ADMIN_PASSWORD OM_FERNET_KEY OM_MCP_PASSWORD)
+SERVICES=(catalog-pg jupyter dagster-webserver dagster-daemon cube superset mcp opensearch openmetadata-server caddy)   # never a bare `up`: it also runs load-lake
+ROLE_SCRIPTS=(02-dagster.sh 03-superset.sh 04-openmetadata.sh)   # app roles on catalog-pg; postgres/init/ only runs on an empty volume
 CONTAINER_UID=1000 CONTAINER_GID=100                                    # jovyan:users in the image
 FAILED=()
 
@@ -75,7 +75,7 @@ Formatting erases a disk, so this script never does it. Once you're sure which d
 Then run this script again."
 fi
 
-for d in landing data notebook-runs catalog-backups models dagster; do
+for d in landing data notebook-runs catalog-backups models dagster openmetadata; do
   p="$LAKE_ROOT/$d"
   [ -d "$p" ] || { [ $CHECK = 1 ] && { bad "$p is missing"; continue; }; sudo mkdir -p "$p"; did "created $p"; }
   [ $d = catalog-backups ] && continue                       # host-side pg_dump target, stays root-owned
@@ -124,9 +124,30 @@ for k in "${SECRETS[@]}"; do
   v=$(env_val "$k")
   if [ -n "$v" ] && [ "$v" != CHANGE_ME ]; then ok "$k is set"; continue; fi
   [ $CHECK = 1 ] && { bad "$k is not set"; continue; }
-  set_env_key "$k" "$(openssl rand -hex 24)"
+  case $k in   # most secrets are 48 hex characters; two need their own shape
+    OM_FERNET_KEY)     val=$(openssl rand -base64 32 | tr '+/' '-_') ;;   # Fernet: 32 random bytes, base64url
+    OM_ADMIN_PASSWORD|OM_MCP_PASSWORD) val="Lk$(openssl rand -hex 24)!" ;;   # meets OpenMetadata's password policy
+    *)                 val=$(openssl rand -hex 24) ;;
+  esac
+  set_env_key "$k" "$val"
   did "generated $k"
 done
+
+# OpenMetadata signs its login tokens with an RSA key. The image ships default keys anyone can copy, so generate our
+# own once, on the lake disk (never in the repo), readable only by the container user. sudo test: the folder is 700.
+OM_KEYS="$LAKE_ROOT/openmetadata/keys"
+if sudo test -s "$OM_KEYS/private_key.der" && sudo test -s "$OM_KEYS/public_key.der"; then ok "OpenMetadata signing keys present"
+elif [ $CHECK = 1 ]; then bad "OpenMetadata signing keys missing in $OM_KEYS"
+else
+  tmp=$(mktemp -d)
+  openssl genrsa -out "$tmp/key.pem" 2048 2>/dev/null
+  openssl pkcs8 -topk8 -inform PEM -outform DER -in "$tmp/key.pem" -out "$tmp/private_key.der" -nocrypt
+  openssl rsa -in "$tmp/key.pem" -pubout -outform DER -out "$tmp/public_key.der" 2>/dev/null
+  sudo mkdir -p "$OM_KEYS" && sudo cp "$tmp/private_key.der" "$tmp/public_key.der" "$OM_KEYS/"
+  rm -rf "$tmp"
+  sudo chown -R $CONTAINER_UID:$CONTAINER_GID "$OM_KEYS" && sudo chmod 700 "$OM_KEYS" && sudo chmod 600 "$OM_KEYS/private_key.der"
+  did "generated OpenMetadata signing keys in $OM_KEYS"
+fi
 
 # This VM's Tailscale name. Caddy serves the sites there with a real certificate from Tailscale. Not a secret.
 TS_HOST=$(env_val LAKE_TS_HOST)
@@ -214,6 +235,27 @@ else model=$(dc exec -T -e HF_HUB_OFFLINE=0 jupyter python lakehouse/scripts/sta
        && did "$(echo "$model" | tail -1)" || bad "embedding model: $(echo "$model" | tail -1)"
 fi
 
+# OpenMetadata starts with a well-known admin password; setup_admin.py replaces it with OM_ADMIN_PASSWORD.
+if [ $CHECK = 1 ]; then om=$(dc exec -T jupyter python lakehouse/openmetadata/setup_admin.py --check 2>&1)
+else om=$(dc exec -T jupyter python lakehouse/openmetadata/setup_admin.py 2>&1); fi \
+  && ok "$(echo "$om" | tail -1)" || bad "$(echo "$om" | tail -1)"
+
+# om_sync.py loads the glossary, the sensitivity tags and every lake table into OpenMetadata; --check only compares.
+if [ $CHECK = 1 ]; then sync=$(dc exec -T jupyter python lakehouse/openmetadata/om_sync.py --check 2>&1)
+else sync=$(dc exec -T jupyter python lakehouse/openmetadata/om_sync.py 2>&1); fi \
+  && ok "$(echo "$sync" | tail -1)" || bad "$(echo "$sync" | tail -1)"
+
+# sync_masks.py makes Cube mask exactly the columns OpenMetadata tags Sensitivity.Restricted, a steward's tag from
+# the UI included. It edits cube/model/offender_records.yml, so it runs as the repo's owner (jupyter's own user
+# can't write the repo) in the users group (the only way into /home/jovyan, where the repo is mounted), and Cube
+# rereads its model only on restart. Review that change with git diff, then commit.
+if [ $CHECK = 1 ]; then masks=$(dc exec -T jupyter python lakehouse/cube/sync_masks.py --check 2>&1)
+else masks=$(dc exec -T -u "$(id -u):users" jupyter python lakehouse/cube/sync_masks.py 2>&1); fi \
+  && ok "$(echo "$masks" | tail -1)" || bad "$(echo "$masks" | tail -1)"
+if [[ $masks == "Cube masks: updated"* ]]; then
+  dc restart cube >/dev/null 2>&1 && did "restarted cube with the new masks" || bad "cube didn't restart"
+fi
+
 # Dashboards live in Superset's metadata database. dashboards.py creates or updates them through Superset's API,
 # so a fresh install gets them and a re-run changes nothing; --check only reports what's missing.
 if [ $CHECK = 1 ]; then dash=$(dc exec -T jupyter python lakehouse/superset/dashboards.py --check 2>&1)
@@ -226,7 +268,7 @@ res=$(dc exec -T jupyter pytest -q lakehouse/tests 2>&1 | tail -1)
 [[ $res == *passed* && $res != *failed* ]] && ok "parity tests: $res" || bad "parity tests: $res"
 
 # The Tailscale name has a real certificate, so no -k here: a self-signed or wrong certificate fails the check.
-for pair in "jupyter:302" "dagster:401" "superset:302" "mcp:401"; do   # 302 = a login redirect, 401 = basic auth or no MCP token
+for pair in "jupyter:302" "dagster:401" "superset:302" "mcp:401" "openmetadata:200"; do   # 302 = a login redirect, 401 = basic auth or no MCP token
   url="https://$TS_HOST/${pair%%:*}/" want=${pair##*:}
   got=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 --resolve "$TS_HOST:443:127.0.0.1" "$url" || true); got=${got:-000}   # curl prints 000 itself when nothing answers
   [ "$got" = "$want" ] && ok "$url answers $got (trusted certificate)" || bad "$url answers $got, expected $want"
@@ -234,7 +276,7 @@ done
 
 echo
 if [ ${#FAILED[@]} = 0 ]; then
-  printf '\033[32mAll checks passed.\033[0m Open https://%s/jupyter/, https://%s/dagster/ and https://%s/superset/ (from any device on your tailnet).\n' "$TS_HOST" "$TS_HOST" "$TS_HOST"
+  printf '\033[32mAll checks passed.\033[0m Open https://%s/jupyter/, https://%s/dagster/, https://%s/superset/ and https://%s/openmetadata/ (from any device on your tailnet).\n' "$TS_HOST" "$TS_HOST" "$TS_HOST" "$TS_HOST"
 else
   printf '\033[31m%d check(s) failed:\033[0m\n' ${#FAILED[@]}; printf '  - %s\n' "${FAILED[@]}"; exit 1
 fi

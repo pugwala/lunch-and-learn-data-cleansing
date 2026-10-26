@@ -1,5 +1,8 @@
 version: 2
 
+# meta.sensitivity (restricted or personal) is the source of truth for sensitivity: om_sync.py tags these
+# columns in OpenMetadata, and Cube masks the restricted ones it serves.
+
 sources:
   - name: silver
     database: lake
@@ -8,6 +11,41 @@ sources:
     tables:
       - name: hero_offenders
         description: One row per offender record, typed and crosswalked. offender_number is the BIGINT record key.
+        columns:
+          - name: race
+            meta: {sensitivity: restricted}
+          - name: religion
+            meta: {sensitivity: restricted}
+          - name: stg_affiliation
+            meta: {sensitivity: restricted}
+          - name: race_code
+            meta: {sensitivity: restricted}
+          - name: race_omb
+            meta: {sensitivity: restricted}
+          - name: religion_group
+            meta: {sensitivity: restricted}
+          - name: religion_family
+            meta: {sensitivity: restricted}
+          - name: stg_group
+            meta: {sensitivity: restricted}
+          - name: stg_status
+            meta: {sensitivity: restricted}
+          - name: last_name
+            meta: {sensitivity: personal}
+          - name: first_name
+            meta: {sensitivity: personal}
+          - name: alias
+            meta: {sensitivity: personal}
+          - name: date_of_birth
+            meta: {sensitivity: personal}
+          - name: conduct_notes
+            meta: {sensitivity: personal}
+          - name: last_name_std
+            meta: {sensitivity: personal}
+          - name: first_name_std
+            meta: {sensitivity: personal}
+          - name: alias_std
+            meta: {sensitivity: personal}
       - name: hero_offenders_exceptions
         description: One row per flagged value. Records are flagged, never dropped.
       - name: conduct_notes_answer_key
@@ -20,6 +58,23 @@ sources:
     tables:
       - name: hero_offenders_raw
         description: Generator output as written, every column VARCHAR.
+        columns:
+          - name: race
+            meta: {sensitivity: restricted}
+          - name: religion
+            meta: {sensitivity: restricted}
+          - name: stg_affiliation
+            meta: {sensitivity: restricted}
+          - name: last_name
+            meta: {sensitivity: personal}
+          - name: first_name
+            meta: {sensitivity: personal}
+          - name: alias
+            meta: {sensitivity: personal}
+          - name: date_of_birth
+            meta: {sensitivity: personal}
+          - name: conduct_notes
+            meta: {sensitivity: personal}
 
   - name: ref
     database: lake

@@ -1,6 +1,6 @@
-# Offender records from gold, for reporting: keys, codes and measures only. Gold already leaves out names, aliases,
-# birth dates and conduct notes. The columns dbt tags restricted (race, religion, STG) are also left out here until
-# Phase 5 adds masking by role; acceptance/test_cube.py fails if one appears.
+# Offender records from gold, for reporting: keys, codes and measures. Gold already leaves out names, aliases,
+# birth dates and conduct notes. The columns dbt tags restricted (race, religion, STG) are here but masked (***)
+# for every group except restricted_reader; acceptance/test_cube.py checks the masked list equals the dbt tags.
 cubes:
   - name: offender_records
     sql_table: lake.gold.fct_offender_record
@@ -41,6 +41,36 @@ cubes:
       - name: gender
         sql: gender
         type: string
+      - name: race_code
+        sql: race_code
+        type: string
+        mask:
+          sql: "'***'"   # a SQL literal: Cube's YAML compiler reads a bare string as a template and gets null
+      - name: race_omb
+        sql: race_omb
+        type: string
+        mask:
+          sql: "'***'"   # a SQL literal: Cube's YAML compiler reads a bare string as a template and gets null
+      - name: religion_group
+        sql: religion_group
+        type: string
+        mask:
+          sql: "'***'"   # a SQL literal: Cube's YAML compiler reads a bare string as a template and gets null
+      - name: religion_family
+        sql: religion_family
+        type: string
+        mask:
+          sql: "'***'"   # a SQL literal: Cube's YAML compiler reads a bare string as a template and gets null
+      - name: stg_group
+        sql: stg_group
+        type: string
+        mask:
+          sql: "'***'"   # a SQL literal: Cube's YAML compiler reads a bare string as a template and gets null
+      - name: stg_status
+        sql: stg_status
+        type: string
+        mask:
+          sql: "'***'"   # a SQL literal: Cube's YAML compiler reads a bare string as a template and gets null
       - name: sentence_date
         sql: sentence_date
         type: time
@@ -76,6 +106,18 @@ cubes:
       - name: avg_disciplinary_points
         sql: disciplinary_points
         type: avg
+
+    # Every group: real values for everything but the restricted columns, which come back masked.
+    # restricted_reader (a token or SQL user whose groups include it) sees them for real.
+    access_policy:
+      - group: "*"
+        member_level:
+          excludes: [race_code, race_omb, religion_group, religion_family, stg_group, stg_status]
+        member_masking:
+          includes: [race_code, race_omb, religion_group, religion_family, stg_group, stg_status]
+      - group: restricted_reader
+        member_level:
+          includes: "*"
 
   - name: units
     sql_table: lake.gold.dim_unit

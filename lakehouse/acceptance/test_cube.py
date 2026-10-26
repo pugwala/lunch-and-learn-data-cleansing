@@ -4,14 +4,18 @@
 
 Cube reads DuckLake read-only, as the lake_ro role, with the DuckDB 1.5.5 bundled in Cube v1.8.3 (a read-only
 exception to "DuckDB 1.5.6 everywhere"). Its SQL API speaks the Postgres wire protocol at cube:15432, which is how
-Superset and other tools will query it. Until Phase 5 adds masking by role, Cube exposes no column that dbt tags
-as restricted, and never the personal fields gold already leaves out.
+Superset and other tools will query it. Columns dbt tags restricted are in the model but masked (***) for everyone
+except the restricted_reader group (Phase 5); the personal fields gold leaves out never appear.
 """
 import os
+import time
 from pathlib import Path
+
+import jwt
 
 import psycopg2
 import pytest
+import requests
 import yaml
 
 from test_daily_run import EXPECTED_DIMENSIONS, PERSONAL_COLUMNS, TRUST_TEST
@@ -85,9 +89,55 @@ def test_cube_serves_the_trust_test(cube):
 
 # --- governance ------------------------------------------------------------------------------------------------
 
-def test_cube_exposes_no_personal_or_restricted_columns(cube):
-    """Until masking exists (Phase 5), restricted and personal columns are not in Cube's model at all."""
+MASK = "***"
+CUBE_REST = os.environ.get("CUBE_REST", "http://cube:4000/cubejs-api/v1")
+
+
+def masked_members():
+    """The offender_records members every group gets masked: the "*" policy's member_masking includes."""
+    doc = yaml.safe_load((LAKEHOUSE / "cube" / "model" / "offender_records.yml").read_text())
+    cube_ = next(c for c in doc["cubes"] if c["name"] == "offender_records")
+    policy = next(p for p in cube_.get("access_policy", []) if p.get("group") == "*")
+    return set(policy["member_masking"]["includes"])
+
+
+def rest_load(groups, dimension):
+    """record_count by one dimension through Cube's REST API, with a token for the given groups."""
+    claims = {"exp": int(time.time()) + 300, **({"groups": groups} if groups is not None else {})}
+    token = jwt.encode(claims, os.environ["CUBEJS_API_SECRET"], algorithm="HS256")
+    r = requests.post(f"{CUBE_REST}/load", headers={"Authorization": token}, timeout=60,
+                      json={"query": {"measures": ["offender_records.record_count"],
+                                      "dimensions": [f"offender_records.{dimension}"]}})
+    r.raise_for_status()
+    return {row[f"offender_records.{dimension}"]: int(row["offender_records.record_count"]) for row in r.json()["data"]}
+
+
+def test_cube_exposes_no_personal_columns(cube):
+    """Names, aliases, birth dates and notes are never in Cube's model (gold leaves them out)."""
     cols = {c for (c,) in rows(cube, "SELECT column_name FROM information_schema.columns "
                                      "WHERE table_name = 'offender_records'")}
     assert cols, "Cube has no offender_records cube"
-    assert not cols & (PERSONAL_COLUMNS | restricted_columns())
+    assert not cols & PERSONAL_COLUMNS
+
+
+def test_masks_cover_the_restricted_columns():
+    """Cube masks at least the columns dbt tags restricted. OpenMetadata can restrict more (a steward's tag), and
+    test_masks.py checks the masks equal OpenMetadata's tags exactly."""
+    assert masked_members() >= restricted_columns()
+
+
+@pytest.mark.parametrize("column", sorted(restricted_columns()))
+def test_restricted_columns_are_masked_through_the_sql_api(cube, column):
+    """Through the SQL API (Superset's way in), a restricted column shows only its mask: one group, every record."""
+    assert rows(cube, f"SELECT {column}, MEASURE(record_count) FROM offender_records GROUP BY 1") == [(MASK, 100_000)]
+
+
+def test_a_plain_rest_token_sees_masks():
+    """A REST token without groups (the MCP server's kind) gets the mask too."""
+    assert rest_load(None, "race_code") == {MASK: 100_000}
+
+
+def test_restricted_reader_sees_real_values():
+    """A restricted_reader token gets the real race codes: several groups adding up to every record."""
+    got = rest_load(["restricted_reader"], "race_code")
+    assert MASK not in got and len(got) >= 5 and sum(got.values()) == 100_000

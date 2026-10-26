@@ -14,7 +14,8 @@ setup() {
   make_stubs
   export PATH="$T/bin:$PATH" FAKE_LOG=$T/calls.log
   export FAKE_MOUNT_SRC=/dev/fakelake FAKE_LAKE_DEV='' FAKE_MOUNTED_AT='' FAKE_BUILD_EXIT=0 FAKE_HAVE_DATA=yes
-  export FAKE_CURL_DOWN="" FAKE_DASH_EXIT=0 FAKE_MODEL_EXIT=0
+  export FAKE_CURL_DOWN="" FAKE_DASH_EXIT=0 FAKE_MODEL_EXIT=0 FAKE_MASKS_EXIT=0
+  export FAKE_MASKS_OUT="Cube masks: in step with OpenMetadata (6 restricted columns masked)"
   : > "$FAKE_LOG"
   cat > "$ENV" <<EOF
 POSTGRES_PASSWORD=pg-secret
@@ -28,6 +29,10 @@ SUPERSET_SECRET_KEY=superset-key
 SUPERSET_PG_PASSWORD=superset-pg-secret
 SUPERSET_ADMIN_PASSWORD=superset-admin-secret
 MCP_TOKEN=mcp-secret
+OM_DB_PASSWORD=om-db-secret
+OM_ADMIN_PASSWORD=om-admin-secret
+OM_FERNET_KEY=om-fernet-secret
+OM_MCP_PASSWORD=om-mcp-secret
 DAGSTER_UI_USER=admin
 DAGSTER_UI_HASH='\$2a\$14\$fakehash'
 LAKE_ROOT=$T/lake
@@ -42,11 +47,14 @@ make_stubs() {
 case "$*" in
   "compose version"|info)                    exit 0 ;;
   *" build "*)                               exit "$FAKE_BUILD_EXIT" ;;
-  *" ps --format {{.Service}} {{.Status}}"*) for s in catalog-pg jupyter dagster-webserver dagster-daemon cube superset mcp caddy; do
+  *" ps --format {{.Service}} {{.Status}}"*) for s in catalog-pg jupyter dagster-webserver dagster-daemon cube superset mcp opensearch openmetadata-server caddy; do
                                                echo "$s Up 1 minute (healthy)"; done ;;
   *" ps --format {{.Status}} "*)             echo "Up 1 minute (healthy)" ;;
   *"stage_model.py --check"*)                 exit "$FAKE_MODEL_EXIT" ;;
   *"stage_model.py"*)                         echo "staged sentence-transformers/all-MiniLM-L6-v2 at 1110a24"; exit 0 ;;
+  *"openmetadata/om_sync.py"*)               echo "OpenMetadata sync: in step with the repo and lake"; exit 0 ;;
+  *"openmetadata/setup_admin.py"*)           echo "OpenMetadata admin: password set"; exit 0 ;;
+  *"cube/sync_masks.py"*)                    echo "$FAKE_MASKS_OUT"; exit "$FAKE_MASKS_EXIT" ;;
   *"superset/dashboards.py"*)                 echo "Trust Test dashboard: up to date"; exit "$FAKE_DASH_EXIT" ;;
   *"exec -T jupyter python"*)                cat >/dev/null; echo "$FAKE_HAVE_DATA" ;;
   *pytest*)                                  echo "19 passed in 0.10s" ;;
@@ -70,7 +78,7 @@ EOF
   stub curl <<'EOF'
 [ -n "$FAKE_CURL_DOWN" ] && { printf 000; exit 7; }   # like real curl when nothing answers: prints 000 and fails
 case "$*" in
-  *example.invalid/jupyter/*) printf 302 ;; *example.invalid/dagster/*) printf 401 ;; *example.invalid/superset/*) printf 302 ;; *example.invalid/mcp*) printf 401 ;; *) printf 000 ;;
+  *example.invalid/jupyter/*) printf 302 ;; *example.invalid/dagster/*) printf 401 ;; *example.invalid/superset/*) printf 302 ;; *example.invalid/mcp*) printf 401 ;; *example.invalid/openmetadata/*) printf 200 ;; *) printf 000 ;;
 esac
 EOF
   stub tailscale <<'EOF'
@@ -191,6 +199,7 @@ set_env()       { sed -i "/^$1=/d" "$ENV"; [ $# = 1 ] || echo "$1=$2" >> "$ENV";
   called "https://lakehouse.example.invalid/dagster/"
   called "https://lakehouse.example.invalid/superset/"
   called "https://lakehouse.example.invalid/mcp"
+  called "https://lakehouse.example.invalid/openmetadata/"
   [ -z "$(grep 'example.invalid/' "$FAKE_LOG" | grep -E 'curl .*-[a-z]*k')" ]   # no -k: the certificate must be trusted
 }
 
@@ -205,6 +214,7 @@ set_env()       { sed -i "/^$1=/d" "$ENV"; [ $# = 1 ] || echo "$1=$2" >> "$ENV";
   [ "$status" -eq 0 ]
   closing=$(grep 'All checks passed' <<< "$output")   # only the closing line: the URL checks above mention them too
   [[ $closing == *"https://lakehouse.example.invalid/jupyter/"*"https://lakehouse.example.invalid/dagster/"* ]]
+  [[ $closing == *"https://lakehouse.example.invalid/openmetadata/"* ]]
 }
 
 @test "reports an unreachable site as answering 000, once" {
@@ -246,11 +256,11 @@ set_env()       { sed -i "/^$1=/d" "$ENV"; [ $# = 1 ] || echo "$1=$2" >> "$ENV";
   not_called " up "
 }
 
-@test "a healthy install passes, starting the eight services by name and not running the loader" {
+@test "a healthy install passes, starting the ten services by name and not running the loader" {
   run_bootstrap
   [ "$status" -eq 0 ]
   [[ $output == *"All checks passed"* ]]
-  called "up -d catalog-pg jupyter dagster-webserver dagster-daemon cube superset mcp caddy"
+  called "up -d catalog-pg jupyter dagster-webserver dagster-daemon cube superset mcp opensearch openmetadata-server caddy"
   not_called "run --rm load-lake"
 }
 
@@ -317,4 +327,80 @@ set_env()       { sed -i "/^$1=/d" "$ENV"; [ $# = 1 ] || echo "$1=$2" >> "$ENV";
   [ "$status" -eq 1 ]
   [[ $output == *"FAIL"*"embedding model"* ]]
   not_called "stage_model.py$"
+}
+
+# --- OpenMetadata ----------------------------------------------------------------------------------------------
+
+@test "generates the OpenMetadata secrets when an older .env lacks them, the Fernet key in its own format" {
+  set_env OM_DB_PASSWORD
+  set_env OM_ADMIN_PASSWORD
+  set_env OM_FERNET_KEY
+  set_env OM_MCP_PASSWORD
+  run_bootstrap
+  [ "$status" -eq 0 ]
+  grep -qE '^OM_DB_PASSWORD=[0-9a-f]{48}$' "$ENV"
+  grep -qE '^OM_ADMIN_PASSWORD=Lk[0-9a-f]{48}!$' "$ENV"   # upper, lower, digit and symbol, as OpenMetadata requires
+  grep -qE '^OM_FERNET_KEY=[A-Za-z0-9_-]{43}=$' "$ENV"   # 32 random bytes, base64url, as Fernet requires
+  grep -qE '^OM_MCP_PASSWORD=Lk[0-9a-f]{48}!$' "$ENV"
+}
+
+@test "generates OpenMetadata's own JWT signing keys once, outside the repo" {
+  run_bootstrap
+  [ "$status" -eq 0 ]
+  keys="$T/lake/openmetadata/keys"
+  [ -s "$keys/private_key.der" ] && [ -s "$keys/public_key.der" ]
+  before=$(sha256sum "$keys/private_key.der")
+  run_bootstrap
+  [ "$(sha256sum "$keys/private_key.der")" = "$before" ]
+}
+
+@test "creates the OpenMetadata role on catalog-pg" {
+  run_bootstrap
+  [ "$status" -eq 0 ]
+  called "04-openmetadata.sh"
+}
+
+@test "sets the OpenMetadata admin password, and only checks it with --check" {
+  run_bootstrap
+  called "exec -T jupyter python lakehouse/openmetadata/setup_admin.py$"
+  : > "$FAKE_LOG"
+  run_bootstrap --check
+  called "lakehouse/openmetadata/setup_admin.py --check"
+  not_called "setup_admin.py$"
+}
+
+@test "keeps OpenMetadata in step with the repo and lake, and only checks with --check" {
+  run_bootstrap
+  called "exec -T jupyter python lakehouse/openmetadata/om_sync.py$"
+  : > "$FAKE_LOG"
+  run_bootstrap --check
+  called "lakehouse/openmetadata/om_sync.py --check"
+  not_called "om_sync.py$"
+}
+
+@test "keeps Cube's masks in step with OpenMetadata's tags, as the repo's owner, and only checks with --check" {
+  run_bootstrap
+  [ "$status" -eq 0 ]
+  called "exec -T -u $(id -u):users jupyter python lakehouse/cube/sync_masks.py$"
+  not_called "restart cube"
+  : > "$FAKE_LOG"
+  run_bootstrap --check
+  called "lakehouse/cube/sync_masks.py --check"
+  not_called "sync_masks.py$"
+}
+
+@test "restarts cube when sync_masks changed the masks" {
+  FAKE_MASKS_OUT="Cube masks: updated (mask gender); restart cube to apply"
+  run_bootstrap
+  [ "$status" -eq 0 ]
+  called "restart cube"
+  [[ $output == *"mask gender"* ]]
+}
+
+@test "--check fails when Cube's masks are behind OpenMetadata" {
+  FAKE_MASKS_OUT="Cube masks: behind OpenMetadata (mask gender); run cube/sync_masks.py, then restart cube" FAKE_MASKS_EXIT=1
+  run_bootstrap --check
+  [ "$status" -ne 0 ]
+  [[ $output == *"behind OpenMetadata"* ]]
+  not_called "restart cube"
 }

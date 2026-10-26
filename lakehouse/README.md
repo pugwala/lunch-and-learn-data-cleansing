@@ -11,9 +11,9 @@ every number matches the Facilitator Guide. dbt builds gold, and Dagster runs it
 
 | Path | What it does |
 | --- | --- |
-| `compose.yaml` | `core` profile: Postgres catalog, Jupyter, Dagster (UI + daemon), a one-shot loader, Cube, Superset, the MCP server, Caddy |
+| `compose.yaml` | `core` profile: Postgres catalog, Jupyter, Dagster (UI + daemon), a one-shot loader, Cube, Superset, the MCP server, OpenSearch, OpenMetadata (with a one-shot `om-migrate`), Caddy |
 | `.env.example` | Every setting and secret; copy to `.env` |
-| `postgres/init/` | `01-roles.sh`: `ducklake`, `superset`, `dagster` databases and the `lake_rw` / `lake_ro` roles. `02-dagster.sh` and `03-superset.sh`: the Dagster and Superset roles (safe to re-run) |
+| `postgres/init/` | `01-roles.sh`: `ducklake`, `superset`, `dagster` databases and the `lake_rw` / `lake_ro` roles. `02-dagster.sh`, `03-superset.sh` and `04-openmetadata.sh`: the Dagster, Superset and OpenMetadata roles and databases (safe to re-run) |
 | `jupyter/Dockerfile` | `pyspark-notebook` + course requirements + DuckDB 1.5.6, dbt-duckdb, Dagster; extensions pre-installed. One image for every Python process, so DuckDB versions never drift |
 | `lake.py` | Helpers: `lake_connect()`, `lake_ro_connect()`, `run()`, `to_lake_frame()`, `exceptions_table()`, `trust_test_table()` |
 | `sql_magic.py` | `%load_ext lakehouse.sql_magic`: jupysql's `%sql` on the lake, read-only as `lake_ro` |
@@ -23,8 +23,10 @@ every number matches the Facilitator Guide. dbt builds gold, and Dagster runs it
 | `orchestration/` | Dagster definitions and instance config |
 | `scripts/set-dagster-ui-password.sh` | Puts a login in front of the Dagster UI (it has none of its own) |
 | `scripts/stage_model.py` | Stages session 7's embedding model on the lake disk at a pinned revision (bootstrap.sh runs it) |
-| `mcp/` | The MCP server (`server.py`, Dockerfile, pinned requirements): `query_metric` over Cube, `define_term` over the glossary |
-| `glossary/glossary.yml` | The glossary: 14 terms with definitions, synonyms, columns, metrics and typed relations; OpenMetadata loads it in Phase 5 |
+| `mcp/` | The MCP server (`server.py`, Dockerfile, pinned requirements): `query_metric` over Cube, `define_term` over OpenMetadata's glossary |
+| `openmetadata/` | `setup_admin.py` (replaces the default admin password, creates the read-only `mcp-reader`) and `om_sync.py` (pushes the glossary, the Sensitivity tags and every lake table into OpenMetadata) |
+| `cube/sync_masks.py` | Makes Cube mask exactly the columns OpenMetadata tags `Sensitivity.Restricted` |
+| `glossary/glossary.yml` | The glossary: 14 terms with definitions, synonyms, columns, metrics and typed relations; `om_sync.py` loads it into OpenMetadata |
 | `08_from_lake.ipynb` | Session 8 for the lakehouse: the Trust Test answered in SQL over silver, checked against `gold.trust_test` |
 
 ## Tables
@@ -87,10 +89,13 @@ What it does, in order:
 4. **Secrets.** Creates `.env` from `.env.example`, generates any secret still `CHANGE_ME`, never overwrites one that's
    set, stops on duplicate keys, asks for the Dagster UI login if it's missing, and keeps `.env` at mode 600.
 5. **Image and services.** Builds the image, starts Postgres, creates the `dagster` role (Postgres runs
-   `postgres/init/` only on an empty volume), starts the six long-running services by name, and reloads Caddy.
-6. **Lake data.** Runs the loader if silver or `ref.null_tokens` is missing.
-7. **Proof.** Waits for every health check, runs the 19 parity tests, and checks that both sites answer through Caddy,
-   on the Tailscale name with certificate checking on, so an untrusted certificate fails.
+   `postgres/init/` only on an empty volume), generates OpenMetadata's own JWT signing keys once (under
+   `/lake/openmetadata/keys`, never in the repo), starts the ten long-running services by name, and reloads Caddy.
+6. **Lake data and meaning.** Runs the loader if silver or `ref.null_tokens` is missing, stages session 7's model,
+   replaces OpenMetadata's default admin password, runs `om_sync.py`, then `cube/sync_masks.py` (restarting Cube if
+   the masks changed), and builds the Trust Test dashboard.
+7. **Proof.** Waits for every health check, runs the 19 parity tests, and checks that every site answers through
+   Caddy, on the Tailscale name with certificate checking on, so an untrusted certificate fails.
 
 **Preparing the data disk** is the one step left to you, because formatting erases a disk. Find it by size
 (`lsblk -o NAME,SIZE,FSTYPE,LABEL`), then use its stable name from `/dev/disk/by-id/`, never `sda`/`sdb`,
@@ -109,6 +114,9 @@ break containers' internet lookups. Turn on HTTPS certificates in the Tailscale 
 
 - `https://<LAKE_TS_HOST>/jupyter/`: Jupyter, token login
 - `https://<LAKE_TS_HOST>/dagster/`: Dagster, behind Caddy basic auth
+- `https://<LAKE_TS_HOST>/superset/`: Superset, its own login
+- `https://<LAKE_TS_HOST>/openmetadata/`: OpenMetadata, its own login
+- `https://<LAKE_TS_HOST>/mcp`: the MCP server, bearer token
 
 Any device on your tailnet can open them, at home or away, with no hosts entries and no browser warnings. This is
 the only name Caddy serves: the earlier `*.lake.home.arpa` LAN names were retired on 2026-10-25.
@@ -175,8 +183,12 @@ cur.execute("SELECT dimension, MEASURE(pass_rate) FROM dq_scorecard GROUP BY 1")
 cur.fetchall()
 ```
 
-Cubes: `offender_records` (joined to `units` and `offenses`) and `dq_scorecard`. Columns dbt tags restricted (race,
-religion, STG) are left out until Phase 5 adds masking by role, and the acceptance test fails if one appears.
+Cubes: `offender_records` (joined to `units` and `offenses`), `dq_scorecard` and `trust_test`. Names, aliases,
+birth dates and notes never reach Cube (gold leaves them out). The restricted columns (race, religion, STG) are in
+the model but **masked**: every query, SQL or REST, gets `***` for them, unless its token's `groups` include
+`restricted_reader` (`cube.js` maps `groups` to Cube's groups; `access_policy` in `model/offender_records.yml` does
+the rest). Which columns are restricted is decided in OpenMetadata, not here: see the tags-to-masks loop below. In
+the model, a mask must be SQL (`mask: {sql: "'***'"}`); Cube's YAML compiler turns a bare `"***"` into null.
 
 Cube is pinned at v1.8.3, which bundles DuckDB **1.5.5**: a deliberate, read-only exception to "1.5.6 everywhere".
 No Cube release ships 1.5.6 yet, and the 1.6 line's DuckDB is too old to read the DuckLake catalog. Drop the
@@ -206,9 +218,12 @@ An MCP server at `https://<LAKE_TS_HOST>/mcp` gives an agent two tools instead o
 - `query_metric(metric, group_by=[], limit=100)`: a Cube measure by name (`record_count`, `total_restitution`,
   `answers_changed`, ...), optionally grouped by dimensions (`custody_level`, `unit_name`, `offense_against`, ...).
   It goes through Cube's REST API, so it sees only Cube's model; an unknown name lists the real ones.
-- `define_term(term)`: a glossary term from `glossary/glossary.yml`, matched by name or synonym in any case.
+- `define_term(term)`: a glossary term from OpenMetadata, matched by name or synonym in any case, with its typed
+  relations in both directions. An edit made in OpenMetadata's UI shows up at once.
 
-Every request needs `Authorization: Bearer <MCP_TOKEN>` (from `.env`); the container holds no lake credentials.
+Every request needs `Authorization: Bearer <MCP_TOKEN>` (from `.env`). The container holds no lake credentials and
+no OpenMetadata admin: it reads as `mcp-reader` (role DataConsumer only), and its Cube token has no groups, so
+restricted columns come back masked.
 To connect Claude Code on a machine on the tailnet, without the token ever appearing on screen:
 
 ```bash
@@ -216,24 +231,52 @@ claude mcp add --transport http lakehouse https://<LAKE_TS_HOST>/mcp \
   --header "Authorization: Bearer $(ssh <vm> 'grep ^MCP_TOKEN= ~/lunch-and-learn-data-cleansing/lakehouse/.env | cut -d= -f2-')"
 ```
 
+### OpenMetadata: what the lake means, and what's restricted
+
+OpenMetadata 2.0.5 runs at `https://<LAKE_TS_HOST>/openmetadata/`, with OpenSearch 2.19.6 for search and its own
+`openmetadata_db` on catalog-pg. Log in as `admin@open-metadata.org` with `OM_ADMIN_PASSWORD` from `.env` (read it
+in your own SSH session). Nothing from the quickstart's published defaults survives: `setup_admin.py` replaces the
+admin password, `bootstrap.sh` generates the Fernet key and the JWT signing keys, and self-signup is off.
+
+OpenMetadata has no DuckLake connector, so `openmetadata/om_sync.py` pushes everything in, and a re-run changes
+nothing (`--check` only compares):
+
+- the **Lakehouse glossary** from `glossary/glossary.yml`, with synonyms, the columns and metrics each term maps to
+  (custom properties), and typed relations (`identifies`, `broader`, `partOf`, ...);
+- the **Sensitivity** classification: `Restricted` (race, religion, STG) and `Personal` (names, birth dates, notes);
+- every table in the lake (`lakehouse.lake.<schema>.<table>`), with dbt's descriptions, a Sensitivity tag on each
+  column dbt's `meta.sensitivity` marks (bronze and silver included), and glossary-term links.
+
+**The tags-to-masks loop.** dbt's tags are the floor, not the ceiling. A steward can tag another column
+`Sensitivity.Restricted` in OpenMetadata's UI, and `om_sync.py` keeps it (it only adds tags). `cube/sync_masks.py`
+then rewrites the `offender_records` access policy so Cube masks exactly the restricted columns it serves, adding
+or dropping a dimension's `mask:` to match. `bootstrap.sh` runs it and restarts Cube when the masks change. So:
+
+1. Tag a column Restricted in OpenMetadata.
+2. Run `scripts/bootstrap.sh` (or `docker compose --profile core exec -T -u "$(id -u):users" jupyter python
+   lakehouse/cube/sync_masks.py`, then `docker compose --profile core restart cube`).
+3. Review `git diff lakehouse/cube/model/` and commit it. `bootstrap.sh --check` fails while the model is behind.
+
 ## Test status
 
 | Piece | Where it has run |
 | --- | --- |
 | Loader, 19 parity checks, DuckLake on Postgres, image build, Postgres roles | On the VM |
 | Dagster webserver and daemon with Postgres storage, their healthchecks, Caddy basic auth | On the VM |
-| `scripts/bootstrap.sh`: 26 bats tests (`bats lakehouse/tests/bootstrap.bats`, needs `apt install bats`), each shown to fail when the behaviour it covers is broken | On the VM, with stub commands; never touches the live stack |
+| `scripts/bootstrap.sh`: 34 bats tests (`bats lakehouse/tests/bootstrap.bats`, needs `apt install bats`), each shown to fail when the behaviour it covers is broken | On the VM, with stub commands; never touches the live stack |
 | dbt gold models and their tests (25 today), Dagster job (both jobs, plus the blocking check stopping gold) | Sandbox, against a plain DuckDB file |
-| Cube v1.8.3 over gold, read-only as `lake_ro`: 6 acceptance tests (`pytest lakehouse/acceptance/test_cube.py`); the restricted-column check was shown to fail on a deliberate leak | On the VM |
+| Cube v1.8.3 over gold, read-only as `lake_ro`, restricted columns masked except for `restricted_reader`: 15 acceptance tests (`pytest lakehouse/acceptance/test_cube.py`); unmasking everyone made 8 of them fail | On the VM |
 | Superset 6.1.0 under `/superset`, Cube as its only database, the Trust Test dashboard: 6 acceptance tests (`pytest lakehouse/acceptance/test_superset.py`); the only-Cube check was shown to fail with a decoy database added | On the VM |
 | dbt on DuckLake: the first `daily_lake` run (load 7.5 s, gold 5.5 s, one expected `dq_score_floor` warning), checked by 14 acceptance tests: `docker compose --profile core exec -T jupyter pytest -q lakehouse/acceptance` | On the VM |
 | Trust Test from loader to dashboard (`silver.trust_test` → `gold.trust_test` → Cube → Superset): 1 parity check, 4 acceptance tests and 3 bats tests, each shown failing before the code existed | On the VM |
 | `%load_ext lakehouse.sql_magic` (jupysql, read-only as `lake_ro`): 6 acceptance tests (`pytest lakehouse/acceptance/test_sql.py`), plus a real notebook kernel run from outside the repo; the password and read-only checks were shown to fail on deliberate breaks | On the VM |
 | Phase 3 notebooks: model staged offline, `08_from_lake.ipynb`, the `notebook_smoke` job: 7 acceptance tests (`pytest lakehouse/acceptance/test_notebooks.py`) and 3 bats tests, each seen failing first; the first smoke run (all 8 notebooks, 110 s) passed with session 5's 22 of 22 reconciliation and session 6's F1 0.898 | On the VM |
 | MCP server (`query_metric`, `define_term`): 13 acceptance tests (`pytest lakehouse/acceptance/test_mcp.py`) and 4 bats tests, each seen failing first; the token check and synonym matching were shown to fail on deliberate breaks; checked end to end through Caddy (total restitution 1,333,587,950.77) | On the VM |
+| OpenMetadata 2.0.5 with OpenSearch 2.19.6 under `/openmetadata`, no default credentials left: 8 acceptance tests (`pytest lakehouse/acceptance/test_openmetadata.py`) and 5 bats tests, each seen failing first; restarting with `--check` kept the same signing keys | On the VM |
+| `om_sync.py` (glossary with typed relations, Sensitivity tags, every lake table) and `define_term` reading OpenMetadata: 9 acceptance tests (`pytest lakehouse/acceptance/test_om_sync.py`); an edit in OpenMetadata reached `define_term`, and `om_sync.py` put it back with the relations intact | On the VM |
+| Tags-to-masks loop (`cube/sync_masks.py`): 4 acceptance tests (`pytest lakehouse/acceptance/test_masks.py`) and 3 bats tests, each seen failing first; live, tagging `gender` Restricted in OpenMetadata masked it in Cube (`***` for all 100,000), and removing the tag restored the real values and a byte-identical model | On the VM |
 
 ## Next phases
 
-Phases 0 to 4 are done. Next is OpenMetadata (ontology, Phase 5), which takes over the glossary, then the monitoring
-profile. See the plan
-document for the order and the reasoning.
+Phases 0 to 5 are done: OpenMetadata holds the glossary and the sensitivity tags, and the tags drive Cube's masks.
+Next is the monitoring profile. See the plan document for the order and the reasoning.

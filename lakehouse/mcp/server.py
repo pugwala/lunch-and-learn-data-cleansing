@@ -2,26 +2,27 @@
 
 Tools
     query_metric(metric, group_by=None, limit=100)   a Cube measure by name, optionally grouped by dimensions
-    define_term(term)                                 a glossary term: definition, synonyms, columns, relations
+    define_term(term)                                 a glossary term from OpenMetadata: definition, synonyms,
+                                                      columns, metrics, sensitivity and typed relations
 
 Served over streamable HTTP at /mcp (stateless, JSON responses) and through Caddy at https://<LAKE_TS_HOST>/mcp.
 Every request needs `Authorization: Bearer <MCP_TOKEN>`. The server holds no lake credentials: query_metric goes
-through Cube's REST API, so an agent sees only Cube's governed model, never the lake. The glossary is read on
-every call from /glossary/glossary.yml (a folder mount), so edits show up without a restart.
+through Cube's REST API, so an agent sees only Cube's governed model, never the lake. define_term reads the
+Lakehouse glossary in OpenMetadata (loaded there by om_sync.py) as mcp-reader, a read-only account.
 """
+import base64
 import hmac
+import html
 import json
 import os
 import time
 import urllib.error
 import urllib.request
 from decimal import Decimal
-from pathlib import Path
 from typing import Any
 
 import jwt
 import uvicorn
-import yaml
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.server.transport_security import TransportSecuritySettings
@@ -29,7 +30,10 @@ from pydantic import BaseModel
 from starlette.responses import PlainTextResponse
 
 CUBE_API = os.environ.get("CUBE_API", "http://cube:4000/cubejs-api/v1")
-GLOSSARY = Path(os.environ.get("GLOSSARY", "/glossary/glossary.yml"))
+OM_API = os.environ.get("OM_API", "http://openmetadata-server:8585/openmetadata/api/v1")
+OM_READER = "mcp-reader@open-metadata.org"
+GLOSSARY = "Lakehouse"
+_om_token = {"value": None}
 
 server = MCPServer(
     name="lakehouse",
@@ -132,20 +136,60 @@ def query_metric(metric: str, group_by: list[str] | None = None, limit: int = 10
     return MetricResult(metric=short(measure), group_by=[short(d) for d in dims], rows=rows)
 
 
-# ---- Glossary ------------------------------------------------------------------------------------------------
+# ---- Glossary (OpenMetadata) ----------------------------------------------------------------------------------
+def om(path):
+    """GET an OpenMetadata API path as mcp-reader, logging in when there's no token yet or it has expired."""
+    for attempt in (1, 2):
+        if not _om_token["value"]:
+            body = json.dumps({"email": OM_READER, "password": base64.b64encode(
+                os.environ["OM_MCP_PASSWORD"].encode()).decode()}).encode()
+            req = urllib.request.Request(f"{OM_API}/users/login", data=body, method="POST",
+                                         headers={"Content-Type": "application/json"})
+            try:
+                _om_token["value"] = json.loads(urllib.request.urlopen(req, timeout=30).read())["accessToken"]
+            except (urllib.error.URLError, KeyError) as e:
+                raise ToolError(f"OpenMetadata is unavailable or refused mcp-reader ({e})") from None
+        req = urllib.request.Request(f"{OM_API}/{path}", headers={"Authorization": f"Bearer {_om_token['value']}"})
+        try:
+            return json.loads(urllib.request.urlopen(req, timeout=30).read())
+        except urllib.error.HTTPError as e:
+            if e.code == 401 and attempt == 1:
+                _om_token["value"] = None   # expired: log in again once
+                continue
+            raise ToolError(f"OpenMetadata refused {path}: {e.code}") from None
+        except urllib.error.URLError as e:
+            raise ToolError(f"OpenMetadata is unavailable ({e.reason})") from None
+
+
+def text(value):
+    """Description text as a person reads it: OpenMetadata returns descriptions HTML-escaped."""
+    return " ".join(html.unescape(value or "").split())
+
+
+def listed(value):
+    """A comma-separated custom property as a list."""
+    return [v.strip() for v in (value or "").split(",") if v.strip()]
+
+
 @server.tool()
 def define_term(term: str) -> TermDefinition:
-    """What a lakehouse term means: its definition, synonyms, the columns and metrics it maps to, and how it
-    relates to other terms. Matches the term or any synonym, in any case; an unknown term lists the glossary."""
-    terms = yaml.safe_load(GLOSSARY.read_text())["terms"]
+    """What a lakehouse term means, from the Lakehouse glossary in OpenMetadata: its definition, synonyms, the
+    columns and metrics it maps to, its sensitivity, and its typed relations to other terms (both directions).
+    Matches the term or any synonym, in any case; an unknown term lists the glossary."""
+    glossary = om(f"glossaries/name/{GLOSSARY}")
+    terms = om(f"glossaryTerms?glossary={glossary['id']}&fields=relatedTerms,synonyms,extension,tags&limit=200")["data"]
     wanted = term.strip().casefold()
     for t in terms:
-        if wanted in {t["name"].casefold(), *(s.casefold() for s in t.get("synonyms", []))}:
-            return TermDefinition(term=t["name"], definition=" ".join(t["definition"].split()),
-                                  synonyms=t.get("synonyms", []), columns=t.get("columns", []),
-                                  metrics=t.get("metrics", []), sensitivity=t.get("sensitivity", "internal"),
-                                  relations=[Relation(**r) for r in t.get("relations", [])])
-    raise ToolError(f"No term {term!r} in the glossary. Terms: " + ", ".join(t["name"] for t in terms))
+        if wanted in {t["name"].casefold(), *(s.casefold() for s in t.get("synonyms") or [])}:
+            ext = t.get("extension") or {}
+            restricted = any(x["tagFQN"] == "Sensitivity.Restricted" for x in t.get("tags") or [])
+            return TermDefinition(term=t["name"], definition=text(t.get("description")),
+                                  synonyms=t.get("synonyms") or [], columns=listed(ext.get("lakehouseColumns")),
+                                  metrics=listed(ext.get("lakehouseMetrics")),
+                                  sensitivity="restricted" if restricted else "internal",
+                                  relations=[Relation(type=r.get("relationType", "relatedTo"), term=r["term"]["name"])
+                                             for r in t.get("relatedTerms") or []])
+    raise ToolError(f"No term {term!r} in the glossary. Terms: " + ", ".join(sorted(t["name"] for t in terms)))
 
 
 # ---- HTTP ----------------------------------------------------------------------------------------------------

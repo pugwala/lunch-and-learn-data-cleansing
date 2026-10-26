@@ -2,4 +2,3 @@
 mcp==2.3.0          # 2.x: MCPServer (was FastMCP), streamable HTTP
 uvicorn==0.54.0
 PyJWT==2.15.1       # signs Cube REST tokens with CUBEJS_API_SECRET
-PyYAML==6.0.3

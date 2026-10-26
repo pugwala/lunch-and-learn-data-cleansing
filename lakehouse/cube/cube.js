@@ -16,4 +16,7 @@ const ATTACH_LAKE = [
 module.exports = {
   /** Build the DuckDB driver Cube uses for every query, with the lake attached read-only. */
   driverFactory: () => new DuckDBDriver({ initSql: ATTACH_LAKE }),
+  /** Cube groups for a request: a REST token's `groups` claim, else `default`. Access policies in the model
+   *  mask restricted columns for every group except restricted_reader. */
+  contextToGroups: ({ securityContext }) => (securityContext && securityContext.groups) || ['default'],
 };

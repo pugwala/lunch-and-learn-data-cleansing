@@ -16,6 +16,32 @@ x-lake-env: &lake-env
   HF_HUB_OFFLINE: "1"                # notebooks never download from Hugging Face
   PYTHONPATH: /home/jovyan/course     # a notebook in any folder can import lakehouse (and lnl)
 
+x-om-env: &om-env   # OpenMetadata server and its migration step share these settings
+  BASE_PATH: /openmetadata             # served at https://<LAKE_TS_HOST>/openmetadata/
+  OPENMETADATA_HEAP_OPTS: -Xmx1G -Xms1G
+  DB_DRIVER_CLASS: org.postgresql.Driver
+  DB_SCHEME: postgresql
+  DB_PARAMS: allowPublicKeyRetrieval=true&useSSL=false&serverTimezone=UTC
+  DB_HOST: catalog-pg
+  DB_PORT: "5432"
+  DB_USER: openmetadata
+  DB_USER_PASSWORD: ${OM_DB_PASSWORD:?set OM_DB_PASSWORD in .env}
+  OM_DATABASE: openmetadata_db
+  SEARCH_TYPE: opensearch
+  ELASTICSEARCH_HOST: opensearch
+  ELASTICSEARCH_PORT: "9200"
+  ELASTICSEARCH_SCHEME: http
+  PIPELINE_SERVICE_CLIENT_ENABLED: "false"   # no Airflow: om_sync.py loads metadata through the API
+  FERNET_KEY: ${OM_FERNET_KEY:?set OM_FERNET_KEY in .env}
+  # Our own signing keys (bootstrap.sh generates them on the lake disk); the image's built-in keys are public.
+  RSA_PUBLIC_KEY_FILE_PATH: /keys/public_key.der
+  RSA_PRIVATE_KEY_FILE_PATH: /keys/private_key.der
+  JWT_KEY_ID: lakehouse-om
+  AUTHENTICATION_PROVIDER: basic
+  AUTHENTICATION_ENABLE_SELF_SIGNUP: "false"
+  AUTHENTICATION_PUBLIC_KEYS: "[http://localhost:8585/openmetadata/api/v1/system/config/jwks]"
+  SERVER_HOST_API_URL: http://openmetadata-server:8585/openmetadata/api
+
 x-dagster: &dagster
   profiles: [core]
   image: lnl-jupyter:local
@@ -44,6 +70,7 @@ services:
       LAKE_RO_PASSWORD: ${LAKE_RO_PASSWORD:?set LAKE_RO_PASSWORD in .env}
       DAGSTER_PG_PASSWORD: ${DAGSTER_PG_PASSWORD:?set DAGSTER_PG_PASSWORD in .env}
       SUPERSET_PG_PASSWORD: ${SUPERSET_PG_PASSWORD:?set SUPERSET_PG_PASSWORD in .env}
+      OM_DB_PASSWORD: ${OM_DB_PASSWORD:?set OM_DB_PASSWORD in .env}
     volumes:
       - catalog-pg-data:/var/lib/postgresql/data
       - ./postgres/init:/docker-entrypoint-initdb.d:ro
@@ -73,6 +100,9 @@ services:
       CUBE_SQL_PASSWORD: ${CUBE_SQL_PASSWORD:?set CUBE_SQL_PASSWORD in .env}   # for queries and acceptance tests via Cube
       SUPERSET_ADMIN_PASSWORD: ${SUPERSET_ADMIN_PASSWORD:?set SUPERSET_ADMIN_PASSWORD in .env}   # for the Superset acceptance test
       MCP_TOKEN: ${MCP_TOKEN:?set MCP_TOKEN in .env}   # for the MCP acceptance test
+      OM_ADMIN_PASSWORD: ${OM_ADMIN_PASSWORD:?set OM_ADMIN_PASSWORD in .env}   # setup_admin.py, om_sync.py and their tests
+      OM_MCP_PASSWORD: ${OM_MCP_PASSWORD:?set OM_MCP_PASSWORD in .env}   # setup_admin.py creates mcp-reader with it
+      CUBEJS_API_SECRET: ${CUBEJS_API_SECRET:?set CUBEJS_API_SECRET in .env}   # Cube masking tests mint REST tokens (Jupyter already holds lake_rw)
     command: ["start-notebook.py", "--ServerApp.base_url=/jupyter/"]   # served at https://<tailscale name>/jupyter/
     volumes:
       - ..:/home/jovyan/course
@@ -188,8 +218,65 @@ services:
       timeout: 10s
       start_period: 120s
 
-  # MCP server: query_metric over Cube's REST API, define_term over glossary/glossary.yml (see mcp/server.py).
-  # Holds no lake credentials, only its bearer token and Cube's API secret, so Cube is its one way to the data.
+  # OpenMetadata's search engine. Private to the Compose network, so the security plugin is off. 1 GB heap.
+  opensearch:
+    profiles: [core]
+    image: opensearchproject/opensearch:${OPENSEARCH_TAG:-2.19.6}
+    restart: unless-stopped
+    environment:
+      discovery.type: single-node
+      DISABLE_SECURITY_PLUGIN: "true"
+      DISABLE_INSTALL_DEMO_CONFIG: "true"
+      OPENSEARCH_JAVA_OPTS: -Xms1g -Xmx1g
+    volumes:
+      - opensearch-data:/usr/share/opensearch/data
+    expose:
+      - "9200"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS 'http://localhost:9200/_cluster/health?wait_for_status=yellow&timeout=5s' >/dev/null"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+
+  # OpenMetadata's database migrations; runs to completion before every server start (safe to repeat).
+  om-migrate:
+    profiles: [core]
+    image: docker.getcollate.io/openmetadata/server:${OM_TAG:-2.0.5}
+    command: ["./bootstrap/openmetadata-ops.sh", "migrate"]
+    environment: *om-env
+    volumes:
+      - ${LAKE_ROOT:-/lake}/openmetadata/keys:/keys:ro
+    depends_on:
+      catalog-pg:
+        condition: service_healthy
+      opensearch:
+        condition: service_healthy
+
+  # OpenMetadata 2.0.5: glossary, tables, classifications and lineage (Phase 5). Checked by
+  # acceptance/test_openmetadata.py. Its metadata lives in catalog-pg's openmetadata_db.
+  openmetadata-server:
+    profiles: [core]
+    image: docker.getcollate.io/openmetadata/server:${OM_TAG:-2.0.5}
+    restart: unless-stopped
+    environment: *om-env
+    volumes:
+      - ${LAKE_ROOT:-/lake}/openmetadata/keys:/keys:ro
+    depends_on:
+      om-migrate:
+        condition: service_completed_successfully
+    expose:
+      - "8585"
+      - "8586"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:8586/healthcheck"]   # the image has wget, not curl
+      interval: 20s
+      timeout: 10s
+      retries: 10
+      start_period: 120s
+
+  # MCP server: query_metric over Cube's REST API, define_term over OpenMetadata's glossary (see mcp/server.py).
+  # Holds no lake credentials: its bearer token, Cube's API secret and a read-only OpenMetadata account.
   # Served at https://<LAKE_TS_HOST>/mcp through Caddy. Checked by acceptance/test_mcp.py.
   mcp:
     profiles: [core]
@@ -204,9 +291,9 @@ services:
       MCP_TOKEN: ${MCP_TOKEN:?set MCP_TOKEN in .env}
       CUBEJS_API_SECRET: ${CUBEJS_API_SECRET:?set CUBEJS_API_SECRET in .env}
       LAKE_TS_HOST: ${LAKE_TS_HOST:?run scripts/bootstrap.sh, which sets it from Tailscale}
+      OM_MCP_PASSWORD: ${OM_MCP_PASSWORD:?set OM_MCP_PASSWORD in .env}   # read-only mcp-reader: define_term reads OpenMetadata
     volumes:
-      - ./mcp:/app:ro              # folders, not single files, so edits are seen (see caddy)
-      - ./glossary:/glossary:ro
+      - ./mcp:/app:ro              # the folder, not single files, so edits are seen (see caddy)
     expose:
       - "8000"
     healthcheck:
@@ -236,8 +323,10 @@ services:
       - dagster-webserver
       - superset
       - mcp
+      - openmetadata-server
 
 volumes:
   catalog-pg-data:
+  opensearch-data:
   caddy-data:
   caddy-config:
