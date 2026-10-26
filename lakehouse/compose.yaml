@@ -104,6 +104,7 @@ services:
       MCP_TOKEN: ${MCP_TOKEN:?set MCP_TOKEN in .env}   # for the MCP acceptance test
       OM_ADMIN_PASSWORD: ${OM_ADMIN_PASSWORD:?set OM_ADMIN_PASSWORD in .env}   # setup_admin.py, om_sync.py and their tests
       OM_MCP_PASSWORD: ${OM_MCP_PASSWORD:?set OM_MCP_PASSWORD in .env}   # setup_admin.py creates mcp-reader with it
+      FUSEKI_WRITER_PASSWORD: ${FUSEKI_WRITER_PASSWORD:?set FUSEKI_WRITER_PASSWORD in .env}   # loads the glossary into Fuseki; its tests
       CUBEJS_API_SECRET: ${CUBEJS_API_SECRET:?set CUBEJS_API_SECRET in .env}   # Cube masking tests mint REST tokens (Jupyter already holds lake_rw)
     command: ["start-notebook.py", "--ServerApp.base_url=/jupyter/"]   # served at https://<tailscale name>/jupyter/
     volumes:
@@ -304,6 +305,32 @@ services:
       timeout: 10s
       start_period: 20s
 
+  # Apache Jena Fuseki 6.2.0, built from Apache's release (fuseki/Dockerfile): SPARQL over the glossary and the
+  # sensitivity tags. Reads are open to the tailnet; writes need the writer user, whose password is written to a
+  # private tmpfs at start. Served at https://<LAKE_TS_HOST>/fuseki/. Checked by acceptance/test_fuseki.py.
+  fuseki:
+    profiles: [core]
+    build:
+      context: ./fuseki
+    image: lnl-fuseki:local
+    restart: unless-stopped
+    user: "1000:100"
+    environment:
+      FUSEKI_WRITER_PASSWORD: ${FUSEKI_WRITER_PASSWORD:?set FUSEKI_WRITER_PASSWORD in .env}
+      JAVA_OPTIONS: -Xmx512m
+    volumes:
+      - ./fuseki:/opt/fuseki/conf:ro   # config.ttl and start.sh: the folder, not single files
+      - ${LAKE_ROOT:-/lake}/fuseki:/fuseki/databases
+    tmpfs:
+      - /run/fuseki:mode=0700,uid=1000,gid=100   # the password file lives here, in memory only
+    expose:
+      - "3030"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://localhost:3030/fuseki/$$/ping"]
+      interval: 30s
+      timeout: 10s
+      start_period: 30s
+
   caddy:
     profiles: [core]
     image: caddy:${CADDY_TAG:-2}
@@ -326,6 +353,7 @@ services:
       - superset
       - mcp
       - openmetadata-server
+      - fuseki
 
 volumes:
   catalog-pg-data:

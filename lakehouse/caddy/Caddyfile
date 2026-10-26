@@ -5,6 +5,7 @@
 #   https://<LAKE_TS_HOST>/superset/  Superset (its own login; SUPERSET_APP_ROOT=/superset, so the path is kept)
 #   https://<LAKE_TS_HOST>/mcp        MCP server (bearer token MCP_TOKEN, checked by the server itself)
 #   https://<LAKE_TS_HOST>/openmetadata/  OpenMetadata (its own login; BASE_PATH=/openmetadata, so the path is kept)
+#   https://<LAKE_TS_HOST>/fuseki/    Fuseki SPARQL (reads open, writes need its writer user; served under /fuseki)
 #
 # The tls block gets a real certificate from tailscaled, whose socket compose.yaml mounts in. Without it Caddy asks
 # Let's Encrypt directly, which can't see a private *.ts.net name. No browser warnings, nothing to trust by hand.
@@ -33,5 +34,8 @@
 	}
 	handle /openmetadata* {
 		reverse_proxy openmetadata-server:8585
+	}
+	handle /fuseki* {
+		reverse_proxy fuseki:3030
 	}
 }

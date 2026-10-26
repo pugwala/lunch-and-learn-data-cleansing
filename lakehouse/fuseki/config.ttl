@@ -1,0 +1,26 @@
+## Fuseki's services for the lakehouse: one dataset, lakehouse, stored as TDB2 on the lake disk.
+## Reads (sparql, query, get) are open: the dataset holds the glossary and which columns are tagged, never records.
+## Writes (update, data) need the writer user from the password file start.sh writes.
+PREFIX :       <#>
+PREFIX fuseki: <http://jena.apache.org/fuseki#>
+PREFIX rdf:    <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+PREFIX tdb2:   <http://jena.apache.org/2016/tdb#>
+
+[] rdf:type fuseki:Server ;
+   fuseki:passwd "/run/fuseki/passwd" ;
+   fuseki:auth "basic" ;
+   fuseki:services ( :lakehouse ) .
+
+:lakehouse rdf:type fuseki:Service ;
+    fuseki:name "lakehouse" ;
+    fuseki:endpoint [ fuseki:operation fuseki:query ; fuseki:name "sparql" ] ;
+    fuseki:endpoint [ fuseki:operation fuseki:query ; fuseki:name "query" ] ;
+    fuseki:endpoint [ fuseki:operation fuseki:gsp-r ; fuseki:name "get" ] ;
+    fuseki:endpoint [ fuseki:operation fuseki:update ; fuseki:name "update" ; fuseki:allowedUsers "writer" ] ;
+    fuseki:endpoint [ fuseki:operation fuseki:gsp-rw ; fuseki:name "data" ; fuseki:allowedUsers "writer" ] ;
+    fuseki:dataset :dataset .
+
+# Named graphs (one per load) also show as the default graph, so a plain query sees everything.
+:dataset rdf:type tdb2:DatasetTDB2 ;
+    tdb2:location "/fuseki/databases/lakehouse" ;
+    tdb2:unionDefaultGraph true .

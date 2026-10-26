@@ -33,6 +33,7 @@ OM_DB_PASSWORD=om-db-secret
 OM_ADMIN_PASSWORD=om-admin-secret
 OM_FERNET_KEY=om-fernet-secret
 OM_MCP_PASSWORD=om-mcp-secret
+FUSEKI_WRITER_PASSWORD=fuseki-secret
 DAGSTER_UI_USER=admin
 DAGSTER_UI_HASH='\$2a\$14\$fakehash'
 LAKE_ROOT=$T/lake
@@ -47,7 +48,7 @@ make_stubs() {
 case "$*" in
   "compose version"|info)                    exit 0 ;;
   *" build "*)                               exit "$FAKE_BUILD_EXIT" ;;
-  *" ps --format {{.Service}} {{.Status}}"*) for s in catalog-pg jupyter dagster-webserver dagster-daemon cube superset mcp opensearch openmetadata-server caddy; do
+  *" ps --format {{.Service}} {{.Status}}"*) for s in catalog-pg jupyter dagster-webserver dagster-daemon cube superset mcp opensearch openmetadata-server fuseki caddy; do
                                                echo "$s Up 1 minute (healthy)"; done ;;
   *" ps --format {{.Status}} "*)             echo "Up 1 minute (healthy)" ;;
   *"stage_model.py --check"*)                 exit "$FAKE_MODEL_EXIT" ;;
@@ -78,7 +79,7 @@ EOF
   stub curl <<'EOF'
 [ -n "$FAKE_CURL_DOWN" ] && { printf 000; exit 7; }   # like real curl when nothing answers: prints 000 and fails
 case "$*" in
-  *example.invalid/jupyter/*) printf 302 ;; *example.invalid/dagster/*) printf 401 ;; *example.invalid/superset/*) printf 302 ;; *example.invalid/mcp*) printf 401 ;; *example.invalid/openmetadata/*) printf 200 ;; *) printf 000 ;;
+  *example.invalid/jupyter/*) printf 302 ;; *example.invalid/dagster/*) printf 401 ;; *example.invalid/superset/*) printf 302 ;; *example.invalid/mcp*) printf 401 ;; *example.invalid/openmetadata/*) printf 200 ;; *example.invalid/fuseki/*) printf 200 ;; *) printf 000 ;;
 esac
 EOF
   stub tailscale <<'EOF'
@@ -200,6 +201,7 @@ set_env()       { sed -i "/^$1=/d" "$ENV"; [ $# = 1 ] || echo "$1=$2" >> "$ENV";
   called "https://lakehouse.example.invalid/superset/"
   called "https://lakehouse.example.invalid/mcp"
   called "https://lakehouse.example.invalid/openmetadata/"
+  called "https://lakehouse.example.invalid/fuseki/"
   [ -z "$(grep 'example.invalid/' "$FAKE_LOG" | grep -E 'curl .*-[a-z]*k')" ]   # no -k: the certificate must be trusted
 }
 
@@ -256,11 +258,11 @@ set_env()       { sed -i "/^$1=/d" "$ENV"; [ $# = 1 ] || echo "$1=$2" >> "$ENV";
   not_called " up "
 }
 
-@test "a healthy install passes, starting the ten services by name and not running the loader" {
+@test "a healthy install passes, starting the eleven services by name and not running the loader" {
   run_bootstrap
   [ "$status" -eq 0 ]
   [[ $output == *"All checks passed"* ]]
-  called "up -d catalog-pg jupyter dagster-webserver dagster-daemon cube superset mcp opensearch openmetadata-server caddy"
+  called "up -d catalog-pg jupyter dagster-webserver dagster-daemon cube superset mcp opensearch openmetadata-server fuseki caddy"
   not_called "run --rm load-lake"
 }
 
@@ -342,6 +344,19 @@ set_env()       { sed -i "/^$1=/d" "$ENV"; [ $# = 1 ] || echo "$1=$2" >> "$ENV";
   grep -qE '^OM_ADMIN_PASSWORD=Lk[0-9a-f]{48}!$' "$ENV"   # upper, lower, digit and symbol, as OpenMetadata requires
   grep -qE '^OM_FERNET_KEY=[A-Za-z0-9_-]{43}=$' "$ENV"   # 32 random bytes, base64url, as Fernet requires
   grep -qE '^OM_MCP_PASSWORD=Lk[0-9a-f]{48}!$' "$ENV"
+}
+
+@test "generates the Fuseki writer password when an older .env lacks it" {
+  set_env FUSEKI_WRITER_PASSWORD
+  run_bootstrap
+  [ "$status" -eq 0 ]
+  grep -qE '^FUSEKI_WRITER_PASSWORD=[0-9a-f]{48}$' "$ENV"
+}
+
+@test "creates Fuseki's dataset folder on the lake disk" {
+  run_bootstrap
+  [ "$status" -eq 0 ]
+  called "mkdir -p $T/lake/fuseki"
 }
 
 @test "generates OpenMetadata's own JWT signing keys once, outside the repo" {
