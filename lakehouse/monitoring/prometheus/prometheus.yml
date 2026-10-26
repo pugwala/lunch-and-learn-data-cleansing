@@ -19,3 +19,23 @@ scrape_configs:
   - job_name: cadvisor
     static_configs:
       - targets: ["cadvisor:8080"]
+
+  # Postgres (catalog-pg), as the lake_monitor role: pg_monitor statistics only.
+  - job_name: postgres
+    static_configs:
+      - targets: ["postgres-exporter:9187"]
+
+  # Every site through Caddy, as a user on the tailnet sees it (see sites.yml and blackbox/blackbox.yml).
+  - job_name: sites
+    metrics_path: /probe
+    params:
+      module: [site]
+    file_sd_configs:
+      - files: ["/prometheus/sd/sites.yml"]
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [site]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox:9115

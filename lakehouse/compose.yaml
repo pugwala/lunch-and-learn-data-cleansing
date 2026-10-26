@@ -74,6 +74,7 @@ services:
       DAGSTER_PG_PASSWORD: ${DAGSTER_PG_PASSWORD:?set DAGSTER_PG_PASSWORD in .env}
       SUPERSET_PG_PASSWORD: ${SUPERSET_PG_PASSWORD:?set SUPERSET_PG_PASSWORD in .env}
       OM_DB_PASSWORD: ${OM_DB_PASSWORD:?set OM_DB_PASSWORD in .env}
+      LAKE_MONITOR_PASSWORD: ${LAKE_MONITOR_PASSWORD:?set LAKE_MONITOR_PASSWORD in .env}   # 05-monitor.sh
     volumes:
       - catalog-pg-data:/var/lib/postgresql/data
       - ./postgres/init:/docker-entrypoint-initdb.d:ro
@@ -341,6 +342,9 @@ services:
     image: prom/prometheus:${PROMETHEUS_TAG:-v3.15.0}
     restart: unless-stopped
     user: "1000:100"
+    entrypoint: ["/bin/sh", "/etc/prometheus/start.sh"]   # fills in the probe targets, then runs prometheus
+    environment:
+      LAKE_TS_HOST: ${LAKE_TS_HOST:?run scripts/bootstrap.sh, which sets it from Tailscale}
     command:
       - --config.file=/etc/prometheus/prometheus.yml
       - --storage.tsdb.path=/prometheus
@@ -430,6 +434,43 @@ services:
       interval: 30s
       timeout: 10s
       start_period: 30s
+
+  # catalog-pg's statistics, as lake_monitor (postgres/init/05-monitor.sh): pg_monitor, never table data.
+  postgres-exporter:
+    profiles: [core]
+    image: prometheuscommunity/postgres-exporter:${POSTGRES_EXPORTER_TAG:-v0.20.1}
+    restart: unless-stopped
+    depends_on:
+      catalog-pg:
+        condition: service_healthy
+    environment:
+      DATA_SOURCE_URI: catalog-pg:5432/postgres?sslmode=disable
+      DATA_SOURCE_USER: lake_monitor
+      DATA_SOURCE_PASS: ${LAKE_MONITOR_PASSWORD:?set LAKE_MONITOR_PASSWORD in .env}
+    expose:
+      - "9187"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:9187/metrics"]
+      interval: 30s
+      timeout: 10s
+
+  # Probes every site through Caddy on the Tailscale name, certificate checked. Containers can't resolve that name
+  # (the VM runs Tailscale with accept-dns off), so it maps to the host, where Caddy's published 443 answers.
+  blackbox:
+    profiles: [core]
+    image: prom/blackbox-exporter:${BLACKBOX_TAG:-v0.29.0}
+    restart: unless-stopped
+    command: ["--config.file=/etc/blackbox/blackbox.yml"]
+    volumes:
+      - ./monitoring/blackbox:/etc/blackbox:ro
+    extra_hosts:
+      - "${LAKE_TS_HOST:?run scripts/bootstrap.sh, which sets it from Tailscale}:host-gateway"
+    expose:
+      - "9115"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:9115/-/healthy"]
+      interval: 30s
+      timeout: 10s
 
   caddy:
     profiles: [core]

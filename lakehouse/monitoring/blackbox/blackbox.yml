@@ -1,0 +1,12 @@
+# Blackbox probe modules. "site" requests a page the way a browser on the tailnet does: HTTPS on the Tailscale name,
+# certificate checked, redirects followed to the login page. 401 is a pass: Dagster and Prometheus sit behind basic
+# auth and the MCP server wants its bearer token, so 401 means the service is there and guarded.
+modules:
+  site:
+    prober: http
+    timeout: 10s
+    http:
+      preferred_ip_protocol: ip4
+      follow_redirects: true
+      fail_if_not_ssl: true
+      valid_status_codes: [200, 401]

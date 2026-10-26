@@ -8,7 +8,11 @@ the exporters has a host port: the tailnet can reach anything bound to the VM's 
 Compose network.
 """
 import os
+import re
+import subprocess
 from pathlib import Path
+
+import psycopg2
 
 import pytest
 import requests
@@ -17,7 +21,7 @@ import yaml
 LAKEHOUSE = Path(__file__).resolve().parents[1]
 PROMETHEUS = os.environ.get("PROMETHEUS_URL", "http://prometheus:9090/prometheus")
 SERVICES = yaml.safe_load((LAKEHOUSE / "compose.yaml").read_text())["services"]
-EXPORTERS = ("node-exporter", "cadvisor")
+EXPORTERS = ("node-exporter", "cadvisor", "postgres-exporter", "blackbox")
 
 
 def query(promql):
@@ -112,3 +116,49 @@ def test_grafana_keeps_its_data_on_the_lake_disk():
     assert "${LAKE_ROOT:-/lake}/grafana:/var/lib/grafana" in svc["volumes"]
     assert "${GRAFANA_ADMIN_PASSWORD" in str(svc["environment"]["GF_SECURITY_ADMIN_PASSWORD"])
     assert "ports" not in svc
+
+
+# --- service probes --------------------------------------------------------------------------------------------
+
+def bootstrap_sites():
+    """The sites bootstrap.sh checks through Caddy (its "path:status" pairs), by path."""
+    line = next(l for l in (LAKEHOUSE / "scripts" / "bootstrap.sh").read_text().splitlines() if l.startswith("for pair in"))
+    return {pair.split(":")[0] for pair in re.findall(r'"([a-z]+:\d+)"', line)}
+
+
+def test_postgres_exporter_sees_the_catalog():
+    """The exporter is connected (pg_up 1) and reports the lake's catalog database."""
+    assert query("pg_up")[0]["value"][1] == "1"
+    assert query('pg_database_size_bytes{datname="ducklake"}'), "no ducklake database in postgres-exporter"
+
+
+def test_postgres_exporter_reads_statistics_not_data():
+    """It logs in as lake_monitor, which holds pg_monitor and can't read the catalog's tables."""
+    with psycopg2.connect(host="catalog-pg", dbname="ducklake", user="lake_rw",
+                          password=os.environ["PGPASSWORD"]) as pg, pg.cursor() as cur:
+        cur.execute("SELECT pg_has_role('lake_monitor', 'pg_monitor', 'MEMBER'), "
+                    "has_table_privilege('lake_monitor', 'public.ducklake_snapshot', 'SELECT')")
+        assert cur.fetchone() == (True, False)
+    assert SERVICES["postgres-exporter"]["environment"]["DATA_SOURCE_USER"] == "lake_monitor"
+
+
+def test_every_site_is_probed_through_caddy():
+    """Blackbox probes exactly the sites bootstrap.sh checks, through Caddy on the Tailscale name, and each succeeds."""
+    probes = {r["metric"]["site"]: r["value"][1] for r in query('probe_success{job="sites"}')}
+    assert set(probes) == bootstrap_sites(), probes
+    assert all(v == "1" for v in probes.values()), probes
+
+
+def test_certificate_has_more_than_a_week_left():
+    """The Tailscale certificate Caddy serves expires more than 7 days from now."""
+    left = query('min(probe_ssl_earliest_cert_expiry{job="sites"}) - time()')
+    assert left and float(left[0]["value"][1]) > 7 * 86400, left
+
+
+def test_tailscale_name_stays_out_of_the_repo():
+    """The probe targets name the host only as a placeholder; start.sh fills it in at run time, outside the repo."""
+    for f in (LAKEHOUSE / "monitoring").rglob("*"):
+        if f.is_file():
+            text = f.read_text()
+            assert not re.search(r"\.ts\.net|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.", text), f
+    assert "LAKE_TS_HOST" in (LAKEHOUSE / "monitoring" / "prometheus" / "sites.yml").read_text()

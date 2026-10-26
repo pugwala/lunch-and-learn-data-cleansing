@@ -1,0 +1,19 @@
+# The sites blackbox probes through Caddy: the same paths bootstrap.sh checks. LAKE_TS_HOST is a placeholder, and
+# start.sh writes the filled-in copy to /prometheus/sd/sites.yml when Prometheus starts, so the Tailscale name never
+# enters the repo.
+- targets: ["https://LAKE_TS_HOST/jupyter/"]
+  labels: {site: jupyter}
+- targets: ["https://LAKE_TS_HOST/dagster/"]
+  labels: {site: dagster}
+- targets: ["https://LAKE_TS_HOST/superset/"]
+  labels: {site: superset}
+- targets: ["https://LAKE_TS_HOST/mcp/"]
+  labels: {site: mcp}
+- targets: ["https://LAKE_TS_HOST/openmetadata/"]
+  labels: {site: openmetadata}
+- targets: ["https://LAKE_TS_HOST/fuseki/"]
+  labels: {site: fuseki}
+- targets: ["https://LAKE_TS_HOST/prometheus/"]
+  labels: {site: prometheus}
+- targets: ["https://LAKE_TS_HOST/grafana/"]
+  labels: {site: grafana}
