@@ -100,4 +100,4 @@ All seven notebooks were executed end to end, both as delivered (blanks unfilled
 
 The enterprise track's Spark rules were run locally against the same data and match the pandas sessions; its Databricks SDK calls and bundle were checked against the SDK and bundle schemas, and the notebooks were reviewed against current Databricks documentation. None of it has run on a Databricks workspace yet.
 
-Not yet tested: an actual Databricks workspace, and the sentence-transformer path in session 7 (the test environment couldn't reach Hugging Face, so the fallback method ran instead). Do a dry run of each notebook on your compute before the first session.
+Session 7 has been run both ways outside Databricks, with the sentence-transformer model and with the fallback method, and few-shot scores highest with each. Not yet tested: an actual Databricks workspace. Do a dry run of each notebook on your compute before the first session.

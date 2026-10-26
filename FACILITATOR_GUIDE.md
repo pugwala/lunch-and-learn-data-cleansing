@@ -187,9 +187,9 @@ Religion changing between a person's records is allowed (people change faith); r
 
 **Point to land:** meaning-based methods plus a few hundred labels usually beat hand-built rules, and governance comes before any real narrative touches a model.
 
-Results depend on which embedding method loads (the notebook prints it). In testing with the fallback method (Latent Semantic Analysis), few-shot with 300 labels scored F1 0.947 against 0.899 for the session 6 rules, and zero-shot scored 0.588. Expect zero-shot to be clearly better with the sentence-transformer model; few-shot should stay on top either way. Dry-run this session on your compute so you know which numbers the room will see.
+Results depend on which embedding method loads (the notebook prints it). Tested both ways with 300 labels: with the sentence-transformer model, few-shot scored F1 0.926 against 0.899 for the session 6 rules, and zero-shot 0.568; with the fallback method (Latent Semantic Analysis, the usual case on Free Edition), few-shot 0.985, rules 0.899, zero-shot 0.588. Few-shot is on top either way, and zero-shot is weak either way: six example sentences can't capture what these notes mean by *good*. In your turn #2, 50 labels fall below the rules (about 0.69 with the model, 0.64 with the fallback) and 1,000 reach about 0.98 and 1.00. Dry-run this session on your compute so you know which numbers the room will see.
 
-**Talking points:** negation is a known weak spot for embeddings; if semantic search surfaces *not a good day*, use it. Close with the governance point: real conduct notes are criminal justice information, and any AI Function or model use goes through AI governance review first.
+**Talking points:** negation is a known weak spot for embeddings; if semantic search surfaces *not a good day*, use it. If anyone asks about `C=100` in the few-shot cell: the note vectors are scaled to length 1, so the default setting holds the model back too hard. With the default, few-shot scored only 0.750 with the sentence-transformer, below the rules. Close with the governance point: real conduct notes are criminal justice information, and any AI Function or model use goes through AI governance review first.
 
 ## After the series: the enterprise track
 
