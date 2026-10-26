@@ -112,3 +112,19 @@ def test_a_load_replaces_the_graph():
                       data={"update": f"DELETE DATA {{ GRAPH <{GRAPH}> {{ <urn:stray> <urn:p> 'x' }} }}"})
     assert om_to_rdf("--check").returncode == 0
 
+
+# --- the daily run ---------------------------------------------------------------------------------------------
+
+def test_dagster_can_write_fuseki():
+    """The Dagster services get the Fuseki writer password the daily load uses."""
+    env = yaml.safe_load((LAKEHOUSE / "compose.yaml").read_text())["x-dagster"]["environment"]
+    assert "FUSEKI_WRITER_PASSWORD" in env
+
+
+def test_daily_lake_refreshes_the_graph_after_openmetadata():
+    """daily_lake includes the fuseki/glossary asset, right after openmetadata/lake."""
+    from test_daily_run import graphql
+    node = graphql('{ assetNodeOrError(assetKey: {path: ["fuseki", "glossary"]}) { ... on AssetNode { jobNames '
+                   'dependencyKeys { path } } } }')["assetNodeOrError"]
+    assert "daily_lake" in node.get("jobNames", []), node
+    assert [k["path"] for k in node["dependencyKeys"]] == [["openmetadata", "lake"]]

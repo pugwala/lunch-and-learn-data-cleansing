@@ -4,6 +4,7 @@
     gold (dbt build)    -> gold.dim_*, gold.fct_offender_record, gold.dq_scorecard, plus dbt tests
     openmetadata/lake   -> om_sync.py after gold, so OpenMetadata knows today's tables; a non-blocking check that
                            Cube's masks still match OpenMetadata's Restricted tags
+    fuseki/glossary     -> om_to_rdf.py: OpenMetadata's glossary and column tags as one RDF graph in Fuseki
     notebook_smoke      -> runs the 7 course notebooks and lakehouse/08_from_lake.ipynb weekly (an op job, not
                            an asset, so daily_lake's all-asset selection never picks it up)
 
@@ -149,9 +150,24 @@ def openmetadata_lake(context: dg.AssetExecutionContext):
                               severity=dg.AssetCheckSeverity.WARN, metadata={"summary": said})
 
 
+FUSEKI_KEY = dg.AssetKey(["fuseki", "glossary"])
+
+
+@dg.asset(key=FUSEKI_KEY, group_name="openmetadata", kinds={"sparql", "python"}, deps=[OM_KEY],
+          description="OpenMetadata's glossary (SKOS) and column sensitivity as one graph in Fuseki (om_to_rdf.py).")
+def fuseki_glossary(context: dg.AssetExecutionContext):
+    """Replace the Fuseki graph with what OpenMetadata holds after today's sync."""
+    rdf = run_script("lakehouse/openmetadata/om_to_rdf.py")
+    if rdf.returncode != 0:
+        raise dg.Failure(f"om_to_rdf.py failed: {(rdf.stdout + rdf.stderr)[-1500:]}")
+    summary = rdf.stdout.strip().splitlines()[-1]
+    context.log.info(summary)
+    return dg.MaterializeResult(metadata={"summary": summary})
+
+
 daily_lake = dg.define_asset_job("daily_lake", selection=dg.AssetSelection.all(),
                                  description="Load reference, bronze and silver, check parity, build gold, "
-                                             "sync OpenMetadata.")
+                                             "sync OpenMetadata, refresh Fuseki.")
 regenerate_lake = dg.define_asset_job(
     "regenerate_lake", selection=dg.AssetSelection.all(),
     description="Same as daily_lake, but rebuild the CSV from the seed first.",
@@ -213,7 +229,7 @@ notebook_smoke_schedule = dg.ScheduleDefinition(
     description="Sundays 06:00 Central, an hour after daily_lake, so the notebooks see a fresh lake.")
 
 defs = dg.Definitions(
-    assets=[load_lake, gold, openmetadata_lake],
+    assets=[load_lake, gold, openmetadata_lake, fuseki_glossary],
     jobs=[daily_lake, regenerate_lake, notebook_smoke],
     schedules=[daily_schedule, notebook_smoke_schedule],
     resources={"dbt": DbtCliResource(project_dir=dbt_project)},

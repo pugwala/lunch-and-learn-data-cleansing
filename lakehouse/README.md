@@ -11,7 +11,7 @@ every number matches the Facilitator Guide. dbt builds gold, and Dagster runs it
 
 | Path | What it does |
 | --- | --- |
-| `compose.yaml` | `core` profile: Postgres catalog, Jupyter, Dagster (UI + daemon), a one-shot loader, Cube, Superset, the MCP server, OpenSearch, OpenMetadata (with a one-shot `om-migrate`), Caddy |
+| `compose.yaml` | `core` profile: Postgres catalog, Jupyter, Dagster (UI + daemon), a one-shot loader, Cube, Superset, the MCP server, OpenSearch, OpenMetadata (with a one-shot `om-migrate`), Fuseki, Caddy |
 | `.env.example` | Every setting and secret; copy to `.env` |
 | `postgres/init/` | `01-roles.sh`: `ducklake`, `superset`, `dagster` databases and the `lake_rw` / `lake_ro` roles. `02-dagster.sh`, `03-superset.sh` and `04-openmetadata.sh`: the Dagster, Superset and OpenMetadata roles and databases (safe to re-run) |
 | `jupyter/Dockerfile` | `pyspark-notebook` + course requirements + DuckDB 1.5.6, dbt-duckdb, Dagster; extensions pre-installed. One image for every Python process, so DuckDB versions never drift |
@@ -24,7 +24,8 @@ every number matches the Facilitator Guide. dbt builds gold, and Dagster runs it
 | `scripts/set-dagster-ui-password.sh` | Puts a login in front of the Dagster UI (it has none of its own) |
 | `scripts/stage_model.py` | Stages session 7's embedding model on the lake disk at a pinned revision (bootstrap.sh runs it) |
 | `mcp/` | The MCP server (`server.py`, Dockerfile, pinned requirements): `query_metric` over Cube, `define_term` over OpenMetadata's glossary |
-| `openmetadata/` | `setup_admin.py` (replaces the default admin password, creates the read-only `mcp-reader`) and `om_sync.py` (pushes the glossary, the Sensitivity tags and every lake table into OpenMetadata) |
+| `openmetadata/` | `setup_admin.py` (replaces the default admin password, creates the read-only `mcp-reader`) `om_sync.py` (pushes the glossary, the Sensitivity tags and every lake table into OpenMetadata) and `om_to_rdf.py` (publishes that meaning to Fuseki as RDF) |
+| `fuseki/` | Apache Jena Fuseki 6.2.0, built from Apache's verified release: `Dockerfile`, `config.ttl` (one dataset; writes need the writer user), `shiro.ini` (no users; admin only inside the container), `start.sh` |
 | `cube/sync_masks.py` | Makes Cube mask exactly the columns OpenMetadata tags `Sensitivity.Restricted` |
 | `glossary/glossary.yml` | The glossary: 14 terms with definitions, synonyms, columns, metrics and typed relations; `om_sync.py` loads it into OpenMetadata |
 | `08_from_lake.ipynb` | Session 8 for the lakehouse: the Trust Test answered in SQL over silver, checked against `gold.trust_test` |
@@ -47,7 +48,7 @@ every number matches the Facilitator Guide. dbt builds gold, and Dagster runs it
 ## The daily run
 
 ```
-load_lake ──► parity check (blocking) ──► dbt build (gold models + tests)
+load_lake ──► parity check (blocking) ──► dbt build (gold models + tests) ──► openmetadata/lake ──► fuseki/glossary
 ```
 
 - **Parity check fails** → the run fails and gold isn't rebuilt. Silver has already been written; DuckLake time
@@ -55,6 +56,10 @@ load_lake ──► parity check (blocking) ──► dbt build (gold models + t
 - **dbt test at `error` severity fails** (keys, row counts, accepted values) → the run fails.
 - **dbt test at `warn` severity fails** (reference lookups, the 95% quality floor) → recorded, the run succeeds.
   The floor fires today on `disciplinary_points` completeness (94.15%): blanks plus `N/A`.
+- **`openmetadata/lake`** runs `om_sync.py`, so OpenMetadata knows today's tables. Its non-blocking check,
+  `cube_masks_match_openmetadata`, warns when a steward has tagged a column Restricted that the Cube model doesn't
+  mask yet; fixing that (rewriting the model, restarting Cube) stays a reviewed `bootstrap.sh` step.
+- **`fuseki/glossary`** runs `om_to_rdf.py`, so the SPARQL graph carries the same day's meaning.
 
 Jobs: `daily_lake` (scheduled 05:00 Central, on by default), `regenerate_lake` (rebuilds the CSV first) and
 `notebook_smoke` (Sundays 06:00 Central, on by default): it runs the seven course notebooks as delivered plus
@@ -90,10 +95,10 @@ What it does, in order:
    set, stops on duplicate keys, asks for the Dagster UI login if it's missing, and keeps `.env` at mode 600.
 5. **Image and services.** Builds the image, starts Postgres, creates the `dagster` role (Postgres runs
    `postgres/init/` only on an empty volume), generates OpenMetadata's own JWT signing keys once (under
-   `/lake/openmetadata/keys`, never in the repo), starts the ten long-running services by name, and reloads Caddy.
+   `/lake/openmetadata/keys`, never in the repo), starts the eleven long-running services by name, and reloads Caddy.
 6. **Lake data and meaning.** Runs the loader if silver or `ref.null_tokens` is missing, stages session 7's model,
-   replaces OpenMetadata's default admin password, runs `om_sync.py`, then `cube/sync_masks.py` (restarting Cube if
-   the masks changed), and builds the Trust Test dashboard.
+   replaces OpenMetadata's default admin password, runs `om_sync.py`, `om_to_rdf.py` (Fuseki's graph), then
+   `cube/sync_masks.py` (restarting Cube if the masks changed), and builds the Trust Test dashboard.
 7. **Proof.** Waits for every health check, runs the 19 parity tests, and checks that every site answers through
    Caddy, on the Tailscale name with certificate checking on, so an untrusted certificate fails.
 
@@ -116,6 +121,7 @@ break containers' internet lookups. Turn on HTTPS certificates in the Tailscale 
 - `https://<LAKE_TS_HOST>/dagster/`: Dagster, behind Caddy basic auth
 - `https://<LAKE_TS_HOST>/superset/`: Superset, its own login
 - `https://<LAKE_TS_HOST>/openmetadata/`: OpenMetadata, its own login
+- `https://<LAKE_TS_HOST>/fuseki/`: Fuseki, SPARQL over the glossary and column tags (reads open, writes need `writer`)
 - `https://<LAKE_TS_HOST>/mcp`: the MCP server, bearer token
 
 Any device on your tailnet can open them, at home or away, with no hosts entries and no browser warnings. This is
@@ -257,13 +263,41 @@ or dropping a dimension's `mask:` to match. `bootstrap.sh` runs it and restarts 
    lakehouse/cube/sync_masks.py`, then `docker compose --profile core restart cube`).
 3. Review `git diff lakehouse/cube/model/` and commit it. `bootstrap.sh --check` fails while the model is behind.
 
+### Fuseki: SPARQL over the meaning
+
+Apache Jena Fuseki 6.2.0 serves one dataset, `lakehouse`, at `https://<LAKE_TS_HOST>/fuseki/` (TDB2 under
+`/lake/fuseki`). The image is built from Apache's own release: `fuseki/Dockerfile` pins its SHA-512 and checks its
+signature against Apache's Jena KEYS on every build. `openmetadata/om_to_rdf.py` reads OpenMetadata (as the
+read-only `mcp-reader`) and replaces one named graph, `<https://lakehouse.invalid/graph/openmetadata>`:
+
+- the glossary as SKOS: each term a `skos:Concept` (`term:offender-number`, ...) with `skos:prefLabel`,
+  `skos:definition` and `skos:altLabel`; `broader`, `narrower` and `relatedTo` as SKOS's own relations, the rest
+  (`partOf`, `identifies`, ...) as `lh:` properties;
+- every lake column as an `lh:Column` with `lh:table`, `lh:name`, `lh:sensitivity` (`lh:Restricted`,
+  `lh:Personal`) and `lh:means` (its glossary term).
+
+The IRIs use `lakehouse.invalid`, a name reserved never to resolve. Reads need no login, because the graph holds
+meaning and tags, never records; writes need the `writer` user (`FUSEKI_WRITER_PASSWORD`), and the admin endpoints
+answer only inside the container. One question no single system answers, run from the browser UI or with curl:
+
+```bash
+curl -s https://<LAKE_TS_HOST>/fuseki/lakehouse/sparql -H 'Accept: text/csv' --data-urlencode 'query=
+PREFIX lh: <https://lakehouse.invalid/ontology#>
+PREFIX term: <https://lakehouse.invalid/glossary/>
+SELECT ?column WHERE {   # restricted columns that hold part of an offender record
+  ?c lh:table "gold.fct_offender_record" ; lh:name ?column ; lh:sensitivity lh:Restricted ; lh:means ?t .
+  ?t lh:partOf term:offender-record }'
+```
+
+It answers `stg_group` and `stg_status`.
+
 ## Test status
 
 | Piece | Where it has run |
 | --- | --- |
 | Loader, 19 parity checks, DuckLake on Postgres, image build, Postgres roles | On the VM |
 | Dagster webserver and daemon with Postgres storage, their healthchecks, Caddy basic auth | On the VM |
-| `scripts/bootstrap.sh`: 34 bats tests (`bats lakehouse/tests/bootstrap.bats`, needs `apt install bats`), each shown to fail when the behaviour it covers is broken | On the VM, with stub commands; never touches the live stack |
+| `scripts/bootstrap.sh`: 37 bats tests (`bats lakehouse/tests/bootstrap.bats`, needs `apt install bats`), each shown to fail when the behaviour it covers is broken | On the VM, with stub commands; never touches the live stack |
 | dbt gold models and their tests (25 today), Dagster job (both jobs, plus the blocking check stopping gold) | Sandbox, against a plain DuckDB file |
 | Cube v1.8.3 over gold, read-only as `lake_ro`, restricted columns masked except for `restricted_reader`: 15 acceptance tests (`pytest lakehouse/acceptance/test_cube.py`); unmasking everyone made 8 of them fail | On the VM |
 | Superset 6.1.0 under `/superset`, Cube as its only database, the Trust Test dashboard: 6 acceptance tests (`pytest lakehouse/acceptance/test_superset.py`); the only-Cube check was shown to fail with a decoy database added | On the VM |
@@ -275,8 +309,11 @@ or dropping a dimension's `mask:` to match. `bootstrap.sh` runs it and restarts 
 | OpenMetadata 2.0.5 with OpenSearch 2.19.6 under `/openmetadata`, no default credentials left: 8 acceptance tests (`pytest lakehouse/acceptance/test_openmetadata.py`) and 5 bats tests, each seen failing first; restarting with `--check` kept the same signing keys | On the VM |
 | `om_sync.py` (glossary with typed relations, Sensitivity tags, every lake table) and `define_term` reading OpenMetadata: 9 acceptance tests (`pytest lakehouse/acceptance/test_om_sync.py`); an edit in OpenMetadata reached `define_term`, and `om_sync.py` put it back with the relations intact | On the VM |
 | Tags-to-masks loop (`cube/sync_masks.py`): 4 acceptance tests (`pytest lakehouse/acceptance/test_masks.py`) and 3 bats tests, each seen failing first; live, tagging `gender` Restricted in OpenMetadata masked it in Cube (`***` for all 100,000), and removing the tag restored the real values and a byte-identical model | On the VM |
+| Daily `om_sync` and Fuseki refresh in `daily_lake` (`openmetadata/lake`, `fuseki/glossary`, the non-blocking masks check): 7 acceptance tests across `test_om_sync.py`, `test_glossary_rdf.py` and `test_daily_run.py`, each seen failing first; real runs succeeded | On the VM |
+| Fuseki 6.2.0 under `/fuseki`: 7 acceptance tests (`pytest lakehouse/acceptance/test_fuseki.py`) and 4 bats tests, each seen failing first; removing the writer-only rule made the write test fail | On the VM |
+| Glossary as RDF (`om_to_rdf.py`): 8 acceptance tests (`pytest lakehouse/acceptance/test_glossary_rdf.py`) and 1 bats test, each seen failing first; a stray triple was flagged by `--check` and removed by the next load | On the VM |
 
 ## Next phases
 
-Phases 0 to 5 are done: OpenMetadata holds the glossary and the sensitivity tags, and the tags drive Cube's masks.
-Next is the monitoring profile. See the plan document for the order and the reasoning.
+Phases 0 to 5 are done: OpenMetadata holds the glossary and the sensitivity tags, the tags drive Cube's masks, and
+Fuseki serves the same meaning as SPARQL, all refreshed by the daily run. Next is the monitoring profile. See the plan document for the order and the reasoning.

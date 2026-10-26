@@ -282,7 +282,7 @@ done
 
 echo
 if [ ${#FAILED[@]} = 0 ]; then
-  printf '\033[32mAll checks passed.\033[0m Open https://%s/jupyter/, https://%s/dagster/, https://%s/superset/ and https://%s/openmetadata/ (from any device on your tailnet).\n' "$TS_HOST" "$TS_HOST" "$TS_HOST" "$TS_HOST"
+  printf '\033[32mAll checks passed.\033[0m Open https://%s/jupyter/, https://%s/dagster/, https://%s/superset/, https://%s/openmetadata/ and https://%s/fuseki/ (from any device on your tailnet).\n' "$TS_HOST" "$TS_HOST" "$TS_HOST" "$TS_HOST" "$TS_HOST"
 else
   printf '\033[31m%d check(s) failed:\033[0m\n' ${#FAILED[@]}; printf '  - %s\n' "${FAILED[@]}"; exit 1
 fi

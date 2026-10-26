@@ -93,7 +93,8 @@ def test_latest_daily_lake_run_succeeded(run):
 
 
 @pytest.mark.parametrize("asset", [("silver", "hero_offenders"), ("gold", "fct_offender_record"),
-                                   ("gold", "dq_scorecard"), ("gold", "trust_test"), ("openmetadata", "lake")])
+                                   ("gold", "dq_scorecard"), ("gold", "trust_test"), ("openmetadata", "lake"),
+                                   ("fuseki", "glossary")])
 def test_run_materialized(run, asset):
     """That same run loaded silver and built gold, rather than Dagster reporting success on stale tables."""
     assert last_materialization_run(*asset) == run["runId"], f"{'/'.join(asset)} was not built by the latest run"

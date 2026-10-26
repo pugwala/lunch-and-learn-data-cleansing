@@ -218,6 +218,7 @@ set_env()       { sed -i "/^$1=/d" "$ENV"; [ $# = 1 ] || echo "$1=$2" >> "$ENV";
   closing=$(grep 'All checks passed' <<< "$output")   # only the closing line: the URL checks above mention them too
   [[ $closing == *"https://lakehouse.example.invalid/jupyter/"*"https://lakehouse.example.invalid/dagster/"* ]]
   [[ $closing == *"https://lakehouse.example.invalid/openmetadata/"* ]]
+  [[ $closing == *"https://lakehouse.example.invalid/fuseki/"* ]]
 }
 
 @test "reports an unreachable site as answering 000, once" {
