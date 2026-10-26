@@ -1,0 +1,41 @@
+version: 2
+
+sources:
+  - name: silver
+    database: lake
+    schema: silver
+    description: Written by lakehouse/load_lake.py from the course's own session 2-4 cleansing.
+    tables:
+      - name: hero_offenders
+        description: One row per offender record, typed and crosswalked. offender_number is the BIGINT record key.
+      - name: hero_offenders_exceptions
+        description: One row per flagged value. Records are flagged, never dropped.
+      - name: conduct_notes_answer_key
+
+  - name: bronze
+    database: lake
+    schema: bronze
+    tables:
+      - name: hero_offenders_raw
+        description: Generator output as written, every column VARCHAR.
+
+  - name: ref
+    database: lake
+    schema: ref
+    description: The course crosswalks from lnl/reference/, standing in for owner-maintained reference data.
+    tables:
+      - name: unit_crosswalk
+      - name: nibrs_offenses
+      - name: stg_groups
+      - name: race_crosswalk
+      - name: religion_crosswalk
+      - name: violence_codes
+      - name: null_tokens
+        description: Documented unknown codes per column (lnl.cleaning.NULL_TOKENS), counted as missing.
+
+  - name: ops
+    database: lake
+    schema: ops
+    tables:
+      - name: load_runs
+        description: One row per load run, written by the loader.

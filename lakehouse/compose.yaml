@@ -1,0 +1,210 @@
+# Home-lab DuckDB lakehouse. Run from this folder:
+#   cp .env.example .env   (then set every CHANGE_ME)
+#   docker compose --profile core up -d --build
+#   bash scripts/set-dagster-ui-password.sh   (once, before the first up)
+# Later phases add services under the governance and monitoring profiles.
+name: lakehouse
+
+x-lake-env: &lake-env
+  LNL_DATA_DIR: /lake/landing
+  LAKE_CATALOG: "ducklake:postgres:dbname=ducklake host=catalog-pg user=lake_rw"
+  LAKE_DATA_PATH: /lake/data/
+  PGPASSWORD: ${LAKE_RW_PASSWORD:?set LAKE_RW_PASSWORD in .env}
+  DBT_TARGET: lake
+
+x-dagster: &dagster
+  profiles: [core]
+  image: lnl-jupyter:local
+  restart: unless-stopped
+  depends_on:
+    catalog-pg:
+      condition: service_healthy
+  environment:
+    <<: *lake-env
+    DAGSTER_HOME: /lake/dagster/home
+    DAGSTER_PG_PASSWORD: ${DAGSTER_PG_PASSWORD:?set DAGSTER_PG_PASSWORD in .env}
+  volumes:
+    - ..:/home/jovyan/course
+    - /dev/null:/home/jovyan/course/lakehouse/.env:ro   # hide secrets; dbt 1.12 auto-loads any .env above its cwd
+    - ${LAKE_ROOT:-/lake}:/lake
+  working_dir: /home/jovyan/course
+
+services:
+  catalog-pg:
+    profiles: [core]
+    image: postgres:${POSTGRES_TAG:-17}
+    restart: unless-stopped
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      LAKE_RW_PASSWORD: ${LAKE_RW_PASSWORD}
+      LAKE_RO_PASSWORD: ${LAKE_RO_PASSWORD:?set LAKE_RO_PASSWORD in .env}
+      DAGSTER_PG_PASSWORD: ${DAGSTER_PG_PASSWORD:?set DAGSTER_PG_PASSWORD in .env}
+      SUPERSET_PG_PASSWORD: ${SUPERSET_PG_PASSWORD:?set SUPERSET_PG_PASSWORD in .env}
+    volumes:
+      - catalog-pg-data:/var/lib/postgresql/data
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "127.0.0.1:5432:5432"   # host-only, for pg_dump and debugging; never the LAN
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d ducklake"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  jupyter:
+    profiles: [core]
+    build:
+      context: ..
+      dockerfile: lakehouse/jupyter/Dockerfile
+      args:
+        JUPYTER_BASE_TAG: ${JUPYTER_BASE_TAG:-latest}
+    image: lnl-jupyter:local
+    restart: unless-stopped
+    depends_on:
+      catalog-pg:
+        condition: service_healthy
+    environment:
+      <<: *lake-env
+      JUPYTER_TOKEN: ${JUPYTER_TOKEN:?set JUPYTER_TOKEN in .env}
+      CUBE_SQL_PASSWORD: ${CUBE_SQL_PASSWORD:?set CUBE_SQL_PASSWORD in .env}   # for queries and acceptance tests via Cube
+      SUPERSET_ADMIN_PASSWORD: ${SUPERSET_ADMIN_PASSWORD:?set SUPERSET_ADMIN_PASSWORD in .env}   # for the Superset acceptance test
+    command: ["start-notebook.py", "--ServerApp.base_url=/jupyter/"]   # served at https://<tailscale name>/jupyter/
+    volumes:
+      - ..:/home/jovyan/course
+      - /dev/null:/home/jovyan/course/lakehouse/.env:ro   # hide secrets; dbt 1.12 auto-loads any .env above its cwd
+      - ${LAKE_ROOT:-/lake}:/lake
+    expose:
+      - "8888"
+
+  load-lake:
+    # One-shot loader until the scheduler arrives in a later phase:
+    #   docker compose --profile core run --rm load-lake [--regenerate]
+    profiles: [core]
+    image: lnl-jupyter:local
+    depends_on:
+      catalog-pg:
+        condition: service_healthy
+    environment:
+      <<: *lake-env
+    volumes:
+      - ..:/home/jovyan/course
+      - /dev/null:/home/jovyan/course/lakehouse/.env:ro   # hide secrets; dbt 1.12 auto-loads any .env above its cwd
+      - ${LAKE_ROOT:-/lake}:/lake
+    working_dir: /home/jovyan/course
+    entrypoint: ["python", "lakehouse/load_lake.py"]
+    restart: "no"
+
+  # Scheduler UI and daemon. Same image as Jupyter, so every process pins the same DuckDB.
+  # The UI is behind Caddy's basic auth (scripts/set-dagster-ui-password.sh): Dagster has no login of its own.
+  dagster-webserver:
+    <<: *dagster
+    entrypoint: ["bash", "-c", "mkdir -p $$DAGSTER_HOME && cp lakehouse/orchestration/dagster.yaml $$DAGSTER_HOME/ && exec dagster-webserver -h 0.0.0.0 -p 3000 --path-prefix /dagster -f lakehouse/orchestration/definitions.py -d /home/jovyan/course"]
+    expose:
+      - "3000"
+    healthcheck:   # replaces the base image's Jupyter check, which always fails here
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://localhost:3000/dagster/server_info"]
+      interval: 30s
+      timeout: 10s
+      start_period: 60s
+
+  dagster-daemon:
+    <<: *dagster
+    entrypoint: ["bash", "-c", "mkdir -p $$DAGSTER_HOME && cp lakehouse/orchestration/dagster.yaml $$DAGSTER_HOME/ && exec dagster-daemon run -f lakehouse/orchestration/definitions.py -d /home/jovyan/course"]
+    healthcheck:   # passes while the daemon's heartbeats in Postgres are fresh
+      test: ["CMD", "dagster-daemon", "liveness-check"]
+      interval: 60s
+      timeout: 30s
+      start_period: 90s
+
+  # Semantic layer: the governed query path over gold, with a Postgres-wire SQL API on cube:15432 for Superset
+  # and other tools. Reads DuckLake read-only as lake_ro (cube/cube.js). v1.8.3 bundles DuckDB 1.5.5, a read-only
+  # exception to "1.5.6 everywhere": no Cube release ships 1.5.6 yet, and the 1.6 line's DuckDB is too old to read
+  # the catalog. Checked by acceptance/test_cube.py.
+  cube:
+    profiles: [core]
+    image: cubejs/cube:${CUBE_TAG:-v1.8.3}
+    restart: unless-stopped
+    depends_on:
+      catalog-pg:
+        condition: service_healthy
+    environment:
+      CUBEJS_DB_TYPE: duckdb
+      CUBEJS_API_SECRET: ${CUBEJS_API_SECRET:?set CUBEJS_API_SECRET in .env}
+      CUBEJS_PG_SQL_PORT: "15432"
+      CUBEJS_SQL_USER: lake
+      CUBEJS_SQL_PASSWORD: ${CUBE_SQL_PASSWORD:?set CUBE_SQL_PASSWORD in .env}
+      CUBEJS_DEV_MODE: "false"
+      CUBEJS_CACHE_AND_QUEUE_DRIVER: memory   # no Cube Store until pre-aggregations are needed
+      CUBEJS_TELEMETRY: "false"
+      PGPASSWORD: ${LAKE_RO_PASSWORD:?set LAKE_RO_PASSWORD in .env}   # read-only role, and only that one
+    volumes:
+      - ./cube:/cube/conf:ro
+      - ${LAKE_ROOT:-/lake}/data:/lake/data:ro
+    expose:
+      - "4000"
+      - "15432"
+    healthcheck:   # the image has no curl; Node's fetch asks Cube whether it can answer queries
+      test: ["CMD", "node", "-e", "fetch('http://localhost:4000/readyz').then(r => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
+      interval: 30s
+      timeout: 10s
+      start_period: 60s
+
+  # Dashboards and SQL Lab at https://<tailscale name>/superset/ (SUPERSET_APP_ROOT; Superset still calls sub-path
+  # serving beta). Its only database is Cube, registered by superset/start.sh, so every chart goes through the
+  # governed layer. Metadata in catalog-pg's superset database. Checked by acceptance/test_superset.py.
+  superset:
+    profiles: [core]
+    build:
+      context: ./superset
+      args:
+        SUPERSET_TAG: ${SUPERSET_TAG:-6.1.0}
+    image: lnl-superset:local
+    restart: unless-stopped
+    depends_on:
+      catalog-pg:
+        condition: service_healthy
+      cube:
+        condition: service_healthy
+    environment:
+      SUPERSET_APP_ROOT: /superset
+      SUPERSET_CONFIG_PATH: /app/lakehouse/superset_config.py
+      SUPERSET_SECRET_KEY: ${SUPERSET_SECRET_KEY:?set SUPERSET_SECRET_KEY in .env}
+      SUPERSET_PG_PASSWORD: ${SUPERSET_PG_PASSWORD:?set SUPERSET_PG_PASSWORD in .env}
+      SUPERSET_ADMIN_PASSWORD: ${SUPERSET_ADMIN_PASSWORD:?set SUPERSET_ADMIN_PASSWORD in .env}
+      CUBE_SQL_PASSWORD: ${CUBE_SQL_PASSWORD:?set CUBE_SQL_PASSWORD in .env}
+    volumes:
+      - ./superset:/app/lakehouse:ro   # the folder, so edits to the config or start script are seen (see caddy)
+    command: ["bash", "/app/lakehouse/start.sh"]
+    expose:
+      - "8088"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://localhost:8088/superset/health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 120s
+
+  caddy:
+    profiles: [core]
+    image: caddy:${CADDY_TAG:-2}
+    restart: unless-stopped
+    environment:
+      LAKE_TS_HOST: ${LAKE_TS_HOST:?run scripts/bootstrap.sh, which sets it from Tailscale}
+      DAGSTER_UI_USER: ${DAGSTER_UI_USER:?run scripts/set-dagster-ui-password.sh}
+      DAGSTER_UI_HASH: ${DAGSTER_UI_HASH:?run scripts/set-dagster-ui-password.sh}
+    ports:
+      - "443:443"
+      - "80:80"
+    volumes:
+      - ./caddy:/etc/caddy:ro   # the folder, not the file: a single-file mount keeps the old file after an editor saves a new one
+      - caddy-data:/data
+      - caddy-config:/config
+      - /var/run/tailscale/tailscaled.sock:/var/run/tailscale/tailscaled.sock   # Caddy gets the *.ts.net certificate from Tailscale
+    depends_on:
+      - jupyter
+      - dagster-webserver
+      - superset
+
+volumes:
+  catalog-pg-data:
+  caddy-data:
+  caddy-config:

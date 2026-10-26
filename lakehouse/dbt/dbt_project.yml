@@ -1,0 +1,26 @@
+# Gold layer for the home-lab lakehouse. Reads silver and ref (written by lakehouse/load_lake.py),
+# writes gold. Run inside the jupyter or dagster containers:
+#   dbt build --project-dir lakehouse/dbt --profiles-dir lakehouse/dbt
+name: lakehouse_gold
+version: "1.0.0"
+config-version: 2
+profile: lakehouse
+
+model-paths: ["models"]
+test-paths: ["tests"]
+macro-paths: ["macros"]
+target-path: target
+clean-targets: ["target", "logs"]
+
+models:
+  lakehouse_gold:
+    gold:
+      +materialized: table
+      +schema: gold
+
+tests:
+  lakehouse_gold:
+    +severity: error
+
+flags:
+  send_anonymous_usage_stats: false

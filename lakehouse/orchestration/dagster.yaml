@@ -1,0 +1,36 @@
+# Dagster instance config. Copied into $DAGSTER_HOME (/lake/dagster/home) when the containers start.
+storage:
+  postgres:
+    postgres_db:
+      hostname: catalog-pg
+      port: 5432
+      db_name: dagster
+      username: dagster
+      password:
+        env: DAGSTER_PG_PASSWORD
+
+# One run at a time: DuckLake writers shouldn't race each other.
+run_coordinator:
+  module: dagster.core.run_coordinator
+  class: QueuedRunCoordinator
+  config:
+    max_concurrent_runs: 1
+
+compute_logs:
+  module: dagster.core.storage.local_compute_log_manager
+  class: LocalComputeLogManager
+  config:
+    base_dir: /lake/dagster/compute_logs
+
+local_artifact_storage:
+  module: dagster.core.storage.root
+  class: LocalArtifactStorage
+  config:
+    base_dir: /lake/dagster/storage
+
+retention:
+  schedule:
+    purge_after_days: 30
+
+telemetry:
+  enabled: false

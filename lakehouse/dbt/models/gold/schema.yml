@@ -1,0 +1,87 @@
+version: 2
+
+# Test severities follow the enterprise track's Lakeflow expectations:
+#   error = stop the pipeline (keys, row counts)   warn = record it and carry on (references, quality floors)
+# Columns tagged meta.sensitivity: restricted get masked in the semantic layer (phase 5).
+
+models:
+  - name: dim_unit
+    description: One row per unit from the unit crosswalk.
+    columns:
+      - name: unit_code
+        description: Three-letter unit code.
+        data_tests: [unique, not_null]
+      - name: unit_name
+        data_tests: [unique, not_null]
+
+  - name: dim_offense
+    description: FBI NIBRS offense codes.
+    columns:
+      - name: offense_code
+        data_tests: [unique, not_null]
+      - name: crime_against
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ['Person', 'Property', 'Society', 'Group B']
+
+  - name: dim_stg_group
+    description: Fictional STG groups; "None" (is_affiliation = false) means no recorded affiliation.
+    columns:
+      - name: stg_group
+        data_tests: [unique, not_null]
+
+  - name: fct_offender_record
+    description: >
+      One row per offender record, with the keys and measures reporting needs. Names, aliases, notes and date
+      of birth stay in silver.
+    columns:
+      - name: offender_number
+        description: Record ID, BIGINT.
+        data_tests: [unique, not_null]
+      - name: unit_code
+        data_tests:
+          - relationships:
+              arguments: {to: ref('dim_unit'), field: unit_code}
+              config: {severity: warn}
+      - name: offense_code
+        data_tests:
+          - relationships:
+              arguments: {to: ref('dim_offense'), field: offense_code}
+              config: {severity: warn}
+      - name: stg_group
+        meta: {sensitivity: restricted}
+        data_tests:
+          - relationships:
+              arguments: {to: ref('dim_stg_group'), field: stg_group}
+              config: {severity: warn}
+      - name: stg_status
+        meta: {sensitivity: restricted}
+      - name: custody_level
+        data_tests:
+          - accepted_values:
+              arguments: {values: ['G1', 'G2', 'G3', 'G4', 'G5']}
+      - name: violence_code
+        data_tests:
+          - accepted_values:
+              arguments: {values: ['NV', 'V1', 'V2', 'V3']}
+      - name: race_code
+        meta: {sensitivity: restricted}
+      - name: race_omb
+        meta: {sensitivity: restricted}
+      - name: religion_group
+        meta: {sensitivity: restricted}
+      - name: religion_family
+        meta: {sensitivity: restricted}
+
+  - name: dq_scorecard
+    description: >
+      Data-quality score per dimension, column and rule for the latest load. Accuracy is not scored: it needs
+      ground truth this dataset doesn't have.
+    columns:
+      - name: dimension
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['completeness', 'conformity', 'validity', 'consistency', 'uniqueness', 'timeliness']

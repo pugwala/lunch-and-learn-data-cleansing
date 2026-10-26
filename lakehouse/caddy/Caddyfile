@@ -1,0 +1,29 @@
+# One way in: this VM's Tailscale name (bootstrap.sh sets LAKE_TS_HOST from `tailscale status`).
+#
+#   https://<LAKE_TS_HOST>/jupyter/   Jupyter (token login)
+#   https://<LAKE_TS_HOST>/dagster/   Dagster (basic auth below; Dagster has no login of its own)
+#   https://<LAKE_TS_HOST>/superset/  Superset (its own login; SUPERSET_APP_ROOT=/superset, so the path is kept)
+#
+# The tls block gets a real certificate from tailscaled, whose socket compose.yaml mounts in. Without it Caddy asks
+# Let's Encrypt directly, which can't see a private *.ts.net name. No browser warnings, nothing to trust by hand.
+# Jupyter runs with base_url /jupyter/ and Dagster with path prefix /dagster. Nothing here is port-forwarded: the
+# sites are reachable from the LAN and the tailnet, and only this name has a site.
+
+{$LAKE_TS_HOST} {
+	tls {
+		get_certificate tailscale
+	}
+	redir / /jupyter/
+	handle /jupyter* {
+		reverse_proxy jupyter:8888
+	}
+	handle /dagster* {
+		basic_auth {
+			{$DAGSTER_UI_USER} {$DAGSTER_UI_HASH}
+		}
+		reverse_proxy dagster-webserver:3000
+	}
+	handle /superset* {
+		reverse_proxy superset:8088
+	}
+}

@@ -1,0 +1,225 @@
+#!/bin/bash
+# Sets up or repairs the lakehouse on this VM, then proves it works. Safe to run again at any time: every step
+# checks first and only does what's missing, so on a healthy install it changes nothing and prints a report.
+#
+#   bash lakehouse/scripts/bootstrap.sh            # from anywhere; runs as your user, uses sudo where needed
+#   bash lakehouse/scripts/bootstrap.sh --reload   # also re-run the loader even if the lake already has data
+#   bash lakehouse/scripts/bootstrap.sh --check    # verify only: no changes at all
+#
+# It never formats a disk. If /lake isn't the mounted data disk it stops and says what to do.
+set -euo pipefail
+cd "$(dirname "$0")/.."                      # lakehouse/
+REPO=$(cd .. && pwd)
+
+RELOAD=0 CHECK=0
+for arg in "$@"; do
+  case $arg in
+    --reload) RELOAD=1 ;;
+    --check)  CHECK=1 ;;
+    -h|--help) sed -n '2,9p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *) echo "Unknown option: $arg (try --help)" >&2; exit 2 ;;
+  esac
+done
+
+SECRETS=(POSTGRES_PASSWORD LAKE_RW_PASSWORD LAKE_RO_PASSWORD DAGSTER_PG_PASSWORD JUPYTER_TOKEN
+         CUBEJS_API_SECRET CUBE_SQL_PASSWORD SUPERSET_SECRET_KEY SUPERSET_PG_PASSWORD SUPERSET_ADMIN_PASSWORD)
+SERVICES=(catalog-pg jupyter dagster-webserver dagster-daemon cube superset caddy)   # never a bare `up`: it also runs load-lake
+ROLE_SCRIPTS=(02-dagster.sh 03-superset.sh)   # app roles on catalog-pg; postgres/init/ only runs on an empty volume
+CONTAINER_UID=1000 CONTAINER_GID=100                                    # jovyan:users in the image
+FAILED=()
+
+step() { printf '\n\033[1m== %s\033[0m\n' "$*"; }
+ok()   { printf '  \033[32mok\033[0m    %s\n' "$*"; }
+did()  { printf '  \033[36mdone\033[0m  %s\n' "$*"; }
+warn() { printf '  \033[33mwarn\033[0m  %s\n' "$*"; }
+bad()  { printf '  \033[31mFAIL\033[0m  %s\n' "$*"; FAILED+=("$*"); }
+die()  { printf '\n\033[31m%s\033[0m\n' "$*" >&2; exit 1; }
+dc()   { docker compose --profile core "$@"; }
+env_val() { { grep -E "^$1=" .env 2>/dev/null || true; } | tail -1 | cut -d= -f2- | sed -e "s/^'//" -e "s/'$//"; }   # missing key = empty, not a pipefail exit
+
+# .env must stay owner-only. Anything that rewrites it (sed -i, editors) makes a new file, and new files here
+# inherit the repo's default ACL, which would let the container user read every secret.
+lock_env() { setfacl -b .env 2>/dev/null || true; chmod 600 .env; }
+
+# ---------------------------------------------------------------------------------------------------------------
+step "1/7 Tools"
+for c in docker openssl curl setfacl findmnt; do
+  if command -v $c >/dev/null; then ok "$c"
+  elif [ $c = setfacl ] && [ $CHECK = 0 ]; then sudo apt-get install -y -qq acl >/dev/null && did "installed acl (setfacl)"
+  else die "$c is missing. Install it first (Docker: https://docs.docker.com/engine/install/debian/)."; fi
+done
+docker compose version >/dev/null 2>&1 || die "The Docker Compose plugin is missing (apt install docker-compose-plugin)."
+docker info >/dev/null 2>&1 || die "Can't talk to Docker. Is your user in the docker group? (log out and in after adding it)"
+ok "docker compose, and your user can reach the Docker daemon"
+
+# ---------------------------------------------------------------------------------------------------------------
+step "2/7 Data disk"
+LAKE_ROOT=$(env_val LAKE_ROOT); LAKE_ROOT=${LAKE_ROOT:-/lake}
+if src=$(findmnt -n -o SOURCE --mountpoint "$LAKE_ROOT" 2>/dev/null); then
+  ok "$LAKE_ROOT is mounted from $src ($(findmnt -n -o SIZE --mountpoint "$LAKE_ROOT"), label: $(lsblk -dn -o LABEL "$src" 2>/dev/null || echo '?'))"
+else
+  dev=$(sudo blkid -L lake 2>/dev/null || true)
+  if [ -n "$dev" ] && elsewhere=$(findmnt -n -o TARGET --source "$dev" 2>/dev/null); then
+    die "The 'lake' disk ($dev) is mounted at $elsewhere, but LAKE_ROOT in .env is $LAKE_ROOT. Set LAKE_ROOT=$elsewhere in .env."
+  elif [ -n "$dev" ]; then
+    die "$LAKE_ROOT is NOT mounted, but $dev is labeled 'lake'. If $LAKE_ROOT is empty, run: sudo mount $LAKE_ROOT
+If it already holds files, they're on the OS disk: move them onto the data disk first (see the Work Log, 2026-10-25)."
+  fi
+  die "$LAKE_ROOT is NOT a mounted disk, and no disk is labeled 'lake'. Data written now would land on the OS disk.
+Find the data disk by size with: lsblk -o NAME,SIZE,FSTYPE,LABEL  (and its stable name in /dev/disk/by-id/).
+Formatting erases a disk, so this script never does it. Once you're sure which disk it is:
+  sudo mkfs.ext4 -L lake /dev/disk/by-id/<data disk>
+  grep -q 'LABEL=lake' /etc/fstab || echo 'LABEL=lake $LAKE_ROOT ext4 defaults,noatime,nofail 0 2' | sudo tee -a /etc/fstab
+  sudo mkdir -p $LAKE_ROOT && sudo mount $LAKE_ROOT
+Then run this script again."
+fi
+
+for d in landing data notebook-runs catalog-backups models dagster; do
+  p="$LAKE_ROOT/$d"
+  [ -d "$p" ] || { [ $CHECK = 1 ] && { bad "$p is missing"; continue; }; sudo mkdir -p "$p"; did "created $p"; }
+  [ $d = catalog-backups ] && continue                       # host-side pg_dump target, stays root-owned
+  if [ "$(stat -c %u:%g "$p")" = "$CONTAINER_UID:$CONTAINER_GID" ]; then ok "$p owned by $CONTAINER_UID:$CONTAINER_GID"
+  elif [ $CHECK = 1 ]; then bad "$p is owned by $(stat -c %u:%g "$p"), want $CONTAINER_UID:$CONTAINER_GID"
+  else sudo chown -R $CONTAINER_UID:$CONTAINER_GID "$p"; did "chown $CONTAINER_UID:$CONTAINER_GID $p"; fi
+done
+
+# ---------------------------------------------------------------------------------------------------------------
+step "3/7 Repo permissions"
+# The containers run as uid 1000 and write into the mounted repo (pytest cache, notebook saves). If you log in
+# as a different uid, ACLs let both of you write. -d sets the default ACL that new files inherit.
+me=$(id -u)
+if [ "$me" = $CONTAINER_UID ]; then ok "you are uid $CONTAINER_UID, same as the containers: no ACLs needed"
+elif getfacl -pn "$REPO" 2>/dev/null | grep -q "^default:user:$CONTAINER_UID:rwx"; then ok "repo ACLs grant uid $CONTAINER_UID and uid $me"   # -n: numeric ids, not names
+elif [ $CHECK = 1 ]; then bad "repo has no ACL for uid $CONTAINER_UID"
+else
+  setfacl -R    -m u:$CONTAINER_UID:rwX -m u:"$me":rwX "$REPO"
+  setfacl -R -d -m u:$CONTAINER_UID:rwX -m u:"$me":rwX "$REPO"
+  did "granted uid $CONTAINER_UID and uid $me rwX on the repo"
+fi
+
+# ---------------------------------------------------------------------------------------------------------------
+step "4/7 Secrets (.env)"
+if [ ! -f .env ]; then
+  [ $CHECK = 1 ] && die ".env is missing."
+  cp .env.example .env; did "created .env from .env.example"
+fi
+lock_env
+
+dups=$(grep -oE '^[A-Z_]+=' .env | sort | uniq -d | tr -d = | tr '\n' ' ')
+[ -z "$dups" ] || die "These keys appear more than once in .env: $dups
+Compose uses the LAST one, which can silently disagree with what Postgres has. Delete the stale line(s), then re-run."
+ok "no duplicate keys"
+
+# set_env_key KEY VALUE: set KEY in .env, replacing its line or adding one. Rewrites through a temp file and cats it
+# back, so .env keeps its inode, owner and mode (sed -i would not).
+set_env_key() {
+  local tmp; tmp=$(mktemp)
+  if grep -qE "^$1=" .env; then awk -v k="$1" -v v="$2" -F= '$1==k {print k"="v; next} {print}' .env > "$tmp"
+  else cat .env > "$tmp"; echo "$1=$2" >> "$tmp"; fi
+  cat "$tmp" > .env; rm -f "$tmp"
+}
+
+for k in "${SECRETS[@]}"; do
+  v=$(env_val "$k")
+  if [ -n "$v" ] && [ "$v" != CHANGE_ME ]; then ok "$k is set"; continue; fi
+  [ $CHECK = 1 ] && { bad "$k is not set"; continue; }
+  set_env_key "$k" "$(openssl rand -hex 24)"
+  did "generated $k"
+done
+
+# This VM's Tailscale name. Caddy serves the sites there with a real certificate from Tailscale. Not a secret.
+TS_HOST=$(env_val LAKE_TS_HOST)
+if [ -n "$TS_HOST" ]; then ok "Tailscale name: $TS_HOST"
+elif [ $CHECK = 1 ]; then bad "LAKE_TS_HOST is not set"
+else
+  command -v tailscale >/dev/null || die "Tailscale isn't installed; Caddy serves the sites on this VM's Tailscale name.
+Install it (https://tailscale.com/download/linux) and sign in with: sudo tailscale up --accept-dns=false"
+  TS_HOST=$(tailscale status --json 2>/dev/null \
+            | python3 -I -c 'import json, sys; print(json.load(sys.stdin)["Self"]["DNSName"].rstrip("."))' 2>/dev/null || true)
+  [ -n "$TS_HOST" ] || die "Tailscale isn't signed in. Run: sudo tailscale up --accept-dns=false"
+  set_env_key LAKE_TS_HOST "$TS_HOST"
+  did "set LAKE_TS_HOST=$TS_HOST from Tailscale"
+fi
+
+if [ -n "$(env_val DAGSTER_UI_HASH)" ]; then ok "Dagster UI login is set (user: $(env_val DAGSTER_UI_USER))"
+elif [ $CHECK = 1 ]; then bad "Dagster UI login is not set"
+elif [ -t 0 ]; then echo "  The Dagster UI needs a login (Compose won't start without it):"; bash scripts/set-dagster-ui-password.sh
+else die "The Dagster UI login isn't set, and this shell can't ask for a password. Run: bash scripts/set-dagster-ui-password.sh"; fi
+lock_env
+[ "$(stat -c %a .env)" = 600 ] && ! getfacl -pn .env 2>/dev/null | grep -q '^user:[^:]' && ok ".env is mode 600, owner only" \
+  || bad ".env permissions are not owner-only"
+
+# ---------------------------------------------------------------------------------------------------------------
+step "5/7 Image and services"
+if [ $CHECK = 0 ]; then
+  echo "  building lnl-jupyter:local and lnl-superset:local (cached layers make this quick after the first time)..."
+  dc build -q jupyter superset || die "An image build failed (output above)."
+  did "image built"
+  # Postgres first, so the dagster role exists before Dagster tries to log in.
+  dc up -d --wait catalog-pg >/dev/null 2>&1 || die "catalog-pg didn't become healthy. See: docker compose --profile core logs catalog-pg"
+  ok "catalog-pg healthy"
+  # postgres/init/ only runs on an empty volume; these scripts are idempotent and re-sync each password from .env.
+  for script in "${ROLE_SCRIPTS[@]}"; do
+    for i in 1 2 3 4 5; do
+      dc exec -T catalog-pg bash "/docker-entrypoint-initdb.d/$script" >/dev/null 2>&1 && break
+      [ $i = 5 ] && die "$script failed. Try by hand: docker compose --profile core exec -T catalog-pg bash /docker-entrypoint-initdb.d/$script"
+      sleep 3
+    done
+    did "$script: role present, password in sync with .env"
+  done
+  dc up -d "${SERVICES[@]}" >/dev/null 2>&1 || die "Starting the services failed. Run: docker compose --profile core up -d ${SERVICES[*]}"
+  did "running: ${SERVICES[*]}"
+  dc exec -T caddy caddy reload --config /etc/caddy/Caddyfile >/dev/null 2>&1 && did "caddy reloaded its Caddyfile" || warn "caddy reload failed"
+fi
+
+echo "  waiting for health checks (up to 3 minutes)..."
+for i in $(seq 1 36); do
+  waiting=$(dc ps --format '{{.Service}} {{.Status}}' "${SERVICES[@]}" | grep -c -E 'starting|Restarting' || true)
+  [ "$waiting" = 0 ] && break; sleep 5
+done
+for s in "${SERVICES[@]}"; do
+  st=$(dc ps --format '{{.Status}}' "$s" 2>/dev/null)
+  case "$st" in
+    *healthy*) [[ $st == *unhealthy* ]] && bad "$s: $st" || ok "$s: $st" ;;
+    Up*)       ok "$s: $st" ;;                               # caddy has no healthcheck
+    *)         bad "$s: ${st:-not running}" ;;
+  esac
+done
+
+# ---------------------------------------------------------------------------------------------------------------
+step "6/7 Lake data"
+have=$(dc exec -T jupyter python - <<'PY' 2>/dev/null || echo error
+import sys; sys.path.insert(0, "/home/jovyan/course")
+from lakehouse.lake import lake_connect
+con = lake_connect(read_only=True)
+t = {r[0] for r in con.sql("select table_schema||'.'||table_name from information_schema.tables").fetchall()}
+print("yes" if {"silver.hero_offenders", "ref.null_tokens"} <= t else "no")
+PY
+)
+have=$(echo "$have" | tail -1)
+if [ "$have" = yes ] && [ $RELOAD = 0 ]; then ok "silver and reference tables present (use --reload to load again)"
+elif [ $CHECK = 1 ]; then [ "$have" = yes ] && ok "lake has data" || bad "lake is empty or unreadable ($have)"
+else
+  echo "  running the loader..."
+  out=$(dc run --rm load-lake 2>&1) || { echo "$out" | tail -20; die "The loader failed (output above)."; }
+  did "$(echo "$out" | grep -m1 '^Loaded run')"
+fi
+
+# ---------------------------------------------------------------------------------------------------------------
+step "7/7 Proof"
+res=$(dc exec -T jupyter pytest -q lakehouse/tests 2>&1 | tail -1)
+[[ $res == *passed* && $res != *failed* ]] && ok "parity tests: $res" || bad "parity tests: $res"
+
+# The Tailscale name has a real certificate, so no -k here: a self-signed or wrong certificate fails the check.
+for pair in "jupyter:302" "dagster:401" "superset:302"; do   # 302 = a login redirect, 401 = Caddy basic auth
+  url="https://$TS_HOST/${pair%%:*}/" want=${pair##*:}
+  got=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 --resolve "$TS_HOST:443:127.0.0.1" "$url" || true); got=${got:-000}   # curl prints 000 itself when nothing answers
+  [ "$got" = "$want" ] && ok "$url answers $got (trusted certificate)" || bad "$url answers $got, expected $want"
+done
+
+echo
+if [ ${#FAILED[@]} = 0 ]; then
+  printf '\033[32mAll checks passed.\033[0m Open https://%s/jupyter/, https://%s/dagster/ and https://%s/superset/ (from any device on your tailnet).\n' "$TS_HOST" "$TS_HOST" "$TS_HOST"
+else
+  printf '\033[31m%d check(s) failed:\033[0m\n' ${#FAILED[@]}; printf '  - %s\n' "${FAILED[@]}"; exit 1
+fi

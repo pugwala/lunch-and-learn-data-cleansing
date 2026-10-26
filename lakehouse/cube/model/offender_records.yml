@@ -1,0 +1,105 @@
+# Offender records from gold, for reporting: keys, codes and measures only. Gold already leaves out names, aliases,
+# birth dates and conduct notes. The columns dbt tags restricted (race, religion, STG) are also left out here until
+# Phase 5 adds masking by role; acceptance/test_cube.py fails if one appears.
+cubes:
+  - name: offender_records
+    sql_table: lake.gold.fct_offender_record
+    description: One row per offender record from the latest load (gold.fct_offender_record).
+
+    joins:
+      - name: units
+        relationship: many_to_one
+        sql: "{CUBE}.unit_code = {units}.unit_code"
+      - name: offenses
+        relationship: many_to_one
+        sql: "{CUBE}.offense_code = {offenses}.offense_code"
+
+    dimensions:
+      - name: offender_number
+        sql: offender_number
+        type: number
+        primary_key: true
+        public: true
+      - name: unit_code
+        sql: unit_code
+        type: string
+      - name: offense_code
+        sql: offense_code
+        type: string
+      - name: offense_against
+        sql: offense_against
+        type: string
+      - name: violence_code
+        sql: violence_code
+        type: string
+      - name: custody_level
+        sql: custody_level
+        type: string
+      - name: threat_level
+        sql: threat_level
+        type: string
+      - name: gender
+        sql: gender
+        type: string
+      - name: sentence_date
+        sql: sentence_date
+        type: time
+      - name: projected_release_date
+        sql: projected_release_date
+        type: time
+      - name: age_at_sentencing
+        sql: age_at_sentencing
+        type: number
+      - name: escape_risk
+        sql: escape_risk
+        type: boolean
+      - name: protective_custody
+        sql: protective_custody
+        type: boolean
+      - name: has_exception
+        sql: has_exception
+        type: boolean
+
+    measures:
+      - name: record_count
+        type: count
+        description: Offender records.
+      - name: records_with_exceptions
+        type: count
+        filters:
+          - sql: "{CUBE}.has_exception"
+        description: Records with at least one flagged value (flagged, never dropped).
+      - name: total_restitution
+        sql: restitution_owed
+        type: sum
+        format: currency
+      - name: avg_disciplinary_points
+        sql: disciplinary_points
+        type: avg
+
+  - name: units
+    sql_table: lake.gold.dim_unit
+    dimensions:
+      - name: unit_code
+        sql: unit_code
+        type: string
+        primary_key: true
+        public: true
+      - name: unit_name
+        sql: unit_name
+        type: string
+
+  - name: offenses
+    sql_table: lake.gold.dim_offense
+    dimensions:
+      - name: offense_code
+        sql: offense_code
+        type: string
+        primary_key: true
+        public: true
+      - name: offense_description
+        sql: offense_description
+        type: string
+      - name: crime_against
+        sql: crime_against
+        type: string

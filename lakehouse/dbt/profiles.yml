@@ -1,0 +1,27 @@
+# Two targets, picked by DBT_TARGET (default "lake"):
+#   lake  - DuckLake on the Postgres catalog (the real setup; compose sets LAKE_CATALOG, LAKE_DATA_PATH, PGPASSWORD)
+#   local - a plain DuckDB file at LAKE_CATALOG, for testing without Postgres
+lakehouse:
+  target: "{{ env_var('DBT_TARGET', 'lake') }}"
+  outputs:
+    lake:
+      type: duckdb
+      path: ":memory:"
+      extensions: [ducklake, postgres]
+      attach:
+        - path: "{{ env_var('LAKE_CATALOG') }}"
+          alias: lake
+          options:
+            data_path: "{{ env_var('LAKE_DATA_PATH', '/lake/data/') }}"
+      database: lake
+      schema: gold
+      threads: 1
+    local:
+      type: duckdb
+      path: ":memory:"
+      attach:
+        - path: "{{ env_var('LAKE_CATALOG') }}"
+          alias: lake
+      database: lake
+      schema: gold
+      threads: 1

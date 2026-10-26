@@ -1,0 +1,44 @@
+# The data-quality scorecard from gold: one row per dimension x column x rule for the latest load.
+cubes:
+  - name: dq_scorecard
+    sql_table: lake.gold.dq_scorecard
+    description: Data-quality scores for the latest load (gold.dq_scorecard).
+
+    dimensions:
+      - name: rule_key
+        sql: "dimension || ':' || column_name || ':' || rule"
+        type: string
+        primary_key: true
+      - name: run_id
+        sql: run_id
+        type: string
+      - name: built_at
+        sql: built_at
+        type: time
+      - name: dimension
+        sql: dimension
+        type: string
+      - name: column_name
+        sql: column_name
+        type: string
+      - name: rule
+        sql: rule
+        type: string
+      - name: score_pct
+        sql: score_pct
+        type: number
+
+    measures:
+      - name: checked_total
+        sql: checked
+        type: sum
+      - name: passed_total
+        sql: passed
+        type: sum
+      - name: failed_total
+        sql: failed
+        type: sum
+      - name: pass_rate
+        sql: "ROUND(100.0 * {passed_total} / NULLIF({checked_total}, 0), 2)"
+        type: number
+        description: Percent of checked values that passed, as gold computes it.

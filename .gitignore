@@ -1,0 +1,8 @@
+lakehouse/.env
+__pycache__/
+.pytest_cache/
+*.duckdb
+*.duckdb.wal
+lakehouse/dbt/target/
+lakehouse/dbt/logs/
+logs/

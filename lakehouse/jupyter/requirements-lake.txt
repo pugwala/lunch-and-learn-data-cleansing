@@ -1,0 +1,14 @@
+duckdb==1.5.6
+jupysql>=0.10
+duckdb-engine>=0.13
+papermill>=2.6
+pytest>=8
+# Gold layer and scheduling. Pinned to the versions the lakehouse was tested with.
+dbt-core==1.12.6
+dbt-duckdb==1.11.0
+dagster==1.13.26
+dagster-webserver==1.13.26
+dagster-postgres==0.29.26
+dagster-dbt==0.29.26
+# SQLAlchemy 2.1 maps postgresql:// to the psycopg 3 driver; dagster-postgres builds that URL but installs psycopg2.
+SQLAlchemy==2.0.54
