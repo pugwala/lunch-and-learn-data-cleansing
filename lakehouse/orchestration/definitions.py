@@ -2,6 +2,8 @@
 
     load_lake (Python)  -> ref.*, bronze.*, silver.*, ops.load_runs, then the parity check
     gold (dbt build)    -> gold.dim_*, gold.fct_offender_record, gold.dq_scorecard, plus dbt tests
+    openmetadata/lake   -> om_sync.py after gold, so OpenMetadata knows today's tables; a non-blocking check that
+                           Cube's masks still match OpenMetadata's Restricted tags
     notebook_smoke      -> runs the 7 course notebooks and lakehouse/08_from_lake.ipynb weekly (an op job, not
                            an asset, so daily_lake's all-asset selection never picks it up)
 
@@ -114,8 +116,42 @@ def gold(context: dg.AssetExecutionContext, dbt: DbtCliResource):
     yield from dbt.cli(["build"], context=context).stream()
 
 
+OM_KEY = dg.AssetKey(["openmetadata", "lake"])
+MASKS_CHECK = "cube_masks_match_openmetadata"
+
+
+def run_script(*args: str) -> subprocess.CompletedProcess:
+    """Run a lakehouse script with this Python, from the repo root; returns the finished process."""
+    return subprocess.run([sys.executable, *args], capture_output=True, text=True, cwd=REPO)
+
+
+@dg.asset(
+    key=OM_KEY, group_name="openmetadata", kinds={"openmetadata", "python"}, deps=[*load_lake.keys, *gold.keys],
+    description="The glossary, Sensitivity tags and every lake table in OpenMetadata (om_sync.py).",
+    check_specs=[dg.AssetCheckSpec(MASKS_CHECK, asset=OM_KEY, blocking=False,
+                                   description="Cube masks exactly the columns OpenMetadata tags Restricted")],
+)
+def openmetadata_lake(context: dg.AssetExecutionContext):
+    """Sync OpenMetadata with the lake just built, then check (never rewrite) Cube's masks against its tags.
+
+    The check only warns: rewriting the Cube model and restarting Cube is a reviewed step (bootstrap.sh, then
+    commit), not something a 05:00 run should do on its own."""
+    sync = run_script("lakehouse/openmetadata/om_sync.py")
+    if sync.returncode != 0:
+        raise dg.Failure(f"om_sync.py failed: {(sync.stdout + sync.stderr)[-1500:]}")
+    summary = sync.stdout.strip().splitlines()[-1]
+    context.log.info(summary)
+    yield dg.MaterializeResult(asset_key=OM_KEY, metadata={"summary": summary,
+                                                           "output": dg.MetadataValue.md(f"```\n{sync.stdout[-3000:]}\n```")})
+    masks = run_script("lakehouse/cube/sync_masks.py", "--check")
+    said = ((masks.stdout + masks.stderr).strip().splitlines() or ["no output"])[-1]
+    yield dg.AssetCheckResult(asset_key=OM_KEY, check_name=MASKS_CHECK, passed=masks.returncode == 0,
+                              severity=dg.AssetCheckSeverity.WARN, metadata={"summary": said})
+
+
 daily_lake = dg.define_asset_job("daily_lake", selection=dg.AssetSelection.all(),
-                                 description="Load reference, bronze and silver, check parity, build gold.")
+                                 description="Load reference, bronze and silver, check parity, build gold, "
+                                             "sync OpenMetadata.")
 regenerate_lake = dg.define_asset_job(
     "regenerate_lake", selection=dg.AssetSelection.all(),
     description="Same as daily_lake, but rebuild the CSV from the seed first.",
@@ -177,7 +213,7 @@ notebook_smoke_schedule = dg.ScheduleDefinition(
     description="Sundays 06:00 Central, an hour after daily_lake, so the notebooks see a fresh lake.")
 
 defs = dg.Definitions(
-    assets=[load_lake, gold],
+    assets=[load_lake, gold, openmetadata_lake],
     jobs=[daily_lake, regenerate_lake, notebook_smoke],
     schedules=[daily_schedule, notebook_smoke_schedule],
     resources={"dbt": DbtCliResource(project_dir=dbt_project)},

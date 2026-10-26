@@ -135,3 +135,35 @@ def test_raw_and_personal_columns_are_tagged_where_they_live(om):
     assert "Sensitivity.Personal" in tags["conduct_notes"] and "Sensitivity.Personal" in tags["date_of_birth"]
     bronze = get(om, "tables/name/lakehouse.lake.bronze.hero_offenders_raw", fields="columns,tags")
     assert "Sensitivity.Personal" in {t["tagFQN"] for c in bronze["columns"] if c["name"] == "last_name" for t in c.get("tags", [])}
+
+
+# --- the daily run ---------------------------------------------------------------------------------------------
+
+from test_daily_run import graphql   # noqa: E402  (Dagster's GraphQL helper)
+
+OM_ASSET = '{path: ["openmetadata", "lake"]}'
+
+
+def test_dagster_can_reach_openmetadata():
+    """The Dagster services get the OpenMetadata passwords om_sync.py and sync_masks.py log in with."""
+    env = yaml.safe_load((LAKEHOUSE / "compose.yaml").read_text())["x-dagster"]["environment"]
+    assert "OM_ADMIN_PASSWORD" in env and "OM_MCP_PASSWORD" in env
+
+
+def test_daily_lake_syncs_openmetadata_after_gold():
+    """daily_lake (the 05:00 job) includes the openmetadata/lake asset, downstream of gold."""
+    node = graphql(f'{{ assetNodeOrError(assetKey: {OM_ASSET}) {{ ... on AssetNode {{ jobNames '
+                   f'dependencyKeys {{ path }} }} }} }}')["assetNodeOrError"]
+    assert "daily_lake" in node.get("jobNames", []), node
+    assert ["gold", "fct_offender_record"] in [k["path"] for k in node["dependencyKeys"]]
+
+
+def test_daily_run_checks_cube_masks_without_blocking():
+    """A non-blocking check on the asset reports whether Cube's masks still match OpenMetadata, and it passed."""
+    node = graphql(f'{{ assetNodeOrError(assetKey: {OM_ASSET}) {{ ... on AssetNode {{ assetChecksOrError '
+                   f'{{ ... on AssetChecks {{ checks {{ name blocking }} }} }} }} }} }}')["assetNodeOrError"]
+    checks = {c["name"]: c for c in node["assetChecksOrError"]["checks"]}
+    assert checks.get("cube_masks_match_openmetadata", {}).get("blocking") is False, checks
+    runs = graphql(f'{{ assetCheckExecutions(assetKey: {OM_ASSET}, checkName: "cube_masks_match_openmetadata", '
+                   f'limit: 1) {{ evaluation {{ success }} }} }}')["assetCheckExecutions"]
+    assert runs and runs[0]["evaluation"]["success"], runs

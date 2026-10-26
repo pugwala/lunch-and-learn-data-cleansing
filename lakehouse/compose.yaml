@@ -53,6 +53,8 @@ x-dagster: &dagster
     <<: *lake-env
     DAGSTER_HOME: /lake/dagster/home
     DAGSTER_PG_PASSWORD: ${DAGSTER_PG_PASSWORD:?set DAGSTER_PG_PASSWORD in .env}
+    OM_ADMIN_PASSWORD: ${OM_ADMIN_PASSWORD:?set OM_ADMIN_PASSWORD in .env}   # the daily om_sync.py
+    OM_MCP_PASSWORD: ${OM_MCP_PASSWORD:?set OM_MCP_PASSWORD in .env}   # sync_masks.py --check reads as mcp-reader
   volumes:
     - ..:/home/jovyan/course
     - /dev/null:/home/jovyan/course/lakehouse/.env:ro   # hide secrets; dbt 1.12 auto-loads any .env above its cwd
