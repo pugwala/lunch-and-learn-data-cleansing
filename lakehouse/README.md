@@ -149,11 +149,17 @@ old when it was pinned, and `acceptance/test_pins.py` fails if one doesn't. The 
 | `quay.io/jupyter/pyspark-notebook` | `2026-10-12` | A dated docker-stacks build; until 2026-10-26 it was `latest`, and each rebuild pulled that day's |
 | `postgres` (catalog-pg, catalog-backup) | `17.11-trixie` | PostgreSQL 17.11, released 2026-08-13; the tag names the OS because `17` and `17.11` get rebuilt |
 | `caddy` | `2.11.7` | Released 2026-10-03 |
+| `torch` (CPU build) | `2.14.1` | Released 2026-09-30; from PyTorch's own index, which the date cutoff below can't apply to |
+| `dbt-core` | `1.12.5` | Released 2026-09-15; 1.12.6 (2026-10-14) was pinned earlier without the two-week check |
 | Everything else | as in `compose.yaml` and the Dockerfiles | Each chosen in its phase; the Work Log has the dates |
 
-The lakehouse's own Python packages (`jupyter/requirements-lake.txt`) are pinned with `==` too. The course's
-`requirements.txt` is a course file and stays as the course ships it, so its packages still resolve when the image
-is built.
+Python packages resolve **as of a date**: every `pip install` from PyPI in `jupyter/Dockerfile` runs with
+`--uploaded-prior-to` the `PIP_CUTOFF` build arg, which is the base image's date (`2026-10-12`). So the course's
+open-ended `requirements.txt` (a course file, left as the course ships it) and every transitive dependency resolve
+to what existed then, never to what was uploaded the day of a rebuild; before the cutoff, today's rebuilds had
+pulled spaCy and transformers released that same morning. The lakehouse's own packages
+(`jupyter/requirements-lake.txt`) are pinned with `==` as well, each released before the cutoff (a test checks with
+PyPI). The cutoff is build-only, so the course's setup cells can still install what they need at run time.
 
 ## Querying
 
@@ -391,7 +397,7 @@ docker compose --profile core exec -T catalog-pg dropdb -U postgres ducklake_res
 | Pipeline and data-quality metrics (Pushgateway, run sensors, `monitoring_selftest`): 8 acceptance tests (`pytest lakehouse/acceptance/test_pipeline_metrics.py`), each seen failing first | On the VM |
 | Alerting (Alertmanager 0.34.1, 17 rules): 7 acceptance tests (`pytest lakehouse/acceptance/test_alerting.py`), each seen failing first; a failed `monitoring_selftest` raised `JobFailing` and a passing run resolved it | On the VM |
 | Nightly catalog backup: 6 acceptance tests (`pytest lakehouse/acceptance/test_backup.py`), each seen failing first; a restore drill matched the live catalog row for row | On the VM |
-| Pinned versions: 24 acceptance tests (`pytest lakehouse/acceptance/test_pins.py`) and 2 bats tests, each seen failing first; the jupyter image was shown by layer match to be built on the `2026-10-12` base, and `daily_lake` and `notebook_smoke` succeeded on it | On the VM |
+| Pinned versions: 28 acceptance tests (`pytest lakehouse/acceptance/test_pins.py`) and 2 bats tests, each seen failing first; the jupyter image was shown by layer match to be built on the `2026-10-12` base, and `daily_lake` and `notebook_smoke` succeeded on it | On the VM |
 
 ## Next phases
 

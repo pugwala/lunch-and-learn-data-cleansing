@@ -91,3 +91,57 @@ def test_catalog_runs_the_pinned_postgres():
                           password=os.environ["PGPASSWORD"]) as pg, pg.cursor() as cur:
         cur.execute("SHOW server_version")
         assert cur.fetchone()[0].split()[0] == want
+
+
+# --- Python packages resolve as of a date ----------------------------------------------------------------------
+
+DOCKERFILE = (LAKEHOUSE / "jupyter" / "Dockerfile").read_text()
+# Packages pip installs into the image (the course's open-ended requirements and what they pull in), as opposed to
+# the ones the pinned base image already ships.
+PIP_INSTALLED = ["spacy", "sentence-transformers", "transformers", "tokenizers", "huggingface-hub", "torch",
+                 "scikit-learn", "matplotlib"]
+
+
+def cutoff():
+    """The date the image's pip installs resolve as of (the PIP_CUTOFF build arg), as YYYY-MM-DD."""
+    m = re.search(r"(?m)^ARG PIP_CUTOFF=(\d{4}-\d{2}-\d{2})", DOCKERFILE)
+    assert m, "jupyter/Dockerfile has no PIP_CUTOFF"
+    return m.group(1)
+
+
+def uploaded(name, version):
+    """When PyPI received a release (its earliest file), as YYYY-MM-DD."""
+    import json
+    import urllib.request
+    data = json.loads(urllib.request.urlopen(f"https://pypi.org/pypi/{name}/{version}/json", timeout=30).read())
+    return min(u["upload_time"][:10] for u in data["urls"])
+
+
+def test_pip_resolves_as_of_the_base_image_date():
+    """Every pip install from PyPI in the image uses --uploaded-prior-to the cutoff, which is the base image's date,
+    so the course's open-ended requirements and every transitive dependency are what existed then."""
+    base = re.search(r"(?m)^ARG JUPYTER_BASE_TAG=(\S+)", DOCKERFILE).group(1)
+    assert cutoff() == base
+    for line in re.findall(r"(?m)^RUN pip install .*-r .*$", DOCKERFILE):
+        assert '--uploaded-prior-to "$PIP_CUTOFF"' in line, line
+
+
+def test_torch_is_pinned():
+    """torch comes from PyTorch's CPU index, which the date cutoff can't apply to, so it names its version."""
+    assert re.search(r"(?m)^RUN pip install .*download\.pytorch\.org.* torch==\d+\.\d+\.\d+", DOCKERFILE)
+
+
+def test_lake_pins_predate_the_cutoff():
+    """Each == pin in requirements-lake.txt was on PyPI before the cutoff (else the build couldn't resolve it)."""
+    late = []
+    for name, version in re.findall(r"(?m)^([A-Za-z0-9_.-]+)==(\S+)", (LAKEHOUSE / "jupyter" / "requirements-lake.txt").read_text()):
+        if uploaded(name, version) >= cutoff():
+            late.append(f"{name}=={version}")
+    assert not late, late
+
+
+def test_installed_packages_predate_the_cutoff():
+    """The packages pip put in this image were released before the cutoff, none on the day of a rebuild."""
+    from importlib.metadata import version
+    late = {p: version(p) for p in PIP_INSTALLED if uploaded(p, version(p).split("+")[0]) >= cutoff()}
+    assert not late, late
