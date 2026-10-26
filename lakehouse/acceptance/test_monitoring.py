@@ -162,3 +162,36 @@ def test_tailscale_name_stays_out_of_the_repo():
             text = f.read_text()
             assert not re.search(r"\.ts\.net|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.", text), f
     assert "LAKE_TS_HOST" in (LAKEHOUSE / "monitoring" / "prometheus" / "sites.yml").read_text()
+
+
+# --- the Home Lakehouse dashboard ------------------------------------------------------------------------------
+
+DASHBOARD = LAKEHOUSE / "monitoring" / "grafana" / "dashboards" / "home-lakehouse.json"
+
+
+def panels():
+    """The dashboard's panels (rows excluded), from the JSON in the repo."""
+    import json
+    return [p for p in json.loads(DASHBOARD.read_text())["panels"] if p["type"] != "row"]
+
+
+def test_dashboard_is_provisioned_with_its_three_rows():
+    """Grafana serves "Home Lakehouse" from the repo's JSON, rows Platform, Pipeline and Data quality, as its home."""
+    r = requests.get(f"{GRAFANA}/api/dashboards/uid/home-lakehouse", auth=ADMIN, timeout=30)
+    assert r.status_code == 200, r.text
+    dash = r.json()["dashboard"]
+    assert dash["title"] == "Home Lakehouse"
+    assert [p["title"] for p in dash["panels"] if p["type"] == "row"] == ["Platform", "Pipeline", "Data quality"]
+    assert r.json()["meta"]["provisioned"] is True
+    prefs = requests.get(f"{GRAFANA}/api/org/preferences", auth=ADMIN, timeout=30).json()
+    assert prefs.get("homeDashboardUID") == "home-lakehouse", prefs   # the provisioned one, not a second copy
+    home = requests.get(f"{GRAFANA}/api/dashboards/home", auth=ADMIN, timeout=30).json()
+    assert "/d/home-lakehouse/" in home.get("redirectUri", ""), home
+
+
+def test_every_panel_has_data():
+    """Each panel reads the provisioned Prometheus, and each of its queries returns something today."""
+    for p in panels():
+        assert p["datasource"]["uid"] == "prometheus", p["title"]
+        for t in p["targets"]:
+            assert query(t["expr"]), f'{p["title"]}: {t["expr"]} returned nothing'

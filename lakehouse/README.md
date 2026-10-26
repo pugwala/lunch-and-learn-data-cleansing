@@ -11,7 +11,7 @@ every number matches the Facilitator Guide. dbt builds gold, and Dagster runs it
 
 | Path | What it does |
 | --- | --- |
-| `compose.yaml` | `core` profile: Postgres catalog, Jupyter, Dagster (UI + daemon), a one-shot loader, Cube, Superset, the MCP server, OpenSearch, OpenMetadata (with a one-shot `om-migrate`), Fuseki, Caddy |
+| `compose.yaml` | `core` profile: Postgres catalog, Jupyter, Dagster (UI + daemon), a one-shot loader, Cube, Superset, the MCP server, OpenSearch, OpenMetadata (with a one-shot `om-migrate`), Fuseki, the monitoring stack (Prometheus, node-exporter, cAdvisor, postgres-exporter, blackbox, Pushgateway, Alertmanager, Grafana), the nightly `catalog-backup`, Caddy |
 | `.env.example` | Every setting and secret; copy to `.env` |
 | `postgres/init/` | `01-roles.sh`: `ducklake`, `superset`, `dagster` databases and the `lake_rw` / `lake_ro` roles. `02-dagster.sh`, `03-superset.sh` and `04-openmetadata.sh`: the Dagster, Superset and OpenMetadata roles and databases (safe to re-run) |
 | `jupyter/Dockerfile` | `pyspark-notebook` + course requirements + DuckDB 1.5.6, dbt-duckdb, Dagster; extensions pre-installed. One image for every Python process, so DuckDB versions never drift |
@@ -25,6 +25,9 @@ every number matches the Facilitator Guide. dbt builds gold, and Dagster runs it
 | `scripts/stage_model.py` | Stages session 7's embedding model on the lake disk at a pinned revision (bootstrap.sh runs it) |
 | `mcp/` | The MCP server (`server.py`, Dockerfile, pinned requirements): `query_metric` over Cube, `define_term` over OpenMetadata's glossary |
 | `openmetadata/` | `setup_admin.py` (replaces the default admin password, creates the read-only `mcp-reader`) `om_sync.py` (pushes the glossary, the Sensitivity tags and every lake table into OpenMetadata) and `om_to_rdf.py` (publishes that meaning to Fuseki as RDF) |
+| `monitoring/` | Prometheus config, probe targets and alert rules (`prometheus/`), Alertmanager config (`alertmanager/`), blackbox modules (`blackbox/`), Grafana provisioning, the Home Lakehouse dashboard and `set_home.py` (`grafana/`) |
+| `metrics.py` | `push()`: Dagster's pipeline and data-quality numbers to the Pushgateway (never fails a run) |
+| `backup/backup.sh` | The nightly catalog backup: `pg_dump` of every app database, checked, 14 days kept |
 | `fuseki/` | Apache Jena Fuseki 6.2.0, built from Apache's verified release: `Dockerfile`, `config.ttl` (one dataset; writes need the writer user), `shiro.ini` (no users; admin only inside the container), `start.sh` |
 | `cube/sync_masks.py` | Makes Cube mask exactly the columns OpenMetadata tags `Sensitivity.Restricted` |
 | `glossary/glossary.yml` | The glossary: 14 terms with definitions, synonyms, columns, metrics and typed relations; `om_sync.py` loads it into OpenMetadata |
@@ -49,6 +52,7 @@ every number matches the Facilitator Guide. dbt builds gold, and Dagster runs it
 
 ```
 load_lake ──► parity check (blocking) ──► dbt build (gold models + tests) ──► openmetadata/lake ──► fuseki/glossary
+                                                                              └──► monitoring/data_quality
 ```
 
 - **Parity check fails** → the run fails and gold isn't rebuilt. Silver has already been written; DuckLake time
@@ -95,10 +99,12 @@ What it does, in order:
    set, stops on duplicate keys, asks for the Dagster UI login if it's missing, and keeps `.env` at mode 600.
 5. **Image and services.** Builds the image, starts Postgres, creates the `dagster` role (Postgres runs
    `postgres/init/` only on an empty volume), generates OpenMetadata's own JWT signing keys once (under
-   `/lake/openmetadata/keys`, never in the repo), starts the eleven long-running services by name, and reloads Caddy.
+   `/lake/openmetadata/keys`, never in the repo), starts the twenty long-running services by name, reloads Caddy, makes Prometheus and Alertmanager reread
+   their config (SIGHUP), and restarts Dagster if catalog-pg was recreated (its pooled connections would be dead).
 6. **Lake data and meaning.** Runs the loader if silver or `ref.null_tokens` is missing, stages session 7's model,
    replaces OpenMetadata's default admin password, runs `om_sync.py`, `om_to_rdf.py` (Fuseki's graph), then
-   `cube/sync_masks.py` (restarting Cube if the masks changed), and builds the Trust Test dashboard.
+   `cube/sync_masks.py` (restarting Cube if the masks changed), builds the Trust Test dashboard, and makes Home
+   Lakehouse Grafana's home page.
 7. **Proof.** Waits for every health check, runs the 19 parity tests, and checks that every site answers through
    Caddy, on the Tailscale name with certificate checking on, so an untrusted certificate fails.
 
@@ -123,6 +129,8 @@ break containers' internet lookups. Turn on HTTPS certificates in the Tailscale 
 - `https://<LAKE_TS_HOST>/openmetadata/`: OpenMetadata, its own login
 - `https://<LAKE_TS_HOST>/fuseki/`: Fuseki, SPARQL over the glossary and column tags (reads open, writes need `writer`)
 - `https://<LAKE_TS_HOST>/mcp`: the MCP server, bearer token
+- `https://<LAKE_TS_HOST>/grafana/`: Grafana, its own login (`admin` / `GRAFANA_ADMIN_PASSWORD`)
+- `https://<LAKE_TS_HOST>/prometheus/` and `/alertmanager/`: behind the Dagster basic-auth login
 
 Any device on your tailnet can open them, at home or away, with no hosts entries and no browser warnings. This is
 the only name Caddy serves: the earlier `*.lake.home.arpa` LAN names were retired on 2026-10-25.
@@ -291,13 +299,64 @@ SELECT ?column WHERE {   # restricted columns that hold part of an offender reco
 
 It answers `stg_group` and `stg_status`.
 
+## Monitoring and alerting
+
+Everything reports to Prometheus 3.15.0 on this VM (30 days kept on `/lake/prometheus`), and **Home Lakehouse** at
+`https://<LAKE_TS_HOST>/grafana/` shows it in three rows: platform, pipeline, data quality. A pipeline that succeeds
+while quietly flagging far more records than usual is a failure too, so the data is watched as closely as the
+services. None of the monitoring pieces has a host port (the tailnet can reach anything bound to the VM's
+`0.0.0.0`): Prometheus and Alertmanager are reached only through Caddy, behind the Dagster basic-auth login.
+
+| What | Where it comes from |
+| --- | --- |
+| The VM: CPU, memory, disks (`/`, `/lake`) | node-exporter, reading the host through `/host` (its network counters are its own container's) |
+| Every container, by Compose service | cAdvisor (privileged with the Docker socket: root-equivalent, the usual way to run it) |
+| catalog-pg | postgres-exporter, as `lake_monitor` (`pg_monitor`: statistics, never table data) |
+| Every site, as a tailnet user sees it, and the certificate | blackbox, through Caddy on the Tailscale name (`monitoring/prometheus/sites.yml` holds only a placeholder; `fill-targets.sh` fills it in at run time) |
+| Job outcomes and durations | Dagster's `push_run_success` and `push_run_failure` sensors, through the Pushgateway |
+| Load numbers and quality pass rates | `load_lake` and the `monitoring/data_quality` asset, through the Pushgateway |
+| The nightly catalog backup | `catalog-backup`, through node-exporter's textfile collector |
+
+**Alerts.** 17 rules in `monitoring/prometheus/rules/lakehouse.yml`, with thresholds well clear of today's values:
+platform (a target or site down, the certificate under 14 days, a disk over 85% or 95%, memory under 10%, Postgres
+down), pipeline (a job whose last run failed, `daily_lake` not succeeding in 26 hours, `notebook_smoke` in 8 days),
+data (silver holding fewer rows than bronze, over 10% of records flagged where about 3% is normal, a quality
+dimension under 95%, more than the one expected rule under the floor), backups (none in 26 hours, or the last one
+failed), and **Watchdog**, which always fires on purpose. A healthy lakehouse fires only Watchdog.
+
+Where alerts go isn't decided yet, so Alertmanager sends every one to the `undecided` receiver, which has no
+integrations: alerts show at `/alertmanager/` and in Grafana, and nothing leaves the VM. To start paging, add an
+integration to that receiver in `monitoring/alertmanager/alertmanager.yml` (for PagerDuty, `pagerduty_configs` with
+`routing_key_file` pointing at a file outside the repo) and run `bootstrap.sh`. Once a real receiver exists,
+Watchdog going quiet means alerting itself is down.
+
+**Test an alert.** Launch `monitoring_selftest` in Dagster with config `{"ops": {"selftest": {"config": {"fail":
+true}}}}`: within about a minute `JobFailing` fires for it. Launch it again with `false` and the alert resolves.
+
+**Catalog backups.** `catalog-backup` runs `pg_dump` 17 (the same image as catalog-pg) at 02:00 Central, and at
+start when the newest backup is over 23 hours old, as `lake_backup` (`pg_read_all_data`: reads every database,
+writes nothing). Every app database (`ducklake`, `dagster`, `superset`, `openmetadata_db`) goes to
+`/lake/catalog-backups/<UTC stamp>/` in custom format, read back with `pg_restore --list`, listed in
+`manifest.json`, and kept 14 days. The service runs as uid 999 and the dumps are mode 600: they hold every app
+database, user password hashes included, so notebooks (uid 1000) can see that a backup happened but not read one.
+Roles aren't dumped (that needs a superuser); `postgres/init/` recreates them from `.env`. To restore the catalog
+into a scratch database and compare:
+
+```bash
+dump=$(sudo ls -d /lake/catalog-backups/2*/ | tail -1)ducklake.dump
+docker compose --profile core exec -T catalog-pg createdb -U postgres ducklake_restore_check
+sudo cat "$dump" | docker compose --profile core exec -T catalog-pg pg_restore -U postgres --no-owner --no-privileges -d ducklake_restore_check
+docker compose --profile core exec -T catalog-pg psql -U postgres -d ducklake_restore_check -c 'select count(*) from ducklake_snapshot'
+docker compose --profile core exec -T catalog-pg dropdb -U postgres ducklake_restore_check
+```
+
 ## Test status
 
 | Piece | Where it has run |
 | --- | --- |
 | Loader, 19 parity checks, DuckLake on Postgres, image build, Postgres roles | On the VM |
 | Dagster webserver and daemon with Postgres storage, their healthchecks, Caddy basic auth | On the VM |
-| `scripts/bootstrap.sh`: 37 bats tests (`bats lakehouse/tests/bootstrap.bats`, needs `apt install bats`), each shown to fail when the behaviour it covers is broken | On the VM, with stub commands; never touches the live stack |
+| `scripts/bootstrap.sh`: 49 bats tests (`bats lakehouse/tests/bootstrap.bats`, needs `apt install bats`), each shown to fail when the behaviour it covers is broken | On the VM, with stub commands; never touches the live stack |
 | dbt gold models and their tests (25 today), Dagster job (both jobs, plus the blocking check stopping gold) | Sandbox, against a plain DuckDB file |
 | Cube v1.8.3 over gold, read-only as `lake_ro`, restricted columns masked except for `restricted_reader`: 15 acceptance tests (`pytest lakehouse/acceptance/test_cube.py`); unmasking everyone made 8 of them fail | On the VM |
 | Superset 6.1.0 under `/superset`, Cube as its only database, the Trust Test dashboard: 6 acceptance tests (`pytest lakehouse/acceptance/test_superset.py`); the only-Cube check was shown to fail with a decoy database added | On the VM |
@@ -312,8 +371,15 @@ It answers `stg_group` and `stg_status`.
 | Daily `om_sync` and Fuseki refresh in `daily_lake` (`openmetadata/lake`, `fuseki/glossary`, the non-blocking masks check): 7 acceptance tests across `test_om_sync.py`, `test_glossary_rdf.py` and `test_daily_run.py`, each seen failing first; real runs succeeded | On the VM |
 | Fuseki 6.2.0 under `/fuseki`: 7 acceptance tests (`pytest lakehouse/acceptance/test_fuseki.py`) and 4 bats tests, each seen failing first; removing the writer-only rule made the write test fail | On the VM |
 | Glossary as RDF (`om_to_rdf.py`): 8 acceptance tests (`pytest lakehouse/acceptance/test_glossary_rdf.py`) and 1 bats test, each seen failing first; a stray triple was flagged by `--check` and removed by the next load | On the VM |
+| Platform metrics (Prometheus 3.15.0, node-exporter, cAdvisor), Grafana 13.2.3 and the Home Lakehouse dashboard, Postgres and blackbox probes: 22 acceptance tests (`pytest lakehouse/acceptance/test_monitoring.py`), each seen failing first; stopping Fuseki dropped its probe to 0 and back; every dashboard panel's query returns data | On the VM |
+| Pipeline and data-quality metrics (Pushgateway, run sensors, `monitoring_selftest`): 8 acceptance tests (`pytest lakehouse/acceptance/test_pipeline_metrics.py`), each seen failing first | On the VM |
+| Alerting (Alertmanager 0.34.1, 17 rules): 7 acceptance tests (`pytest lakehouse/acceptance/test_alerting.py`), each seen failing first; a failed `monitoring_selftest` raised `JobFailing` and a passing run resolved it | On the VM |
+| Nightly catalog backup: 6 acceptance tests (`pytest lakehouse/acceptance/test_backup.py`), each seen failing first; a restore drill matched the live catalog row for row | On the VM |
 
 ## Next phases
 
-Phases 0 to 5 are done: OpenMetadata holds the glossary and the sensitivity tags, the tags drive Cube's masks, and
-Fuseki serves the same meaning as SPARQL, all refreshed by the daily run. Next is the monitoring profile. See the plan document for the order and the reasoning.
+Phases 0 to 6 are done: OpenMetadata holds the glossary and the sensitivity tags, the tags drive Cube's masks,
+Fuseki serves the same meaning as SPARQL, and Prometheus, Grafana and Alertmanager watch the platform, the pipeline
+and the data, with a nightly catalog backup. Still open: where alerts go (PagerDuty, email or both). Next is Phase 7,
+upgrades (pin the jupyter base image, which is `pyspark-notebook:latest` today). See the plan document for the order
+and the reasoning.

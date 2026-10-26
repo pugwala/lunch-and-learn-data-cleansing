@@ -1,0 +1,12 @@
+# Dashboards provisioned from the repo (monitoring/grafana/dashboards/, mounted at /etc/grafana/dashboards). They're
+# read-only in the UI: change the JSON and Grafana picks it up within 30 seconds.
+apiVersion: 1
+providers:
+  - name: lakehouse
+    folder: Lakehouse
+    type: file
+    disableDeletion: true
+    allowUiUpdates: false
+    updateIntervalSeconds: 30
+    options:
+      path: /etc/grafana/dashboards

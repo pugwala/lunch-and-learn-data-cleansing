@@ -17,3 +17,5 @@
   labels: {site: prometheus}
 - targets: ["https://LAKE_TS_HOST/grafana/"]
   labels: {site: grafana}
+- targets: ["https://LAKE_TS_HOST/alertmanager/"]
+  labels: {site: alertmanager}

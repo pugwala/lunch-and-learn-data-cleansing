@@ -16,6 +16,7 @@ setup() {
   export FAKE_MOUNT_SRC=/dev/fakelake FAKE_LAKE_DEV='' FAKE_MOUNTED_AT='' FAKE_BUILD_EXIT=0 FAKE_HAVE_DATA=yes
   export FAKE_CURL_DOWN="" FAKE_DASH_EXIT=0 FAKE_MODEL_EXIT=0 FAKE_MASKS_EXIT=0
   export FAKE_MASKS_OUT="Cube masks: in step with OpenMetadata (6 restricted columns masked)"
+  export FAKE_PG_UP=""   # what `up -d --wait catalog-pg` prints; Compose says "Recreated" when it replaced the container
   : > "$FAKE_LOG"
   cat > "$ENV" <<EOF
 POSTGRES_PASSWORD=pg-secret
@@ -51,6 +52,7 @@ make_stubs() {
 case "$*" in
   "compose version"|info)                    exit 0 ;;
   *" build "*)                               exit "$FAKE_BUILD_EXIT" ;;
+  *" up -d --wait catalog-pg"*)              echo "$FAKE_PG_UP" >&2; exit 0 ;;
   *" ps --format {{.Service}} {{.Status}}"*) for s in catalog-pg jupyter dagster-webserver dagster-daemon cube superset mcp opensearch openmetadata-server fuseki prometheus node-exporter cadvisor postgres-exporter blackbox pushgateway catalog-backup alertmanager grafana caddy; do
                                                echo "$s Up 1 minute (healthy)"; done ;;
   *" ps --format {{.Status}} "*)             echo "Up 1 minute (healthy)" ;;
@@ -60,6 +62,7 @@ case "$*" in
   *"openmetadata/setup_admin.py"*)           echo "OpenMetadata admin: password set"; exit 0 ;;
   *"openmetadata/om_to_rdf.py"*)             echo "Fuseki glossary graph: in step with OpenMetadata (715 triples)"; exit 0 ;;
   *"cube/sync_masks.py"*)                    echo "$FAKE_MASKS_OUT"; exit "$FAKE_MASKS_EXIT" ;;
+  *"grafana/set_home.py"*)                   echo "Grafana home: Home Lakehouse"; exit 0 ;;
   *"superset/dashboards.py"*)                 echo "Trust Test dashboard: up to date"; exit "$FAKE_DASH_EXIT" ;;
   *"exec -T jupyter python"*)                cat >/dev/null; echo "$FAKE_HAVE_DATA" ;;
   *pytest*)                                  echo "19 passed in 0.10s" ;;
@@ -225,6 +228,7 @@ set_env()       { sed -i "/^$1=/d" "$ENV"; [ $# = 1 ] || echo "$1=$2" >> "$ENV";
   [[ $closing == *"https://lakehouse.example.invalid/jupyter/"*"https://lakehouse.example.invalid/dagster/"* ]]
   [[ $closing == *"https://lakehouse.example.invalid/openmetadata/"* ]]
   [[ $closing == *"https://lakehouse.example.invalid/fuseki/"* ]]
+  [[ $closing == *"https://lakehouse.example.invalid/grafana/"* ]]
 }
 
 @test "reports an unreachable site as answering 000, once" {
@@ -475,6 +479,37 @@ set_env()       { sed -i "/^$1=/d" "$ENV"; [ $# = 1 ] || echo "$1=$2" >> "$ENV";
   run_bootstrap --check
   called "lakehouse/cube/sync_masks.py --check"
   not_called "sync_masks.py$"
+}
+
+@test "restarts Dagster when catalog-pg was recreated, so it doesn't keep dead pooled connections" {
+  FAKE_PG_UP=" Container lakehouse-catalog-pg-1  Recreated"
+  run_bootstrap
+  [ "$status" -eq 0 ]
+  called "restart dagster-webserver dagster-daemon"
+}
+
+@test "leaves Dagster running when catalog-pg wasn't recreated" {
+  FAKE_PG_UP=" Container lakehouse-catalog-pg-1  Running"
+  run_bootstrap
+  [ "$status" -eq 0 ]
+  not_called "restart dagster-webserver"
+}
+
+@test "makes Prometheus and Alertmanager reread their config on every run" {
+  run_bootstrap
+  [ "$status" -eq 0 ]
+  called "exec -T prometheus sh /etc/prometheus/fill-targets.sh"
+  called "kill -s SIGHUP prometheus alertmanager"
+}
+
+@test "makes Home Lakehouse Grafana's home page, and only checks with --check" {
+  run_bootstrap
+  [ "$status" -eq 0 ]
+  called "exec -T jupyter python lakehouse/monitoring/grafana/set_home.py$"
+  : > "$FAKE_LOG"
+  run_bootstrap --check
+  called "lakehouse/monitoring/grafana/set_home.py --check"
+  not_called "set_home.py$"
 }
 
 @test "restarts cube when sync_masks changed the masks" {

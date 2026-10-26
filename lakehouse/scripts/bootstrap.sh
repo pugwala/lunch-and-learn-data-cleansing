@@ -180,7 +180,7 @@ if [ $CHECK = 0 ]; then
   dc build -q jupyter superset mcp || die "An image build failed (output above)."
   did "image built"
   # Postgres first, so the dagster role exists before Dagster tries to log in.
-  dc up -d --wait catalog-pg >/dev/null 2>&1 || die "catalog-pg didn't become healthy. See: docker compose --profile core logs catalog-pg"
+  pg_up=$(dc up -d --wait catalog-pg 2>&1) || die "catalog-pg didn't become healthy. See: docker compose --profile core logs catalog-pg"
   ok "catalog-pg healthy"
   # postgres/init/ only runs on an empty volume; these scripts are idempotent and re-sync each password from .env.
   for script in "${ROLE_SCRIPTS[@]}"; do
@@ -194,6 +194,16 @@ if [ $CHECK = 0 ]; then
   dc up -d "${SERVICES[@]}" >/dev/null 2>&1 || die "Starting the services failed. Run: docker compose --profile core up -d ${SERVICES[*]}"
   did "running: ${SERVICES[*]}"
   dc exec -T caddy caddy reload --config /etc/caddy/Caddyfile >/dev/null 2>&1 && did "caddy reloaded its Caddyfile" || warn "caddy reload failed"
+  # Prometheus and Alertmanager read their config only at start. Refill the probe targets, then SIGHUP makes both
+  # reread it without restarting, so the metrics have no gap.
+  dc exec -T prometheus sh /etc/prometheus/fill-targets.sh >/dev/null 2>&1 \
+    && dc kill -s SIGHUP prometheus alertmanager >/dev/null 2>&1 \
+    && did "Prometheus and Alertmanager reread their config" || warn "Prometheus or Alertmanager didn't reread its config"
+  # A recreated catalog-pg leaves Dagster holding dead pooled connections: its API answers 500 until they cycle.
+  if grep -q 'catalog-pg.*Recreated' <<< "$pg_up"; then
+    dc restart dagster-webserver dagster-daemon >/dev/null 2>&1 \
+      && did "restarted Dagster (catalog-pg was recreated)" || warn "Dagster didn't restart"
+  fi
 fi
 
 echo "  waiting for health checks (up to 3 minutes)..."
@@ -264,6 +274,12 @@ if [[ $masks == "Cube masks: updated"* ]]; then
   dc restart cube >/dev/null 2>&1 && did "restarted cube with the new masks" || bad "cube didn't restart"
 fi
 
+# Grafana's Home Lakehouse dashboard is provisioned from the repo; set_home.py makes it the home page (an org
+# preference, which provisioning can't set); --check only compares.
+if [ $CHECK = 1 ]; then home=$(dc exec -T jupyter python lakehouse/monitoring/grafana/set_home.py --check 2>&1)
+else home=$(dc exec -T jupyter python lakehouse/monitoring/grafana/set_home.py 2>&1); fi \
+  && ok "$(echo "$home" | tail -1)" || bad "$(echo "$home" | tail -1)"
+
 # Dashboards live in Superset's metadata database. dashboards.py creates or updates them through Superset's API,
 # so a fresh install gets them and a re-run changes nothing; --check only reports what's missing.
 if [ $CHECK = 1 ]; then dash=$(dc exec -T jupyter python lakehouse/superset/dashboards.py --check 2>&1)
@@ -284,7 +300,7 @@ done
 
 echo
 if [ ${#FAILED[@]} = 0 ]; then
-  printf '\033[32mAll checks passed.\033[0m Open https://%s/jupyter/, https://%s/dagster/, https://%s/superset/, https://%s/openmetadata/ and https://%s/fuseki/ (from any device on your tailnet).\n' "$TS_HOST" "$TS_HOST" "$TS_HOST" "$TS_HOST" "$TS_HOST"
+  printf '\033[32mAll checks passed.\033[0m Open https://%s/jupyter/, https://%s/dagster/, https://%s/superset/, https://%s/openmetadata/, https://%s/fuseki/ and https://%s/grafana/ (from any device on your tailnet).\n' "$TS_HOST" "$TS_HOST" "$TS_HOST" "$TS_HOST" "$TS_HOST" "$TS_HOST"
 else
   printf '\033[31m%d check(s) failed:\033[0m\n' ${#FAILED[@]}; printf '  - %s\n' "${FAILED[@]}"; exit 1
 fi
