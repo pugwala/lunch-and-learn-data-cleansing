@@ -48,7 +48,7 @@ make_stubs() {
 case "$*" in
   "compose version"|info)                    exit 0 ;;
   *" build "*)                               exit "$FAKE_BUILD_EXIT" ;;
-  *" ps --format {{.Service}} {{.Status}}"*) for s in catalog-pg jupyter dagster-webserver dagster-daemon cube superset mcp opensearch openmetadata-server fuseki caddy; do
+  *" ps --format {{.Service}} {{.Status}}"*) for s in catalog-pg jupyter dagster-webserver dagster-daemon cube superset mcp opensearch openmetadata-server fuseki prometheus node-exporter cadvisor caddy; do
                                                echo "$s Up 1 minute (healthy)"; done ;;
   *" ps --format {{.Status}} "*)             echo "Up 1 minute (healthy)" ;;
   *"stage_model.py --check"*)                 exit "$FAKE_MODEL_EXIT" ;;
@@ -80,7 +80,7 @@ EOF
   stub curl <<'EOF'
 [ -n "$FAKE_CURL_DOWN" ] && { printf 000; exit 7; }   # like real curl when nothing answers: prints 000 and fails
 case "$*" in
-  *example.invalid/jupyter/*) printf 302 ;; *example.invalid/dagster/*) printf 401 ;; *example.invalid/superset/*) printf 302 ;; *example.invalid/mcp*) printf 401 ;; *example.invalid/openmetadata/*) printf 200 ;; *example.invalid/fuseki/*) printf 200 ;; *) printf 000 ;;
+  *example.invalid/jupyter/*) printf 302 ;; *example.invalid/dagster/*) printf 401 ;; *example.invalid/superset/*) printf 302 ;; *example.invalid/mcp*) printf 401 ;; *example.invalid/openmetadata/*) printf 200 ;; *example.invalid/fuseki/*) printf 200 ;; *example.invalid/prometheus/*) printf 401 ;; *) printf 000 ;;
 esac
 EOF
   stub tailscale <<'EOF'
@@ -203,6 +203,7 @@ set_env()       { sed -i "/^$1=/d" "$ENV"; [ $# = 1 ] || echo "$1=$2" >> "$ENV";
   called "https://lakehouse.example.invalid/mcp"
   called "https://lakehouse.example.invalid/openmetadata/"
   called "https://lakehouse.example.invalid/fuseki/"
+  called "https://lakehouse.example.invalid/prometheus/"
   [ -z "$(grep 'example.invalid/' "$FAKE_LOG" | grep -E 'curl .*-[a-z]*k')" ]   # no -k: the certificate must be trusted
 }
 
@@ -260,11 +261,11 @@ set_env()       { sed -i "/^$1=/d" "$ENV"; [ $# = 1 ] || echo "$1=$2" >> "$ENV";
   not_called " up "
 }
 
-@test "a healthy install passes, starting the eleven services by name and not running the loader" {
+@test "a healthy install passes, starting the fourteen services by name and not running the loader" {
   run_bootstrap
   [ "$status" -eq 0 ]
   [[ $output == *"All checks passed"* ]]
-  called "up -d catalog-pg jupyter dagster-webserver dagster-daemon cube superset mcp opensearch openmetadata-server fuseki caddy"
+  called "up -d catalog-pg jupyter dagster-webserver dagster-daemon cube superset mcp opensearch openmetadata-server fuseki prometheus node-exporter cadvisor caddy"
   not_called "run --rm load-lake"
 }
 
@@ -353,6 +354,12 @@ set_env()       { sed -i "/^$1=/d" "$ENV"; [ $# = 1 ] || echo "$1=$2" >> "$ENV";
   run_bootstrap
   [ "$status" -eq 0 ]
   grep -qE '^FUSEKI_WRITER_PASSWORD=[0-9a-f]{48}$' "$ENV"
+}
+
+@test "creates Prometheus's data folder on the lake disk" {
+  run_bootstrap
+  [ "$status" -eq 0 ]
+  called "mkdir -p $T/lake/prometheus"
 }
 
 @test "creates Fuseki's dataset folder on the lake disk" {

@@ -1,0 +1,21 @@
+# Prometheus for the home-lab lakehouse (Phase 6). Served under /prometheus (--web.external-url in compose.yaml),
+# so its own metrics are at /prometheus/metrics. Every target is on the Compose network; none has a host port.
+global:
+  scrape_interval: 30s
+  evaluation_interval: 30s
+
+scrape_configs:
+  - job_name: prometheus
+    metrics_path: /prometheus/metrics
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  # The VM itself: CPU, memory, load and every filesystem (node-exporter reads the host through /host).
+  - job_name: node
+    static_configs:
+      - targets: ["node-exporter:9100"]
+
+  # Every container, labelled with its Compose service name.
+  - job_name: cadvisor
+    static_configs:
+      - targets: ["cadvisor:8080"]

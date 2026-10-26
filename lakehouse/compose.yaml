@@ -332,6 +332,73 @@ services:
       timeout: 10s
       start_period: 30s
 
+  # ---- Monitoring (Phase 6): checked by acceptance/test_monitoring.py ----------------------------------------
+  # None of these publishes a host port: the tailnet can reach anything bound to the VM's 0.0.0.0, so they stay on
+  # the Compose network, and Prometheus is reached only through Caddy at /prometheus/ (behind basic auth).
+  prometheus:
+    profiles: [core]
+    image: prom/prometheus:${PROMETHEUS_TAG:-v3.15.0}
+    restart: unless-stopped
+    user: "1000:100"
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=30d
+      - --web.external-url=https://${LAKE_TS_HOST:?run scripts/bootstrap.sh, which sets it from Tailscale}/prometheus/
+    volumes:
+      - ./monitoring/prometheus:/etc/prometheus:ro   # the folder, not the file (see caddy)
+      - ${LAKE_ROOT:-/lake}/prometheus:/prometheus
+    expose:
+      - "9090"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:9090/prometheus/-/ready"]
+      interval: 30s
+      timeout: 10s
+      start_period: 30s
+
+  # The VM: reads the host's /proc, /sys and filesystems through /host. With no host network, its network counters
+  # are its own container's; everything else (CPU, memory, load, disks) is the VM's.
+  node-exporter:
+    profiles: [core]
+    image: prom/node-exporter:${NODE_EXPORTER_TAG:-v1.12.1}
+    restart: unless-stopped
+    pid: host
+    command:
+      - --path.rootfs=/host
+      - --collector.filesystem.mount-points-exclude=^/(dev|proc|sys|run|var/lib/docker/.+|var/lib/containerd/.+)($$|/)
+    volumes:
+      - /:/host:ro,rslave
+    expose:
+      - "9100"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:9100/metrics"]
+      interval: 30s
+      timeout: 10s
+
+  # Every container. cAdvisor needs privileged mode and the Docker socket to see them, which makes it root-equivalent
+  # on the VM: the usual way to run it, kept off every network but the Compose one.
+  cadvisor:
+    profiles: [core]
+    image: ghcr.io/google/cadvisor:${CADVISOR_TAG:-v0.60.6}
+    restart: unless-stopped
+    privileged: true
+    devices:
+      - /dev/kmsg
+    command:
+      - --docker_only=true
+      - --housekeeping_interval=30s
+      - --store_container_labels=false
+      - --whitelisted_container_labels=com.docker.compose.service,com.docker.compose.project
+      - --disable_metrics=percpu,process,tcp,udp,referenced_memory,hugetlb,sched,advtcp,resctrl,cpu_topology
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+    expose:
+      - "8080"
+
   caddy:
     profiles: [core]
     image: caddy:${CADDY_TAG:-2}
@@ -355,6 +422,7 @@ services:
       - mcp
       - openmetadata-server
       - fuseki
+      - prometheus
 
 volumes:
   catalog-pg-data:

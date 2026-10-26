@@ -24,7 +24,7 @@ done
 SECRETS=(POSTGRES_PASSWORD LAKE_RW_PASSWORD LAKE_RO_PASSWORD DAGSTER_PG_PASSWORD JUPYTER_TOKEN
          CUBEJS_API_SECRET CUBE_SQL_PASSWORD SUPERSET_SECRET_KEY SUPERSET_PG_PASSWORD SUPERSET_ADMIN_PASSWORD
          MCP_TOKEN OM_DB_PASSWORD OM_ADMIN_PASSWORD OM_FERNET_KEY OM_MCP_PASSWORD FUSEKI_WRITER_PASSWORD)
-SERVICES=(catalog-pg jupyter dagster-webserver dagster-daemon cube superset mcp opensearch openmetadata-server fuseki caddy)   # never a bare `up`: it also runs load-lake
+SERVICES=(catalog-pg jupyter dagster-webserver dagster-daemon cube superset mcp opensearch openmetadata-server fuseki prometheus node-exporter cadvisor caddy)   # never a bare `up`: it also runs load-lake
 ROLE_SCRIPTS=(02-dagster.sh 03-superset.sh 04-openmetadata.sh)   # app roles on catalog-pg; postgres/init/ only runs on an empty volume
 CONTAINER_UID=1000 CONTAINER_GID=100                                    # jovyan:users in the image
 FAILED=()
@@ -75,7 +75,7 @@ Formatting erases a disk, so this script never does it. Once you're sure which d
 Then run this script again."
 fi
 
-for d in landing data notebook-runs catalog-backups models dagster openmetadata fuseki; do
+for d in landing data notebook-runs catalog-backups models dagster openmetadata fuseki prometheus; do
   p="$LAKE_ROOT/$d"
   [ -d "$p" ] || { [ $CHECK = 1 ] && { bad "$p is missing"; continue; }; sudo mkdir -p "$p"; did "created $p"; }
   [ $d = catalog-backups ] && continue                       # host-side pg_dump target, stays root-owned
@@ -274,7 +274,7 @@ res=$(dc exec -T jupyter pytest -q lakehouse/tests 2>&1 | tail -1)
 [[ $res == *passed* && $res != *failed* ]] && ok "parity tests: $res" || bad "parity tests: $res"
 
 # The Tailscale name has a real certificate, so no -k here: a self-signed or wrong certificate fails the check.
-for pair in "jupyter:302" "dagster:401" "superset:302" "mcp:401" "openmetadata:200" "fuseki:200"; do   # 302 = a login redirect, 401 = basic auth or no MCP token
+for pair in "jupyter:302" "dagster:401" "superset:302" "mcp:401" "openmetadata:200" "fuseki:200" "prometheus:401"; do   # 302 = a login redirect, 401 = basic auth or no MCP token
   url="https://$TS_HOST/${pair%%:*}/" want=${pair##*:}
   got=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 --resolve "$TS_HOST:443:127.0.0.1" "$url" || true); got=${got:-000}   # curl prints 000 itself when nothing answers
   [ "$got" = "$want" ] && ok "$url answers $got (trusted certificate)" || bad "$url answers $got, expected $want"

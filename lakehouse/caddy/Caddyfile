@@ -6,6 +6,7 @@
 #   https://<LAKE_TS_HOST>/mcp        MCP server (bearer token MCP_TOKEN, checked by the server itself)
 #   https://<LAKE_TS_HOST>/openmetadata/  OpenMetadata (its own login; BASE_PATH=/openmetadata, so the path is kept)
 #   https://<LAKE_TS_HOST>/fuseki/    Fuseki SPARQL (reads open, writes need its writer user; served under /fuseki)
+#   https://<LAKE_TS_HOST>/prometheus/  Prometheus (basic auth below, the Dagster login; it has none of its own)
 #
 # The tls block gets a real certificate from tailscaled, whose socket compose.yaml mounts in. Without it Caddy asks
 # Let's Encrypt directly, which can't see a private *.ts.net name. No browser warnings, nothing to trust by hand.
@@ -37,5 +38,11 @@
 	}
 	handle /fuseki* {
 		reverse_proxy fuseki:3030
+	}
+	handle /prometheus* {
+		basic_auth {
+			{$DAGSTER_UI_USER} {$DAGSTER_UI_HASH}
+		}
+		reverse_proxy prometheus:9090
 	}
 }
