@@ -139,6 +139,22 @@ Two Compose habits the script follows: `docker compose --profile core up -d` wit
 one-shot `load-lake` loader, so name the services; and `.env` is hidden inside the containers (dbt 1.12 would
 otherwise load every secret in it), so give a container a setting through `compose.yaml`, not `.env` alone.
 
+**Pinned versions.** Nothing floats: every image and base image names an exact release, chosen at least two weeks
+old when it was pinned, and `acceptance/test_pins.py` fails if one doesn't. The pins live in `compose.yaml` (the
+`${X_TAG:-default}` defaults) and the Dockerfiles; `.env` can override one with `X_TAG=<exact release>`, and
+`bootstrap.sh` fails on a floating override (`latest` or a bare major such as `17`), which would undo the pins.
+
+| Image | Pinned at | Notes |
+| --- | --- | --- |
+| `quay.io/jupyter/pyspark-notebook` | `2026-10-12` | A dated docker-stacks build; until 2026-10-26 it was `latest`, and each rebuild pulled that day's |
+| `postgres` (catalog-pg, catalog-backup) | `17.11-trixie` | PostgreSQL 17.11, released 2026-08-13; the tag names the OS because `17` and `17.11` get rebuilt |
+| `caddy` | `2.11.7` | Released 2026-10-03 |
+| Everything else | as in `compose.yaml` and the Dockerfiles | Each chosen in its phase; the Work Log has the dates |
+
+The lakehouse's own Python packages (`jupyter/requirements-lake.txt`) are pinned with `==` too. The course's
+`requirements.txt` is a course file and stays as the course ships it, so its packages still resolve when the image
+is built.
+
 ## Querying
 
 From a notebook, the quickest way is SQL. One line connects jupysql to the lake, read-only, as `lake_ro`:
@@ -356,7 +372,7 @@ docker compose --profile core exec -T catalog-pg dropdb -U postgres ducklake_res
 | --- | --- |
 | Loader, 19 parity checks, DuckLake on Postgres, image build, Postgres roles | On the VM |
 | Dagster webserver and daemon with Postgres storage, their healthchecks, Caddy basic auth | On the VM |
-| `scripts/bootstrap.sh`: 49 bats tests (`bats lakehouse/tests/bootstrap.bats`, needs `apt install bats`), each shown to fail when the behaviour it covers is broken | On the VM, with stub commands; never touches the live stack |
+| `scripts/bootstrap.sh`: 51 bats tests (`bats lakehouse/tests/bootstrap.bats`, needs `apt install bats`), each shown to fail when the behaviour it covers is broken | On the VM, with stub commands; never touches the live stack |
 | dbt gold models and their tests (25 today), Dagster job (both jobs, plus the blocking check stopping gold) | Sandbox, against a plain DuckDB file |
 | Cube v1.8.3 over gold, read-only as `lake_ro`, restricted columns masked except for `restricted_reader`: 15 acceptance tests (`pytest lakehouse/acceptance/test_cube.py`); unmasking everyone made 8 of them fail | On the VM |
 | Superset 6.1.0 under `/superset`, Cube as its only database, the Trust Test dashboard: 6 acceptance tests (`pytest lakehouse/acceptance/test_superset.py`); the only-Cube check was shown to fail with a decoy database added | On the VM |
@@ -375,11 +391,13 @@ docker compose --profile core exec -T catalog-pg dropdb -U postgres ducklake_res
 | Pipeline and data-quality metrics (Pushgateway, run sensors, `monitoring_selftest`): 8 acceptance tests (`pytest lakehouse/acceptance/test_pipeline_metrics.py`), each seen failing first | On the VM |
 | Alerting (Alertmanager 0.34.1, 17 rules): 7 acceptance tests (`pytest lakehouse/acceptance/test_alerting.py`), each seen failing first; a failed `monitoring_selftest` raised `JobFailing` and a passing run resolved it | On the VM |
 | Nightly catalog backup: 6 acceptance tests (`pytest lakehouse/acceptance/test_backup.py`), each seen failing first; a restore drill matched the live catalog row for row | On the VM |
+| Pinned versions: 24 acceptance tests (`pytest lakehouse/acceptance/test_pins.py`) and 2 bats tests, each seen failing first; the jupyter image was shown by layer match to be built on the `2026-10-12` base, and `daily_lake` and `notebook_smoke` succeeded on it | On the VM |
 
 ## Next phases
 
 Phases 0 to 6 are done: OpenMetadata holds the glossary and the sensitivity tags, the tags drive Cube's masks,
 Fuseki serves the same meaning as SPARQL, and Prometheus, Grafana and Alertmanager watch the platform, the pipeline
-and the data, with a nightly catalog backup. Still open: where alerts go (PagerDuty, email or both). Next is Phase 7,
-upgrades (pin the jupyter base image, which is `pyspark-notebook:latest` today). See the plan document for the order
-and the reasoning.
+and the data, with a nightly catalog backup. Still open: where alerts go (PagerDuty, email or both). Phase 7, upgrades,
+has started: every image is pinned. DuckDB 2.0 and DuckLake 1.1 wait for DuckDB 2.0.1 to be out at least two weeks
+(2.0.0 shipped 2026-10-21), with a Proxmox snapshot first, since older DuckDB can't read 2.0 files. See the plan
+document for the order and the reasoning.

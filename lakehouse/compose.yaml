@@ -65,7 +65,7 @@ x-dagster: &dagster
 services:
   catalog-pg:
     profiles: [core]
-    image: postgres:${POSTGRES_TAG:-17}
+    image: postgres:${POSTGRES_TAG:-17.11-trixie}
     restart: unless-stopped
     environment:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
@@ -93,7 +93,7 @@ services:
       context: ..
       dockerfile: lakehouse/jupyter/Dockerfile
       args:
-        JUPYTER_BASE_TAG: ${JUPYTER_BASE_TAG:-latest}
+        JUPYTER_BASE_TAG: ${JUPYTER_BASE_TAG:-2026-10-12}
     image: lnl-jupyter:local
     restart: unless-stopped
     depends_on:
@@ -498,7 +498,7 @@ services:
   # catalog-pg, so pg_dump matches the server. Unhealthy when no backup has completed in 26 hours.
   catalog-backup:
     profiles: [core]
-    image: postgres:${POSTGRES_TAG:-17}
+    image: postgres:${POSTGRES_TAG:-17.11-trixie}
     restart: unless-stopped
     user: "999:999"   # the image's postgres user, not the notebooks' 1000: the dumps hold every app database
     depends_on:
@@ -543,7 +543,7 @@ services:
 
   caddy:
     profiles: [core]
-    image: caddy:${CADDY_TAG:-2}
+    image: caddy:${CADDY_TAG:-2.11.7}
     restart: unless-stopped
     environment:
       LAKE_TS_HOST: ${LAKE_TS_HOST:?run scripts/bootstrap.sh, which sets it from Tailscale}

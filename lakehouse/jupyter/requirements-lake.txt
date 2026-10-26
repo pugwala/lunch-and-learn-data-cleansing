@@ -1,5 +1,5 @@
 duckdb==1.5.6
-jupysql>=0.10
+jupysql==0.11.1
 # jupysql imports pyspark's Spark Connect support, which in pyspark 4.2 needs zstandard: without it %load_ext sql
 # prints "Skipping doctests: No module named 'zstandard'" in notebooks and fails outright under pytest.
 zstandard==0.25.0
@@ -10,9 +10,9 @@ pyparsing==3.3.3
 # lakehouse/metrics.py pushes to the Pushgateway with prometheus_client, already in the image through jupyter_server;
 # pinned at that version.
 prometheus_client==0.26.0
-duckdb-engine>=0.13
-papermill>=2.6
-pytest>=8
+duckdb-engine==0.17.0
+papermill==2.7.0
+pytest==9.1.1
 # Gold layer and scheduling. Pinned to the versions the lakehouse was tested with.
 dbt-core==1.12.6
 dbt-duckdb==1.11.0

@@ -512,6 +512,20 @@ set_env()       { sed -i "/^$1=/d" "$ENV"; [ $# = 1 ] || echo "$1=$2" >> "$ENV";
   not_called "set_home.py$"
 }
 
+@test "fails when .env overrides an image with a floating tag" {
+  echo "CADDY_TAG=2" >> "$ENV"
+  run_bootstrap
+  [ "$status" -eq 1 ]
+  [[ $output == *"CADDY_TAG=2 floats"* ]]
+}
+
+@test "accepts an exact image tag in .env" {
+  echo "CADDY_TAG=2.11.7" >> "$ENV"
+  run_bootstrap
+  [ "$status" -eq 0 ]
+  [[ $output != *"floats"* ]]
+}
+
 @test "restarts cube when sync_masks changed the masks" {
   FAKE_MASKS_OUT="Cube masks: updated (mask gender); restart cube to apply"
   run_bootstrap

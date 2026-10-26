@@ -113,6 +113,13 @@ dups=$(grep -oE '^[A-Z_]+=' .env | sort | uniq -d | tr -d = | tr '\n' ' ')
 Compose uses the LAST one, which can silently disagree with what Postgres has. Delete the stale line(s), then re-run."
 ok "no duplicate keys"
 
+# Image tags are pinned in compose.yaml and the Dockerfiles. An override in .env wins over them, so a floating one
+# (latest, or a bare major such as 17) would quietly undo the pins.
+floating=$(grep -E '^[A-Z_]+_TAG=(latest|v?[0-9]+)$' .env || true)
+if [ -n "$floating" ]; then
+  while read -r line; do bad "$line floats: set an exact release in .env, or delete the line to use the pin"; done <<< "$floating"
+else ok "no floating image tags in .env"; fi
+
 # set_env_key KEY VALUE: set KEY in .env, replacing its line or adding one. Rewrites through a temp file and cats it
 # back, so .env keeps its inode, owner and mode (sed -i would not).
 set_env_key() {

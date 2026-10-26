@@ -1,7 +1,8 @@
 # Jupyter for the course notebooks and the lakehouse. Built from the repo root (see compose.yaml).
 # The base image ships Java and Spark, so session 5 runs as-is. The same image runs Dagster, so every Python
 # process in the stack has the same DuckDB.
-ARG JUPYTER_BASE_TAG=latest
+# A dated docker-stacks build at least two weeks old, never latest: a rebuild must not bring new software.
+ARG JUPYTER_BASE_TAG=2026-10-12
 FROM quay.io/jupyter/pyspark-notebook:${JUPYTER_BASE_TAG}
 
 # CPU-only PyTorch first. sentence-transformers (session 7) would otherwise pull the CUDA build: about 5 GB of
