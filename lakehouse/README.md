@@ -11,7 +11,7 @@ every number matches the Facilitator Guide. dbt builds gold, and Dagster runs it
 
 | Path | What it does |
 | --- | --- |
-| `compose.yaml` | `core` profile: Postgres catalog, Jupyter, Dagster (UI + daemon), a one-shot loader, Caddy |
+| `compose.yaml` | `core` profile: Postgres catalog, Jupyter, Dagster (UI + daemon), a one-shot loader, Cube, Superset, the MCP server, Caddy |
 | `.env.example` | Every setting and secret; copy to `.env` |
 | `postgres/init/` | `01-roles.sh`: `ducklake`, `superset`, `dagster` databases and the `lake_rw` / `lake_ro` roles. `02-dagster.sh` and `03-superset.sh`: the Dagster and Superset roles (safe to re-run) |
 | `jupyter/Dockerfile` | `pyspark-notebook` + course requirements + DuckDB 1.5.6, dbt-duckdb, Dagster; extensions pre-installed. One image for every Python process, so DuckDB versions never drift |
@@ -23,6 +23,8 @@ every number matches the Facilitator Guide. dbt builds gold, and Dagster runs it
 | `orchestration/` | Dagster definitions and instance config |
 | `scripts/set-dagster-ui-password.sh` | Puts a login in front of the Dagster UI (it has none of its own) |
 | `scripts/stage_model.py` | Stages session 7's embedding model on the lake disk at a pinned revision (bootstrap.sh runs it) |
+| `mcp/` | The MCP server (`server.py`, Dockerfile, pinned requirements): `query_metric` over Cube, `define_term` over the glossary |
+| `glossary/glossary.yml` | The glossary: 14 terms with definitions, synonyms, columns, metrics and typed relations; OpenMetadata loads it in Phase 5 |
 | `08_from_lake.ipynb` | Session 8 for the lakehouse: the Trust Test answered in SQL over silver, checked against `gold.trust_test` |
 
 ## Tables
@@ -197,13 +199,30 @@ In SQL Lab, query cubes with Cube's SQL: `SELECT MEASURE(record_count) FROM offe
 Compose mounts `caddy/` and `superset/` as **folders**, not single files. Editors save by writing a new file, and a
 single-file bind mount keeps showing the old one, which is how a Caddyfile change once went unseen.
 
+### MCP: governed metrics and definitions for an AI agent
+
+An MCP server at `https://<LAKE_TS_HOST>/mcp` gives an agent two tools instead of SQL access:
+
+- `query_metric(metric, group_by=[], limit=100)`: a Cube measure by name (`record_count`, `total_restitution`,
+  `answers_changed`, ...), optionally grouped by dimensions (`custody_level`, `unit_name`, `offense_against`, ...).
+  It goes through Cube's REST API, so it sees only Cube's model; an unknown name lists the real ones.
+- `define_term(term)`: a glossary term from `glossary/glossary.yml`, matched by name or synonym in any case.
+
+Every request needs `Authorization: Bearer <MCP_TOKEN>` (from `.env`); the container holds no lake credentials.
+To connect Claude Code on a machine on the tailnet, without the token ever appearing on screen:
+
+```bash
+claude mcp add --transport http lakehouse https://<LAKE_TS_HOST>/mcp \
+  --header "Authorization: Bearer $(ssh <vm> 'grep ^MCP_TOKEN= ~/lunch-and-learn-data-cleansing/lakehouse/.env | cut -d= -f2-')"
+```
+
 ## Test status
 
 | Piece | Where it has run |
 | --- | --- |
 | Loader, 19 parity checks, DuckLake on Postgres, image build, Postgres roles | On the VM |
 | Dagster webserver and daemon with Postgres storage, their healthchecks, Caddy basic auth | On the VM |
-| `scripts/bootstrap.sh`: 25 bats tests (`bats lakehouse/tests/bootstrap.bats`, needs `apt install bats`), each shown to fail when the behaviour it covers is broken | On the VM, with stub commands; never touches the live stack |
+| `scripts/bootstrap.sh`: 26 bats tests (`bats lakehouse/tests/bootstrap.bats`, needs `apt install bats`), each shown to fail when the behaviour it covers is broken | On the VM, with stub commands; never touches the live stack |
 | dbt gold models and their tests (25 today), Dagster job (both jobs, plus the blocking check stopping gold) | Sandbox, against a plain DuckDB file |
 | Cube v1.8.3 over gold, read-only as `lake_ro`: 6 acceptance tests (`pytest lakehouse/acceptance/test_cube.py`); the restricted-column check was shown to fail on a deliberate leak | On the VM |
 | Superset 6.1.0 under `/superset`, Cube as its only database, the Trust Test dashboard: 6 acceptance tests (`pytest lakehouse/acceptance/test_superset.py`); the only-Cube check was shown to fail with a decoy database added | On the VM |
@@ -211,9 +230,10 @@ single-file bind mount keeps showing the old one, which is how a Caddyfile chang
 | Trust Test from loader to dashboard (`silver.trust_test` → `gold.trust_test` → Cube → Superset): 1 parity check, 4 acceptance tests and 3 bats tests, each shown failing before the code existed | On the VM |
 | `%load_ext lakehouse.sql_magic` (jupysql, read-only as `lake_ro`): 6 acceptance tests (`pytest lakehouse/acceptance/test_sql.py`), plus a real notebook kernel run from outside the repo; the password and read-only checks were shown to fail on deliberate breaks | On the VM |
 | Phase 3 notebooks: model staged offline, `08_from_lake.ipynb`, the `notebook_smoke` job: 7 acceptance tests (`pytest lakehouse/acceptance/test_notebooks.py`) and 3 bats tests, each seen failing first; the first smoke run (all 8 notebooks, 110 s) passed with session 5's 22 of 22 reconciliation and session 6's F1 0.898 | On the VM |
+| MCP server (`query_metric`, `define_term`): 13 acceptance tests (`pytest lakehouse/acceptance/test_mcp.py`) and 4 bats tests, each seen failing first; the token check and synonym matching were shown to fail on deliberate breaks; checked end to end through Caddy (total restitution 1,333,587,950.77) | On the VM |
 
 ## Next phases
 
-Phases 0 to 3 are done and Phase 4 lacks only the MCP tools. Then OpenMetadata (ontology), then the monitoring
+Phases 0 to 4 are done. Next is OpenMetadata (ontology, Phase 5), which takes over the glossary, then the monitoring
 profile. See the plan
 document for the order and the reasoning.

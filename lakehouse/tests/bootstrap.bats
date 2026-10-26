@@ -27,6 +27,7 @@ CUBE_SQL_PASSWORD=cube-sql-secret
 SUPERSET_SECRET_KEY=superset-key
 SUPERSET_PG_PASSWORD=superset-pg-secret
 SUPERSET_ADMIN_PASSWORD=superset-admin-secret
+MCP_TOKEN=mcp-secret
 DAGSTER_UI_USER=admin
 DAGSTER_UI_HASH='\$2a\$14\$fakehash'
 LAKE_ROOT=$T/lake
@@ -41,7 +42,7 @@ make_stubs() {
 case "$*" in
   "compose version"|info)                    exit 0 ;;
   *" build "*)                               exit "$FAKE_BUILD_EXIT" ;;
-  *" ps --format {{.Service}} {{.Status}}"*) for s in catalog-pg jupyter dagster-webserver dagster-daemon cube superset caddy; do
+  *" ps --format {{.Service}} {{.Status}}"*) for s in catalog-pg jupyter dagster-webserver dagster-daemon cube superset mcp caddy; do
                                                echo "$s Up 1 minute (healthy)"; done ;;
   *" ps --format {{.Status}} "*)             echo "Up 1 minute (healthy)" ;;
   *"stage_model.py --check"*)                 exit "$FAKE_MODEL_EXIT" ;;
@@ -69,7 +70,7 @@ EOF
   stub curl <<'EOF'
 [ -n "$FAKE_CURL_DOWN" ] && { printf 000; exit 7; }   # like real curl when nothing answers: prints 000 and fails
 case "$*" in
-  *example.invalid/jupyter/*) printf 302 ;; *example.invalid/dagster/*) printf 401 ;; *example.invalid/superset/*) printf 302 ;; *) printf 000 ;;
+  *example.invalid/jupyter/*) printf 302 ;; *example.invalid/dagster/*) printf 401 ;; *example.invalid/superset/*) printf 302 ;; *example.invalid/mcp*) printf 401 ;; *) printf 000 ;;
 esac
 EOF
   stub tailscale <<'EOF'
@@ -156,10 +157,17 @@ set_env()       { sed -i "/^$1=/d" "$ENV"; [ $# = 1 ] || echo "$1=$2" >> "$ENV";
   grep -qE '^SUPERSET_ADMIN_PASSWORD=[0-9a-f]{48}$' "$ENV"
 }
 
-@test "builds both local images: jupyter and superset" {
+@test "generates the MCP token when an older .env lacks it" {
+  set_env MCP_TOKEN
   run_bootstrap
   [ "$status" -eq 0 ]
-  called "build -q jupyter superset"
+  grep -qE '^MCP_TOKEN=[0-9a-f]{48}$' "$ENV"
+}
+
+@test "builds the three local images: jupyter, superset and mcp" {
+  run_bootstrap
+  [ "$status" -eq 0 ]
+  called "build -q jupyter superset mcp"
 }
 
 @test "creates both app roles on catalog-pg: dagster and superset" {
@@ -182,6 +190,7 @@ set_env()       { sed -i "/^$1=/d" "$ENV"; [ $# = 1 ] || echo "$1=$2" >> "$ENV";
   called "https://lakehouse.example.invalid/jupyter/"
   called "https://lakehouse.example.invalid/dagster/"
   called "https://lakehouse.example.invalid/superset/"
+  called "https://lakehouse.example.invalid/mcp"
   [ -z "$(grep 'example.invalid/' "$FAKE_LOG" | grep -E 'curl .*-[a-z]*k')" ]   # no -k: the certificate must be trusted
 }
 
@@ -237,11 +246,11 @@ set_env()       { sed -i "/^$1=/d" "$ENV"; [ $# = 1 ] || echo "$1=$2" >> "$ENV";
   not_called " up "
 }
 
-@test "a healthy install passes, starting the seven services by name and not running the loader" {
+@test "a healthy install passes, starting the eight services by name and not running the loader" {
   run_bootstrap
   [ "$status" -eq 0 ]
   [[ $output == *"All checks passed"* ]]
-  called "up -d catalog-pg jupyter dagster-webserver dagster-daemon cube superset caddy"
+  called "up -d catalog-pg jupyter dagster-webserver dagster-daemon cube superset mcp caddy"
   not_called "run --rm load-lake"
 }
 

@@ -3,6 +3,7 @@
 #   https://<LAKE_TS_HOST>/jupyter/   Jupyter (token login)
 #   https://<LAKE_TS_HOST>/dagster/   Dagster (basic auth below; Dagster has no login of its own)
 #   https://<LAKE_TS_HOST>/superset/  Superset (its own login; SUPERSET_APP_ROOT=/superset, so the path is kept)
+#   https://<LAKE_TS_HOST>/mcp        MCP server (bearer token MCP_TOKEN, checked by the server itself)
 #
 # The tls block gets a real certificate from tailscaled, whose socket compose.yaml mounts in. Without it Caddy asks
 # Let's Encrypt directly, which can't see a private *.ts.net name. No browser warnings, nothing to trust by hand.
@@ -25,5 +26,8 @@
 	}
 	handle /superset* {
 		reverse_proxy superset:8088
+	}
+	handle /mcp* {
+		reverse_proxy mcp:8000
 	}
 }

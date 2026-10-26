@@ -1,0 +1,134 @@
+# The lakehouse glossary: what the mock data's terms mean and how they relate. The MCP tool define_term serves it
+# now; Phase 5 loads the same file into OpenMetadata's glossary. Everything here describes the fictional course
+# data. Relation types: identifies, partOf, broader (a wider category), relatedTo.
+# columns: names in gold.fct_offender_record and Cube (dimensions); metrics: Cube measures to ask query_metric for.
+
+terms:
+  - name: Offender Record
+    definition: >
+      One incarceration record in the mock dataset: who is held, where, for what offense, and the custody and
+      conduct details that go with it. A person can have several records over time, so counting records is not
+      counting people.
+    synonyms: [record, offender record]
+    metrics: [record_count, records_with_exceptions]
+    columns: [offender_number]
+
+  - name: Offender Number
+    definition: >
+      The record's ID: 8 digits with leading zeros as people write it (02381457), stored as a whole number
+      (BIGINT). Never repeated, so it identifies exactly one record. Shown to people padded back to 8 digits.
+    synonyms: [record ID, offender ID]
+    columns: [offender_number]
+    relations:
+      - {type: identifies, term: Offender Record}
+
+  - name: SID Number
+    definition: >
+      The person's ID: one SID for life, the same on every record that person has. Use it to count people; use
+      the Offender Number to count records. Some records arrive without one.
+    synonyms: [SID, person ID]
+    columns: [sid_number]
+    relations:
+      - {type: partOf, term: Offender Record}
+
+  - name: Unit
+    definition: >
+      Where the record is housed: one of 106 fictional units, each with a name and a three-letter code. Source
+      files spell units hundreds of ways; the unit crosswalk maps them to one name and code.
+    synonyms: [facility, unit location]
+    columns: [unit_code, unit_name]
+    relations:
+      - {type: partOf, term: Offender Record}
+
+  - name: Custody Level
+    definition: >
+      How closely a record is supervised, G1 (least) to G5 (most). An ordered code: G3 is between G2 and G4, so
+      sort by its rank, not alphabetically.
+    synonyms: [custody]
+    columns: [custody_level]
+    relations:
+      - {type: partOf, term: Offender Record}
+
+  - name: Threat Level
+    definition: >
+      The assessed risk the person poses, as an ordered code. Like custody level, compare by rank.
+    synonyms: [threat]
+    columns: [threat_level]
+    relations:
+      - {type: partOf, term: Offender Record}
+
+  - name: STG Affiliation
+    definition: >
+      Membership in a security threat group, here fictional villain groups, with a status (Confirmed, Suspected,
+      Former, Unverified). NONE and N/A mean no known affiliation, a real answer, not missing data. Restricted:
+      not in Cube's model until Phase 5 adds masking.
+    synonyms: [STG, gang affiliation, security threat group]
+    columns: [stg_group, stg_status]
+    sensitivity: restricted
+    relations:
+      - {type: partOf, term: Offender Record}
+
+  - name: Offense Code
+    definition: >
+      The FBI NIBRS code for the primary offense (13A, 09B, 290). Codes arrive damaged (13a, 13-A, 9B, 290.0);
+      session 2 standardizes them through the NIBRS crosswalk and flags what it can't map.
+    synonyms: [NIBRS code, offense]
+    columns: [offense_code]
+    relations:
+      - {type: broader, term: Offense-Against Category}
+      - {type: partOf, term: Offender Record}
+
+  - name: Offense-Against Category
+    definition: >
+      What an offense is against, from the NIBRS list: Person, Property, Society, or Group B. Every offense code
+      belongs to one category.
+    synonyms: [crime against, offense against]
+    columns: [offense_against]
+
+  - name: Violence Code
+    definition: >
+      NV (nonviolent) or V1 to V3, increasing violence. Checked against the offense: nearly every crime against a
+      person is V2 or V3, and the 228 records that disagree are flagged, not fixed.
+    synonyms: [violence]
+    columns: [violence_code]
+    relations:
+      - {type: relatedTo, term: Offense Code}
+      - {type: partOf, term: Offender Record}
+
+  - name: Restitution
+    definition: >
+      Money owed, as an exact decimal (never a float). Credits are negative; source files write money six ways,
+      including (12.00) for a credit and a letter O for a zero, which is flagged rather than guessed.
+    synonyms: [restitution owed]
+    metrics: [total_restitution]
+    columns: [restitution_owed]
+    relations:
+      - {type: partOf, term: Offender Record}
+
+  - name: Escape Risk
+    definition: >
+      Yes or no. Source files mix Y/N with T/F, Yes/No and lowercase; session 4 maps every spelling explicitly and
+      flags the values that aren't answers.
+    synonyms: [escape]
+    columns: [escape_risk]
+    relations:
+      - {type: partOf, term: Offender Record}
+
+  - name: Protective Custody
+    definition: >
+      Yes or no: the person is housed apart for their own safety. Single-character Y/N from one system mixed with
+      T/F from another, mapped explicitly in session 4.
+    synonyms: [PC]
+    columns: [protective_custody]
+    relations:
+      - {type: partOf, term: Offender Record}
+
+  - name: Conduct Note
+    definition: >
+      Free text an officer writes about a person's behavior. Kept in silver only, never in gold or Cube: it can
+      name people. Sessions 6 and 7 classify it, scored against an answer key.
+    synonyms: [officer note, conduct notes]
+    columns: []
+    sensitivity: restricted
+    relations:
+      - {type: partOf, term: Offender Record}

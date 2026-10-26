@@ -22,8 +22,9 @@ for arg in "$@"; do
 done
 
 SECRETS=(POSTGRES_PASSWORD LAKE_RW_PASSWORD LAKE_RO_PASSWORD DAGSTER_PG_PASSWORD JUPYTER_TOKEN
-         CUBEJS_API_SECRET CUBE_SQL_PASSWORD SUPERSET_SECRET_KEY SUPERSET_PG_PASSWORD SUPERSET_ADMIN_PASSWORD)
-SERVICES=(catalog-pg jupyter dagster-webserver dagster-daemon cube superset caddy)   # never a bare `up`: it also runs load-lake
+         CUBEJS_API_SECRET CUBE_SQL_PASSWORD SUPERSET_SECRET_KEY SUPERSET_PG_PASSWORD SUPERSET_ADMIN_PASSWORD
+         MCP_TOKEN)
+SERVICES=(catalog-pg jupyter dagster-webserver dagster-daemon cube superset mcp caddy)   # never a bare `up`: it also runs load-lake
 ROLE_SCRIPTS=(02-dagster.sh 03-superset.sh)   # app roles on catalog-pg; postgres/init/ only runs on an empty volume
 CONTAINER_UID=1000 CONTAINER_GID=100                                    # jovyan:users in the image
 FAILED=()
@@ -152,8 +153,8 @@ lock_env
 # ---------------------------------------------------------------------------------------------------------------
 step "5/7 Image and services"
 if [ $CHECK = 0 ]; then
-  echo "  building lnl-jupyter:local and lnl-superset:local (cached layers make this quick after the first time)..."
-  dc build -q jupyter superset || die "An image build failed (output above)."
+  echo "  building lnl-jupyter:local, lnl-superset:local and lnl-mcp:local (cached layers make this quick after the first time)..."
+  dc build -q jupyter superset mcp || die "An image build failed (output above)."
   did "image built"
   # Postgres first, so the dagster role exists before Dagster tries to log in.
   dc up -d --wait catalog-pg >/dev/null 2>&1 || die "catalog-pg didn't become healthy. See: docker compose --profile core logs catalog-pg"
@@ -225,7 +226,7 @@ res=$(dc exec -T jupyter pytest -q lakehouse/tests 2>&1 | tail -1)
 [[ $res == *passed* && $res != *failed* ]] && ok "parity tests: $res" || bad "parity tests: $res"
 
 # The Tailscale name has a real certificate, so no -k here: a self-signed or wrong certificate fails the check.
-for pair in "jupyter:302" "dagster:401" "superset:302"; do   # 302 = a login redirect, 401 = Caddy basic auth
+for pair in "jupyter:302" "dagster:401" "superset:302" "mcp:401"; do   # 302 = a login redirect, 401 = basic auth or no MCP token
   url="https://$TS_HOST/${pair%%:*}/" want=${pair##*:}
   got=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 --resolve "$TS_HOST:443:127.0.0.1" "$url" || true); got=${got:-000}   # curl prints 000 itself when nothing answers
   [ "$got" = "$want" ] && ok "$url answers $got (trusted certificate)" || bad "$url answers $got, expected $want"

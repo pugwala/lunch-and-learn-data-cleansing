@@ -72,6 +72,7 @@ services:
       JUPYTER_TOKEN: ${JUPYTER_TOKEN:?set JUPYTER_TOKEN in .env}
       CUBE_SQL_PASSWORD: ${CUBE_SQL_PASSWORD:?set CUBE_SQL_PASSWORD in .env}   # for queries and acceptance tests via Cube
       SUPERSET_ADMIN_PASSWORD: ${SUPERSET_ADMIN_PASSWORD:?set SUPERSET_ADMIN_PASSWORD in .env}   # for the Superset acceptance test
+      MCP_TOKEN: ${MCP_TOKEN:?set MCP_TOKEN in .env}   # for the MCP acceptance test
     command: ["start-notebook.py", "--ServerApp.base_url=/jupyter/"]   # served at https://<tailscale name>/jupyter/
     volumes:
       - ..:/home/jovyan/course
@@ -187,6 +188,33 @@ services:
       timeout: 10s
       start_period: 120s
 
+  # MCP server: query_metric over Cube's REST API, define_term over glossary/glossary.yml (see mcp/server.py).
+  # Holds no lake credentials, only its bearer token and Cube's API secret, so Cube is its one way to the data.
+  # Served at https://<LAKE_TS_HOST>/mcp through Caddy. Checked by acceptance/test_mcp.py.
+  mcp:
+    profiles: [core]
+    build:
+      context: ./mcp
+    image: lnl-mcp:local
+    restart: unless-stopped
+    depends_on:
+      cube:
+        condition: service_healthy
+    environment:
+      MCP_TOKEN: ${MCP_TOKEN:?set MCP_TOKEN in .env}
+      CUBEJS_API_SECRET: ${CUBEJS_API_SECRET:?set CUBEJS_API_SECRET in .env}
+      LAKE_TS_HOST: ${LAKE_TS_HOST:?run scripts/bootstrap.sh, which sets it from Tailscale}
+    volumes:
+      - ./mcp:/app:ro              # folders, not single files, so edits are seen (see caddy)
+      - ./glossary:/glossary:ro
+    expose:
+      - "8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      start_period: 20s
+
   caddy:
     profiles: [core]
     image: caddy:${CADDY_TAG:-2}
@@ -207,6 +235,7 @@ services:
       - jupyter
       - dagster-webserver
       - superset
+      - mcp
 
 volumes:
   catalog-pg-data:
