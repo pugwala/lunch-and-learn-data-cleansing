@@ -108,3 +108,47 @@ def test_latest_notebook_smoke_run_executed_every_notebook():
     for path in folders[0].glob("*.ipynb"):
         outputs = [o for c in nbformat.read(str(path), as_version=4).cells for o in c.get("outputs", [])]
         assert outputs and not [o for o in outputs if o.output_type == "error"], path.name
+
+
+# --- session 7's lesson holds on both embedding paths ----------------------------------------------------------
+# The Facilitator Guide promises few-shot scores highest. Checked with the real model (from the latest smoke run)
+# and with the LSA fallback that Databricks Free Edition usually gets (run here with an empty model cache).
+
+def session_7_f1(nb_path):
+    """Session 7's scoreboard from an executed notebook: {'rules' | 'zero' | 'few': F1}, plus the method printed."""
+    import nbformat
+    import re
+    text = "\n".join("".join(o.get("text", "")) + "".join(o.get("data", {}).get("text/plain", ""))
+                     for c in nbformat.read(str(nb_path), as_version=4).cells for o in c.get("outputs", []))
+    f1 = {}
+    for label, value in re.findall(r"^(.+?\))\s+(\d\.\d{3})\s*$", text, re.M):
+        key = {"Session 6": "rules", "Zero-shot": "zero", "Few-shot (": "few"}
+        for prefix, name in key.items():
+            if label.strip().startswith(prefix):
+                f1[name] = float(value)
+    method = re.search(r"Embedding method: (.+)", text)
+    return f1, method.group(1).strip() if method else None
+
+
+def test_session_7_few_shot_beats_the_rules_with_the_real_model():
+    """In the latest notebook_smoke run, with the sentence-transformer, few-shot (300 labels) beats session 6's rules."""
+    runs = graphql('{ runsOrError(filter: {pipelineName: "notebook_smoke"}, limit: 1) '
+                   '{ ... on Runs { results { runId } } } }')["runsOrError"]["results"]
+    folder = next(NOTEBOOK_RUNS.glob(f"*_{runs[0]['runId'][:8]}"))
+    f1, method = session_7_f1(folder / "07_text_meaning.ipynb")
+    assert method == "sentence-transformers (all-MiniLM-L6-v2)"
+    assert f1["few"] > f1["rules"] > f1["zero"], f1
+
+
+def test_session_7_few_shot_beats_the_rules_with_the_fallback(tmp_path, monkeypatch):
+    """With no model available (Free Edition's usual case), the LSA fallback still puts few-shot on top."""
+    import papermill
+    empty = tmp_path / "no-models"
+    empty.mkdir()
+    monkeypatch.setenv("HF_HOME", str(empty))   # the kernel inherits this: no model, so the course falls back
+    out = tmp_path / "07_text_meaning.ipynb"
+    nb = LAKEHOUSE.parent / "notebooks" / "07_text_meaning.ipynb"
+    papermill.execute_notebook(str(nb), str(out), cwd=str(nb.parent), kernel_name="python3", progress_bar=False)
+    f1, method = session_7_f1(out)
+    assert method == "lsa"
+    assert f1["few"] > f1["rules"] > f1["zero"], f1
