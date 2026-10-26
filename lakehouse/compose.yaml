@@ -472,6 +472,25 @@ services:
       interval: 30s
       timeout: 10s
 
+  # Where Dagster pushes job outcomes, load numbers and data-quality pass rates (lakehouse/metrics.py), for
+  # Prometheus to scrape. Persisted, so a restart doesn't forget the last numbers.
+  pushgateway:
+    profiles: [core]
+    image: prom/pushgateway:${PUSHGATEWAY_TAG:-v1.11.4}
+    restart: unless-stopped
+    user: "1000:100"
+    command:
+      - --persistence.file=/pushgateway/metrics.store
+      - --persistence.interval=1m
+    volumes:
+      - ${LAKE_ROOT:-/lake}/pushgateway:/pushgateway
+    expose:
+      - "9091"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:9091/-/healthy"]
+      interval: 30s
+      timeout: 10s
+
   caddy:
     profiles: [core]
     image: caddy:${CADDY_TAG:-2}

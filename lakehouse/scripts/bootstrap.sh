@@ -24,7 +24,7 @@ done
 SECRETS=(POSTGRES_PASSWORD LAKE_RW_PASSWORD LAKE_RO_PASSWORD DAGSTER_PG_PASSWORD JUPYTER_TOKEN
          CUBEJS_API_SECRET CUBE_SQL_PASSWORD SUPERSET_SECRET_KEY SUPERSET_PG_PASSWORD SUPERSET_ADMIN_PASSWORD
          MCP_TOKEN OM_DB_PASSWORD OM_ADMIN_PASSWORD OM_FERNET_KEY OM_MCP_PASSWORD FUSEKI_WRITER_PASSWORD GRAFANA_ADMIN_PASSWORD LAKE_MONITOR_PASSWORD)
-SERVICES=(catalog-pg jupyter dagster-webserver dagster-daemon cube superset mcp opensearch openmetadata-server fuseki prometheus node-exporter cadvisor postgres-exporter blackbox grafana caddy)   # never a bare `up`: it also runs load-lake
+SERVICES=(catalog-pg jupyter dagster-webserver dagster-daemon cube superset mcp opensearch openmetadata-server fuseki prometheus node-exporter cadvisor postgres-exporter blackbox pushgateway grafana caddy)   # never a bare `up`: it also runs load-lake
 ROLE_SCRIPTS=(02-dagster.sh 03-superset.sh 04-openmetadata.sh 05-monitor.sh)   # app roles on catalog-pg; postgres/init/ only runs on an empty volume
 CONTAINER_UID=1000 CONTAINER_GID=100                                    # jovyan:users in the image
 FAILED=()
@@ -75,7 +75,7 @@ Formatting erases a disk, so this script never does it. Once you're sure which d
 Then run this script again."
 fi
 
-for d in landing data notebook-runs catalog-backups models dagster openmetadata fuseki prometheus grafana; do
+for d in landing data notebook-runs catalog-backups models dagster openmetadata fuseki prometheus grafana pushgateway; do
   p="$LAKE_ROOT/$d"
   [ -d "$p" ] || { [ $CHECK = 1 ] && { bad "$p is missing"; continue; }; sudo mkdir -p "$p"; did "created $p"; }
   [ $d = catalog-backups ] && continue                       # host-side pg_dump target, stays root-owned

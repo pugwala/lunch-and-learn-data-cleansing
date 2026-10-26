@@ -39,3 +39,10 @@ scrape_configs:
         target_label: instance
       - target_label: __address__
         replacement: blackbox:9115
+
+  # What Dagster pushes (lakehouse/metrics.py): job successes and failures, load numbers, data-quality pass rates.
+  # honor_labels keeps each pushed metric's own job and pipeline labels instead of this scrape's.
+  - job_name: pushgateway
+    honor_labels: true
+    static_configs:
+      - targets: ["pushgateway:9091"]

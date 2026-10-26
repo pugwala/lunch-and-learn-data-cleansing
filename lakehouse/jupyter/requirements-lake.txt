@@ -7,6 +7,9 @@ zstandard==0.25.0
 # pinned at the version already in the image.
 rdflib==7.6.0
 pyparsing==3.3.3
+# lakehouse/metrics.py pushes to the Pushgateway with prometheus_client, already in the image through jupyter_server;
+# pinned at that version.
+prometheus_client==0.26.0
 duckdb-engine>=0.13
 papermill>=2.6
 pytest>=8

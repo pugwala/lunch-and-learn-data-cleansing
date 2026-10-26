@@ -5,6 +5,9 @@
     openmetadata/lake   -> om_sync.py after gold, so OpenMetadata knows today's tables; a non-blocking check that
                            Cube's masks still match OpenMetadata's Restricted tags
     fuseki/glossary     -> om_to_rdf.py: OpenMetadata's glossary and column tags as one RDF graph in Fuseki
+    monitoring/data_quality -> gold.dq_scorecard's pass rates, pushed to the Pushgateway for Prometheus
+    push_run_success/failure -> sensors that push every job's last success, duration and last failure
+    monitoring_selftest -> a job that fails on request, to exercise the failure path and its alert
     notebook_smoke      -> runs the 7 course notebooks and lakehouse/08_from_lake.ipynb weekly (an op job, not
                            an asset, so daily_lake's all-asset selection never picks it up)
 
@@ -29,6 +32,7 @@ if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
 from lakehouse import lake  # noqa: E402
+from lakehouse.metrics import push  # noqa: E402
 
 DBT_DIR = REPO / "lakehouse" / "dbt"
 dbt_project = DbtProject(project_dir=DBT_DIR, profiles_dir=DBT_DIR, target=os.environ.get("DBT_TARGET", "lake"))
@@ -91,6 +95,17 @@ def load_lake(context: dg.AssetExecutionContext, config: LoadConfig):
             elif (schema, table) == ("bronze", "hero_offenders_raw"):
                 metadata["dagster_row_count"] = metrics["rows_bronze"]
             yield dg.MaterializeResult(asset_key=dg.AssetKey([schema, table]), metadata=metadata)
+    error = push("lakehouse_load", [
+        ("lakehouse_load_rows", "Rows the latest load wrote, by layer.", m, {"layer": layer})
+        for layer, m in (("bronze", metrics["rows_bronze"]), ("silver", metrics["rows_silver"]))] + [
+        ("lakehouse_load_flagged_values", "Values the latest load flagged (never dropped).", metrics["exceptions"], {}),
+        ("lakehouse_load_records_with_exceptions", "Records with at least one flagged value.",
+         metrics["records_with_exceptions"], {}),
+        ("lakehouse_load_seconds", "How long the latest load took.", metrics["seconds"], {}),
+        ("lakehouse_load_finished_timestamp_seconds", "When the latest load finished.",
+         metrics["finished_at"].timestamp(), {})])
+    if error:
+        context.log.warning(error)
 
     result = subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider",
                              str(REPO / "lakehouse" / "tests")], capture_output=True, text=True, cwd=REPO)
@@ -165,6 +180,75 @@ def fuseki_glossary(context: dg.AssetExecutionContext):
     return dg.MaterializeResult(metadata={"summary": summary})
 
 
+DQ_FLOOR = 95   # dbt/tests/dq_score_floor.sql warns below this score
+
+
+@dg.asset(key=dg.AssetKey(["monitoring", "data_quality"]), group_name="monitoring", kinds={"prometheus", "python"},
+          deps=[*gold.keys], description="gold.dq_scorecard's pass rates, pushed to the Pushgateway for Prometheus.")
+def data_quality(context: dg.AssetExecutionContext):
+    """Push each quality dimension's pass rate and the number of rules under the floor; a failed push only warns."""
+    con = lake.lake_ro_connect()
+    rates = con.sql("SELECT dimension, 100.0 * sum(passed) / sum(checked) FROM gold.dq_scorecard GROUP BY 1").fetchall()
+    below = con.sql(f"SELECT count(*) FROM gold.dq_scorecard WHERE score_pct < {DQ_FLOOR}").fetchone()[0]
+    con.close()
+    error = push("lakehouse_data_quality", [
+        ("lakehouse_dq_pass_rate_percent", "Share of checked values that passed, by quality dimension.", pct,
+         {"dimension": dim}) for dim, pct in rates] + [
+        ("lakehouse_dq_rules_below_floor", f"Quality rules scoring under {DQ_FLOOR}%.", below, {})])
+    if error:
+        context.log.warning(error)
+    return dg.MaterializeResult(metadata={"rules_below_floor": below,
+                                          **{f"pass_rate_{d}": round(p, 2) for d, p in rates}})
+
+
+def push_run(context, outcome: str):
+    """Push a finished run's end time under its job's name, plus how long it took when it succeeded."""
+    stats = context.instance.get_run_stats(context.dagster_run.run_id)
+    ended = stats.end_time or time.time()
+    samples = [(f"lakehouse_job_last_{outcome}_timestamp_seconds", f"When the job last ended in {outcome}.", ended, {})]
+    if outcome == "success" and stats.start_time:
+        samples.append(("lakehouse_job_last_duration_seconds", "How long the job's last successful run took.",
+                        ended - stats.start_time, {}))
+    error = push("dagster", samples, {"pipeline": context.dagster_run.job_name})
+    if error:
+        context.log.warning(error)
+
+
+@dg.run_status_sensor(run_status=dg.DagsterRunStatus.SUCCESS, name="push_run_success", minimum_interval_seconds=15,
+                      default_status=dg.DefaultSensorStatus.RUNNING,
+                      description="Push every job's last success time and duration to the Pushgateway.")
+def push_run_success(context: dg.RunStatusSensorContext):
+    """A run succeeded: push it."""
+    push_run(context, "success")
+
+
+@dg.run_failure_sensor(name="push_run_failure", minimum_interval_seconds=15,
+                       default_status=dg.DefaultSensorStatus.RUNNING,
+                       description="Push every job's last failure time to the Pushgateway.")
+def push_run_failure(context: dg.RunFailureSensorContext):
+    """A run failed: push it."""
+    push_run(context, "failure")
+
+
+class SelftestConfig(dg.Config):
+    fail: bool = False
+    """True makes the run fail on purpose, to exercise the failure sensor and the alert on it."""
+
+
+@dg.op(name="selftest")
+def selftest_op(context: dg.OpExecutionContext, config: SelftestConfig):
+    """Pass, or fail on purpose when asked to."""
+    if config.fail:
+        raise dg.Failure("monitoring_selftest was asked to fail (fail: true). A test of the alerting, not a problem.")
+    context.log.info("monitoring_selftest passed")
+
+
+@dg.job(description="Fails on request (config fail: true) to test the failure sensor and alert; passes otherwise.")
+def monitoring_selftest():
+    """One op that passes or fails as configured."""
+    selftest_op()
+
+
 daily_lake = dg.define_asset_job("daily_lake", selection=dg.AssetSelection.all(),
                                  description="Load reference, bronze and silver, check parity, build gold, "
                                              "sync OpenMetadata, refresh Fuseki.")
@@ -229,8 +313,9 @@ notebook_smoke_schedule = dg.ScheduleDefinition(
     description="Sundays 06:00 Central, an hour after daily_lake, so the notebooks see a fresh lake.")
 
 defs = dg.Definitions(
-    assets=[load_lake, gold, openmetadata_lake, fuseki_glossary],
-    jobs=[daily_lake, regenerate_lake, notebook_smoke],
+    assets=[load_lake, gold, openmetadata_lake, fuseki_glossary, data_quality],
+    jobs=[daily_lake, regenerate_lake, notebook_smoke, monitoring_selftest],
     schedules=[daily_schedule, notebook_smoke_schedule],
+    sensors=[push_run_success, push_run_failure],
     resources={"dbt": DbtCliResource(project_dir=dbt_project)},
 )
