@@ -15,7 +15,8 @@ every number matches the Facilitator Guide. dbt builds gold, and Dagster runs it
 | `.env.example` | Every setting and secret; copy to `.env` |
 | `postgres/init/` | `01-roles.sh`: `ducklake`, `superset`, `dagster` databases and the `lake_rw` / `lake_ro` roles. `02-dagster.sh` and `03-superset.sh`: the Dagster and Superset roles (safe to re-run) |
 | `jupyter/Dockerfile` | `pyspark-notebook` + course requirements + DuckDB 1.5.6, dbt-duckdb, Dagster; extensions pre-installed. One image for every Python process, so DuckDB versions never drift |
-| `lake.py` | Helpers: `lake_connect()`, `run()`, `to_lake_frame()`, `exceptions_table()` |
+| `lake.py` | Helpers: `lake_connect()`, `lake_ro_connect()`, `run()`, `to_lake_frame()`, `exceptions_table()`, `trust_test_table()` |
+| `sql.py` | `%load_ext lakehouse.sql`: jupysql's `%sql` on the lake, read-only as `lake_ro` |
 | `load_lake.py` | Generates the data if needed and lands reference, bronze and silver as one DuckLake snapshot |
 | `tests/test_parity.py` | 19 checks that the lake matches the Facilitator Guide's numbers |
 | `dbt/` | Gold models and tests (dbt-duckdb, attaches DuckLake) |
@@ -111,14 +112,33 @@ otherwise load every secret in it), so give a container a setting through `compo
 
 ## Querying
 
-From a notebook:
+From a notebook, the quickest way is SQL. One line connects jupysql to the lake, read-only, as `lake_ro`:
+
+```
+%load_ext lakehouse.sql
+```
+
+Then `%sql` for one line, or a cell that starts with `%%sql`:
+
+```sql
+%%sql
+SELECT question_id, as_loaded, cleansed FROM gold.trust_test ORDER BY question_id
+```
+
+The lake is selected, so name tables by schema (`bronze`, `silver`, `gold`, `ref`, `ops`). Nothing can be written:
+DuckLake is attached `READ_ONLY` and `lake_ro` has read grants only. A query that fails doesn't break the next one
+(the extension rolls the failed transaction back). `lake_ro`'s password reaches DuckDB through a temporary secret,
+never the `ATTACH` string, because DuckLake's connection errors print that string. Course notebooks don't load this.
+
+The same connection in Python, as a DuckDB connection:
 
 ```python
-import sys; sys.path.insert(0, "/home/jovyan/course")
 from lakehouse import lake
-con = lake.lake_connect(read_only=True)
+con = lake.lake_ro_connect()
 con.sql("SELECT dimension, round(100 * sum(passed) / sum(checked), 2) AS pct FROM gold.dq_scorecard GROUP BY 1").df()
 ```
+
+Compose sets `PYTHONPATH=/home/jovyan/course` for Jupyter, so `lakehouse` imports from a notebook in any folder.
 
 dbt by hand, inside the Jupyter container:
 
@@ -176,6 +196,7 @@ single-file bind mount keeps showing the old one, which is how a Caddyfile chang
 | Superset 6.1.0 under `/superset`, Cube as its only database, the Trust Test dashboard: 6 acceptance tests (`pytest lakehouse/acceptance/test_superset.py`); the only-Cube check was shown to fail with a decoy database added | On the VM |
 | dbt on DuckLake: the first `daily_lake` run (load 7.5 s, gold 5.5 s, one expected `dq_score_floor` warning), checked by 14 acceptance tests: `docker compose --profile core exec -T jupyter pytest -q lakehouse/acceptance` | On the VM |
 | Trust Test from loader to dashboard (`silver.trust_test` → `gold.trust_test` → Cube → Superset): 1 parity check, 4 acceptance tests and 3 bats tests, each shown failing before the code existed | On the VM |
+| `%load_ext lakehouse.sql` (jupysql, read-only as `lake_ro`): 6 acceptance tests (`pytest lakehouse/acceptance/test_sql.py`), plus a real notebook kernel run from outside the repo; the password and read-only checks were shown to fail on deliberate breaks | On the VM |
 
 ## Next phases
 

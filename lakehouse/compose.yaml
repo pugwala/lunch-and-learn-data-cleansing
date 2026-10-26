@@ -68,6 +68,8 @@ services:
       JUPYTER_TOKEN: ${JUPYTER_TOKEN:?set JUPYTER_TOKEN in .env}
       CUBE_SQL_PASSWORD: ${CUBE_SQL_PASSWORD:?set CUBE_SQL_PASSWORD in .env}   # for queries and acceptance tests via Cube
       SUPERSET_ADMIN_PASSWORD: ${SUPERSET_ADMIN_PASSWORD:?set SUPERSET_ADMIN_PASSWORD in .env}   # for the Superset acceptance test
+      LAKE_RO_PASSWORD: ${LAKE_RO_PASSWORD:?set LAKE_RO_PASSWORD in .env}   # %load_ext lakehouse.sql reads the lake as lake_ro
+      PYTHONPATH: /home/jovyan/course   # so a notebook in any folder can import lakehouse (and lnl)
     command: ["start-notebook.py", "--ServerApp.base_url=/jupyter/"]   # served at https://<tailscale name>/jupyter/
     volumes:
       - ..:/home/jovyan/course

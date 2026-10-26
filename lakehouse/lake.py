@@ -75,6 +75,37 @@ def lake_connect(read_only: bool = False):
     return con
 
 
+def attach_lake_ro(con) -> None:
+    """Attach DuckLake READ_ONLY as the lake_ro role to a DuckDB connection, and select it as `lake`.
+    lake_ro's password (LAKE_RO_PASSWORD) goes into a temporary default postgres secret, never the ATTACH string:
+    DuckLake's connection errors print that string in full. The catalog session is tagged
+    application_name=lakehouse-sql so it can be told apart from Cube's, which is also lake_ro.
+    USE only reaches the connection that runs it, so every new connection must call this (see lakehouse/sql.py)."""
+    if not catalog().startswith("ducklake:postgres:"):   # sandbox: a plain DuckDB file has no roles
+        con.execute(f"ATTACH {_lit(catalog())} AS {LAKE} (READ_ONLY)")
+        con.execute(f"USE {LAKE}")
+        return
+    params = dict(p.split("=", 1) for p in catalog()[len("ducklake:postgres:"):].split())
+    params.update(user="lake_ro", application_name="lakehouse-sql")
+    con.execute("INSTALL ducklake; LOAD ducklake; INSTALL postgres; LOAD postgres;")
+    con.execute(f"CREATE TEMPORARY SECRET (TYPE postgres, HOST {_lit(params['host'])}, DATABASE {_lit(params['dbname'])}, "
+                f"USER 'lake_ro', PASSWORD {_lit(os.environ['LAKE_RO_PASSWORD'])})")
+    options = ["READ_ONLY"]
+    if os.environ.get("LAKE_DATA_PATH"):
+        options.insert(0, f"DATA_PATH {_lit(os.environ['LAKE_DATA_PATH'])}")
+    target = "ducklake:postgres:" + " ".join(f"{k}={v}" for k, v in params.items())
+    con.execute(f"ATTACH {_lit(target)} AS {LAKE} ({', '.join(options)})")
+    con.execute(f"USE {LAKE}")
+
+
+def lake_ro_connect():
+    """A DuckDB connection with the lake attached read-only as lake_ro (see attach_lake_ro)."""
+    import duckdb
+    con = duckdb.connect()
+    attach_lake_ro(con)
+    return con
+
+
 def ensure_schemas(con) -> None:
     for schema in SCHEMAS:
         con.execute(f"CREATE SCHEMA IF NOT EXISTS {LAKE}.{schema}")
