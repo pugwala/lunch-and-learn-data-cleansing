@@ -70,3 +70,45 @@ def test_thirty_days_on_the_lake_disk():
 def test_no_monitoring_port_reaches_the_host(service):
     """Prometheus and the exporters publish no host ports; Caddy is the only way in."""
     assert "ports" not in SERVICES[service] and SERVICES[service].get("network_mode") != "host"
+
+
+# --- Grafana ---------------------------------------------------------------------------------------------------
+
+GRAFANA = os.environ.get("GRAFANA_URL", "http://grafana:3000/grafana")
+ADMIN = ("admin", os.environ.get("GRAFANA_ADMIN_PASSWORD", ""))
+
+
+def test_grafana_is_up_at_the_pinned_version():
+    """Grafana answers its health check under /grafana and reports 13.2.3."""
+    health = requests.get(f"{GRAFANA}/api/health", timeout=30).json()
+    assert health["database"] == "ok" and health["version"] == "13.2.3", health
+
+
+def test_grafana_needs_a_login():
+    """No anonymous access: the API refuses a request without credentials, and a wrong password."""
+    assert requests.get(f"{GRAFANA}/api/datasources", timeout=30).status_code == 401
+    assert requests.get(f"{GRAFANA}/api/datasources", auth=("admin", "admin"), timeout=30).status_code == 401
+
+
+def test_prometheus_is_grafanas_provisioned_data_source():
+    """The admin password from .env logs in, and the provisioned Prometheus data source answers."""
+    assert ADMIN[1], "GRAFANA_ADMIN_PASSWORD isn't in the jupyter container"
+    r = requests.get(f"{GRAFANA}/api/datasources/uid/prometheus/health", auth=ADMIN, timeout=30)
+    assert r.status_code == 200 and r.json()["status"] == "OK", r.text
+
+
+def test_grafana_does_not_phone_home():
+    """Usage reporting, update checks and the news feed are off, and nobody can sign themselves up."""
+    env = SERVICES["grafana"]["environment"]
+    for key in ("GF_ANALYTICS_REPORTING_ENABLED", "GF_ANALYTICS_CHECK_FOR_UPDATES",
+                "GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES", "GF_NEWS_NEWS_FEED_ENABLED",
+                "GF_USERS_ALLOW_SIGN_UP", "GF_AUTH_ANONYMOUS_ENABLED"):
+        assert str(env.get(key)).lower() == "false", key
+
+
+def test_grafana_keeps_its_data_on_the_lake_disk():
+    """Dashboards and users live in /lake/grafana; the admin password comes only from .env."""
+    svc = SERVICES["grafana"]
+    assert "${LAKE_ROOT:-/lake}/grafana:/var/lib/grafana" in svc["volumes"]
+    assert "${GRAFANA_ADMIN_PASSWORD" in str(svc["environment"]["GF_SECURITY_ADMIN_PASSWORD"])
+    assert "ports" not in svc
