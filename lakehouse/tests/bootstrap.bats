@@ -55,6 +55,7 @@ case "$*" in
   *"stage_model.py"*)                         echo "staged sentence-transformers/all-MiniLM-L6-v2 at 1110a24"; exit 0 ;;
   *"openmetadata/om_sync.py"*)               echo "OpenMetadata sync: in step with the repo and lake"; exit 0 ;;
   *"openmetadata/setup_admin.py"*)           echo "OpenMetadata admin: password set"; exit 0 ;;
+  *"openmetadata/om_to_rdf.py"*)             echo "Fuseki glossary graph: in step with OpenMetadata (715 triples)"; exit 0 ;;
   *"cube/sync_masks.py"*)                    echo "$FAKE_MASKS_OUT"; exit "$FAKE_MASKS_EXIT" ;;
   *"superset/dashboards.py"*)                 echo "Trust Test dashboard: up to date"; exit "$FAKE_DASH_EXIT" ;;
   *"exec -T jupyter python"*)                cat >/dev/null; echo "$FAKE_HAVE_DATA" ;;
@@ -391,6 +392,17 @@ set_env()       { sed -i "/^$1=/d" "$ENV"; [ $# = 1 ] || echo "$1=$2" >> "$ENV";
   run_bootstrap --check
   called "lakehouse/openmetadata/om_sync.py --check"
   not_called "om_sync.py$"
+}
+
+@test "loads OpenMetadata's glossary graph into Fuseki after om_sync, and only checks with --check" {
+  run_bootstrap
+  [ "$status" -eq 0 ]
+  called "exec -T jupyter python lakehouse/openmetadata/om_to_rdf.py$"
+  [ "$(grep -n 'om_sync.py$' "$FAKE_LOG" | head -1 | cut -d: -f1)" -lt "$(grep -n 'om_to_rdf.py$' "$FAKE_LOG" | head -1 | cut -d: -f1)" ]
+  : > "$FAKE_LOG"
+  run_bootstrap --check
+  called "lakehouse/openmetadata/om_to_rdf.py --check"
+  not_called "om_to_rdf.py$"
 }
 
 @test "keeps Cube's masks in step with OpenMetadata's tags, as the repo's owner, and only checks with --check" {

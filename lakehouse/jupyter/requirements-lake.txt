@@ -3,6 +3,10 @@ jupysql>=0.10
 # jupysql imports pyspark's Spark Connect support, which in pyspark 4.2 needs zstandard: without it %load_ext sql
 # prints "Skipping doctests: No module named 'zstandard'" in notebooks and fails outright under pytest.
 zstandard==0.25.0
+# openmetadata/om_to_rdf.py: the glossary as SKOS for Fuseki. pyparsing is rdflib's only dependency on Python 3.13,
+# pinned at the version already in the image.
+rdflib==7.6.0
+pyparsing==3.3.3
 duckdb-engine>=0.13
 papermill>=2.6
 pytest>=8
