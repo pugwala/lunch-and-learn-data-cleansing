@@ -1,0 +1,35 @@
+# The Trust Test scorecard from gold: eight questions, each answered from a default load and from the cleansed,
+# typed data. Aggregates only, so nothing here needs masking.
+cubes:
+  - name: trust_test
+    sql_table: lake.gold.trust_test
+    description: The course's Trust Test (gold.trust_test), one row per question.
+
+    dimensions:
+      - name: question_id
+        sql: question_id
+        type: string
+        primary_key: true
+        public: true
+      - name: question
+        sql: question
+        type: string
+      - name: as_loaded
+        sql: as_loaded
+        type: string
+        description: Answer from a pandas-defaults load (session 1).
+      - name: cleansed
+        sql: cleansed
+        type: string
+        description: Answer after sessions 2 to 4.
+      - name: changed
+        sql: changed
+        type: boolean
+
+    measures:
+      - name: questions
+        type: count
+      - name: answers_changed
+        type: count
+        filters:
+          - sql: "{CUBE}.changed"

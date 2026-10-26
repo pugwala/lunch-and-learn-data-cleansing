@@ -13,11 +13,11 @@ every number matches the Facilitator Guide. dbt builds gold, and Dagster runs it
 | --- | --- |
 | `compose.yaml` | `core` profile: Postgres catalog, Jupyter, Dagster (UI + daemon), a one-shot loader, Caddy |
 | `.env.example` | Every setting and secret; copy to `.env` |
-| `postgres/init/` | `01-roles.sh`: `ducklake`, `superset`, `dagster` databases and the `lake_rw` / `lake_ro` roles. `02-dagster.sh`: Dagster's role (safe to re-run) |
+| `postgres/init/` | `01-roles.sh`: `ducklake`, `superset`, `dagster` databases and the `lake_rw` / `lake_ro` roles. `02-dagster.sh` and `03-superset.sh`: the Dagster and Superset roles (safe to re-run) |
 | `jupyter/Dockerfile` | `pyspark-notebook` + course requirements + DuckDB 1.5.6, dbt-duckdb, Dagster; extensions pre-installed. One image for every Python process, so DuckDB versions never drift |
 | `lake.py` | Helpers: `lake_connect()`, `run()`, `to_lake_frame()`, `exceptions_table()` |
 | `load_lake.py` | Generates the data if needed and lands reference, bronze and silver as one DuckLake snapshot |
-| `tests/test_parity.py` | 18 checks that the lake matches the Facilitator Guide's numbers |
+| `tests/test_parity.py` | 19 checks that the lake matches the Facilitator Guide's numbers |
 | `dbt/` | Gold models and tests (dbt-duckdb, attaches DuckLake) |
 | `orchestration/` | Dagster definitions and instance config |
 | `scripts/set-dagster-ui-password.sh` | Puts a login in front of the Dagster UI (it has none of its own) |
@@ -81,7 +81,7 @@ What it does, in order:
 5. **Image and services.** Builds the image, starts Postgres, creates the `dagster` role (Postgres runs
    `postgres/init/` only on an empty volume), starts the six long-running services by name, and reloads Caddy.
 6. **Lake data.** Runs the loader if silver or `ref.null_tokens` is missing.
-7. **Proof.** Waits for every health check, runs the 18 parity tests, and checks that both sites answer through Caddy,
+7. **Proof.** Waits for every health check, runs the 19 parity tests, and checks that both sites answer through Caddy,
    on the Tailscale name with certificate checking on, so an untrusted certificate fails.
 
 **Preparing the data disk** is the one step left to you, because formatting erases a disk. Find it by size
@@ -157,6 +157,8 @@ SQL Lab query goes through the governed layer and nothing in Superset reads Duck
 (users, charts, dashboards) lives in catalog-pg's `superset` database, owned by the `superset` role
 (`postgres/init/03-superset.sh`).
 
+**Trust Test dashboard.** The course's Trust Test scorecard (session 1's eight questions, answered from a default load and from the cleansed, typed data) flows through every layer: the loader computes it with `lnl.trust` into `silver.trust_test`, dbt publishes `gold.trust_test`, Cube serves it as the `trust_test` cube, and `superset/dashboards.py` builds the **Trust Test** dashboard on it through Superset's API. `bootstrap.sh` runs that script (with `--check` when checking), and a re-run changes nothing.
+
 In SQL Lab, query cubes with Cube's SQL: `SELECT MEASURE(record_count) FROM offender_records`.
 
 Compose mounts `caddy/` and `superset/` as **folders**, not single files. Editors save by writing a new file, and a
@@ -166,13 +168,14 @@ single-file bind mount keeps showing the old one, which is how a Caddyfile chang
 
 | Piece | Where it has run |
 | --- | --- |
-| Loader, 18 parity checks, DuckLake on Postgres, image build, Postgres roles | On the VM |
+| Loader, 19 parity checks, DuckLake on Postgres, image build, Postgres roles | On the VM |
 | Dagster webserver and daemon with Postgres storage, their healthchecks, Caddy basic auth | On the VM |
-| `scripts/bootstrap.sh`: 10 bats tests (`bats lakehouse/tests/bootstrap.bats`, needs `apt install bats`), each shown to fail when the behaviour it covers is broken | On the VM, with stub commands; never touches the live stack |
-| dbt gold models and all 26 tests, Dagster job (both jobs, plus the blocking check stopping gold) | Sandbox, against a plain DuckDB file |
-| Cube v1.8.3 over gold, read-only as `lake_ro`: 5 acceptance tests (`pytest lakehouse/acceptance/test_cube.py`); the restricted-column check was shown to fail on a deliberate leak | On the VM |
-| Superset 6.1.0 under `/superset`, Cube as its only database: 5 acceptance tests (`pytest lakehouse/acceptance/test_superset.py`); the only-Cube check was shown to fail with a decoy database added | On the VM |
-| dbt on DuckLake: the first `daily_lake` run (load 7.5 s, gold 5.5 s, one expected `dq_score_floor` warning), checked by 12 acceptance tests: `docker compose --profile core exec -T jupyter pytest -q lakehouse/acceptance` | On the VM |
+| `scripts/bootstrap.sh`: 22 bats tests (`bats lakehouse/tests/bootstrap.bats`, needs `apt install bats`), each shown to fail when the behaviour it covers is broken | On the VM, with stub commands; never touches the live stack |
+| dbt gold models and their tests (25 today), Dagster job (both jobs, plus the blocking check stopping gold) | Sandbox, against a plain DuckDB file |
+| Cube v1.8.3 over gold, read-only as `lake_ro`: 6 acceptance tests (`pytest lakehouse/acceptance/test_cube.py`); the restricted-column check was shown to fail on a deliberate leak | On the VM |
+| Superset 6.1.0 under `/superset`, Cube as its only database, the Trust Test dashboard: 6 acceptance tests (`pytest lakehouse/acceptance/test_superset.py`); the only-Cube check was shown to fail with a decoy database added | On the VM |
+| dbt on DuckLake: the first `daily_lake` run (load 7.5 s, gold 5.5 s, one expected `dq_score_floor` warning), checked by 14 acceptance tests: `docker compose --profile core exec -T jupyter pytest -q lakehouse/acceptance` | On the VM |
+| Trust Test from loader to dashboard (`silver.trust_test` → `gold.trust_test` → Cube → Superset): 1 parity check, 4 acceptance tests and 3 bats tests, each shown failing before the code existed | On the VM |
 
 ## Next phases
 

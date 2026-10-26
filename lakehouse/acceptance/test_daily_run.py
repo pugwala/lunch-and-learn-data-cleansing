@@ -31,6 +31,17 @@ EXPECTED_DIMENSIONS = {"completeness": 96.89, "conformity": 99.79, "consistency"
                        "validity": 99.99, "uniqueness": 100.00, "timeliness": 100.00}
 PERSONAL_COLUMNS = {"last_name", "first_name", "alias", "date_of_birth", "conduct_notes",
                     "last_name_std", "first_name_std", "alias_std"}
+# The Trust Test scorecard (lnl.trust, notebook 4): question, answer from a default load, answer cleansed and typed.
+TRUST_TEST = [
+    ("Q1", "Records missing a custody level", "1536", "2991"),
+    ("Q2", "Distinct gender values", "19", "3"),
+    ("Q3", "Records with last name KENT", "0", "3"),
+    ("Q4", "Earliest projected release date", "'\\t '", "1999-11-02"),
+    ("Q5", "Does offender #02381457 exist?", "False", "True"),
+    ("Q6", "Average age at sentencing", "can't compute (dates are text)", "39.0"),
+    ("Q7", "Records flagged as escape risk", "5635", "14194"),
+    ("Q8", "Records in protective custody", "5168", "6878"),
+]
 
 
 def graphql(query):
@@ -82,7 +93,7 @@ def test_latest_daily_lake_run_succeeded(run):
 
 
 @pytest.mark.parametrize("asset", [("silver", "hero_offenders"), ("gold", "fct_offender_record"),
-                                   ("gold", "dq_scorecard")])
+                                   ("gold", "dq_scorecard"), ("gold", "trust_test")])
 def test_run_materialized(run, asset):
     """That same run loaded silver and built gold, rather than Dagster reporting success on stale tables."""
     assert last_materialization_run(*asset) == run["runId"], f"{'/'.join(asset)} was not built by the latest run"
@@ -100,6 +111,13 @@ def test_fact_holds_every_silver_record(con):
     """Gold keeps all 100,000 records, one per offender: records are flagged, never dropped."""
     assert scalar(con, "SELECT count(*) FROM gold.fct_offender_record") == 100_000
     assert scalar(con, "SELECT count(DISTINCT offender_number) FROM gold.fct_offender_record") == 100_000
+
+
+def test_gold_trust_test_is_the_course_scorecard(con):
+    """gold.trust_test holds the course's Trust Test: 8 questions, every answer changed by sessions 2 to 4."""
+    got = con.execute("SELECT question_id, question, as_loaded, cleansed, changed FROM gold.trust_test "
+                      "ORDER BY question_id").fetchall()
+    assert got == [(*row, True) for row in TRUST_TEST]
 
 
 @pytest.mark.parametrize("dim", ["dim_unit", "dim_offense", "dim_stg_group"])

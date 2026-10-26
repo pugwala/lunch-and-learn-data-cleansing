@@ -85,3 +85,24 @@ models:
           - accepted_values:
               arguments:
                 values: ['completeness', 'conformity', 'validity', 'consistency', 'uniqueness', 'timeliness']
+
+  - name: trust_test
+    description: >
+      The course's Trust Test (sessions 1 and 4): eight questions answered from a default load and from the
+      cleansed, typed data. Every answer changes; that is the payoff of sessions 2 to 4.
+    columns:
+      - name: question_id
+        data_tests:
+          - unique
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['Q1', 'Q2', 'Q3', 'Q4', 'Q5', 'Q6', 'Q7', 'Q8']
+      - name: changed
+        description: True when cleansing changed the answer. The course promises all eight do.
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [true]
+                quote: false
+

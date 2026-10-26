@@ -14,7 +14,7 @@ setup() {
   make_stubs
   export PATH="$T/bin:$PATH" FAKE_LOG=$T/calls.log
   export FAKE_MOUNT_SRC=/dev/fakelake FAKE_LAKE_DEV='' FAKE_MOUNTED_AT='' FAKE_BUILD_EXIT=0 FAKE_HAVE_DATA=yes
-  export FAKE_CURL_DOWN=""
+  export FAKE_CURL_DOWN="" FAKE_DASH_EXIT=0
   : > "$FAKE_LOG"
   cat > "$ENV" <<EOF
 POSTGRES_PASSWORD=pg-secret
@@ -44,8 +44,9 @@ case "$*" in
   *" ps --format {{.Service}} {{.Status}}"*) for s in catalog-pg jupyter dagster-webserver dagster-daemon cube superset caddy; do
                                                echo "$s Up 1 minute (healthy)"; done ;;
   *" ps --format {{.Status}} "*)             echo "Up 1 minute (healthy)" ;;
+  *"superset/dashboards.py"*)                 echo "Trust Test dashboard: up to date"; exit "$FAKE_DASH_EXIT" ;;
   *"exec -T jupyter python"*)                cat >/dev/null; echo "$FAKE_HAVE_DATA" ;;
-  *pytest*)                                  echo "18 passed in 0.10s" ;;
+  *pytest*)                                  echo "19 passed in 0.10s" ;;
   *"run --rm load-lake"*)                    echo "Loaded run fake: 100,000 silver rows" ;;
 esac
 exit 0
@@ -260,4 +261,25 @@ set_env()       { sed -i "/^$1=/d" "$ENV"; [ $# = 1 ] || echo "$1=$2" >> "$ENV";
   not_called " up "
   not_called "02-dagster.sh"
   not_called "load-lake"
+}
+
+# --- dashboards ------------------------------------------------------------------------------------------------
+
+@test "provisions the Superset dashboards once the lake has data" {
+  run_bootstrap
+  [ "$status" -eq 0 ]
+  called "exec -T jupyter python lakehouse/superset/dashboards.py$"
+}
+
+@test "--check verifies the dashboards and creates nothing" {
+  run_bootstrap --check
+  called "lakehouse/superset/dashboards.py --check"
+  not_called "dashboards.py$"
+}
+
+@test "a dashboard that can't be provisioned fails the run" {
+  FAKE_DASH_EXIT=1
+  run_bootstrap
+  [ "$status" -eq 1 ]
+  [[ $output == *"FAIL"*"dashboards"* ]]
 }

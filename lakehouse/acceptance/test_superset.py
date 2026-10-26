@@ -13,6 +13,8 @@ from pathlib import Path
 import pytest
 import requests
 
+from test_daily_run import TRUST_TEST
+
 LAKEHOUSE = Path(__file__).resolve().parents[1]
 SUPERSET = os.environ.get("SUPERSET_URL", "http://superset:8088/superset")
 ADMIN = {"username": "admin", "password": os.environ.get("SUPERSET_ADMIN_PASSWORD", ""), "provider": "db",
@@ -72,6 +74,23 @@ def test_superset_reaches_cube_over_its_sql_api(api):
 
 
 # --- answers ---------------------------------------------------------------------------------------------------
+
+def test_trust_test_dashboard_shows_the_scorecard(api):
+    """A "Trust Test" dashboard exists, and its chart returns the course's 8 questions and answers through Cube."""
+    q = "(filters:!((col:dashboard_title,opr:eq,value:'Trust Test')))"
+    found = api.get(f"{SUPERSET}/api/v1/dashboard/", params={"q": q}, timeout=30)
+    found.raise_for_status()
+    dashboards = found.json()["result"]
+    assert len(dashboards) == 1, "there should be exactly one Trust Test dashboard"
+    charts = api.get(f"{SUPERSET}/api/v1/dashboard/{dashboards[0]['id']}/charts", timeout=30)
+    charts.raise_for_status()
+    chart_ids = [c["id"] for c in charts.json()["result"]]
+    assert chart_ids, "the Trust Test dashboard has no charts"
+    data = api.get(f"{SUPERSET}/api/v1/chart/{chart_ids[0]}/data/", timeout=60)
+    data.raise_for_status()
+    got = sorted((r["question_id"], r["as_loaded"], r["cleansed"]) for r in data.json()["result"][0]["data"])
+    assert got == [(q, as_loaded, cleansed) for q, _, as_loaded, cleansed in TRUST_TEST]
+
 
 def test_sql_lab_counts_every_record_through_cube(api):
     """A SQL Lab query through Superset returns the same 100,000 records as gold."""

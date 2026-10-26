@@ -14,7 +14,7 @@ import psycopg2
 import pytest
 import yaml
 
-from test_daily_run import EXPECTED_DIMENSIONS, PERSONAL_COLUMNS
+from test_daily_run import EXPECTED_DIMENSIONS, PERSONAL_COLUMNS, TRUST_TEST
 
 LAKEHOUSE = Path(__file__).resolve().parents[1]
 CUBE_SQL = {"host": os.environ.get("CUBE_SQL_HOST", "cube"), "port": int(os.environ.get("CUBE_SQL_PORT", "15432")),
@@ -74,6 +74,13 @@ def test_cube_shows_only_disciplinary_points_under_the_floor(cube):
     """The one rule under the 95% quality floor is visible through Cube, as in gold."""
     below = rows(cube, "SELECT dimension, column_name, score_pct FROM dq_scorecard WHERE score_pct < 95 GROUP BY 1, 2, 3")
     assert [(d, c, float(s)) for d, c, s in below] == [("completeness", "disciplinary_points", 94.15)]
+
+
+def test_cube_serves_the_trust_test(cube):
+    """The Trust Test scorecard reaches Cube unchanged, so dashboards can show the payoff of sessions 1 to 4."""
+    got = rows(cube, "SELECT question_id, question, as_loaded, cleansed, changed FROM trust_test "
+                     "GROUP BY 1, 2, 3, 4, 5 ORDER BY 1")
+    assert [tuple(r) for r in got] == [(*row, True) for row in TRUST_TEST]
 
 
 # --- governance ------------------------------------------------------------------------------------------------

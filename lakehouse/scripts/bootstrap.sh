@@ -205,6 +205,12 @@ else
   did "$(echo "$out" | grep -m1 '^Loaded run')"
 fi
 
+# Dashboards live in Superset's metadata database. dashboards.py creates or updates them through Superset's API,
+# so a fresh install gets them and a re-run changes nothing; --check only reports what's missing.
+if [ $CHECK = 1 ]; then dash=$(dc exec -T jupyter python lakehouse/superset/dashboards.py --check 2>&1)
+else dash=$(dc exec -T jupyter python lakehouse/superset/dashboards.py 2>&1); fi \
+  && ok "dashboards: $(echo "$dash" | tail -1)" || bad "dashboards: $(echo "$dash" | tail -1)"
+
 # ---------------------------------------------------------------------------------------------------------------
 step "7/7 Proof"
 res=$(dc exec -T jupyter pytest -q lakehouse/tests 2>&1 | tail -1)

@@ -48,7 +48,7 @@ LOADED_TABLES = {
     "ref": ["nibrs_offenses", "race_crosswalk", "religion_crosswalk", "stg_groups", "unit_crosswalk",
             "violence_codes", "null_tokens"],
     "bronze": ["hero_offenders_raw", "conduct_notes_answer_key"],
-    "silver": ["hero_offenders", "hero_offenders_exceptions", "conduct_notes_answer_key"],
+    "silver": ["hero_offenders", "hero_offenders_exceptions", "conduct_notes_answer_key", "trust_test"],
     "ops": ["load_runs"],
 }
 SILVER_KEY = dg.AssetKey(["silver", "hero_offenders"])
@@ -66,7 +66,7 @@ class LoadConfig(dg.Config):
                         description=lake.TABLE_COMMENTS.get(f"{schema}.{table}"))
            for schema, tables in LOADED_TABLES.items() for table in tables],
     check_specs=[dg.AssetCheckSpec(PARITY_CHECK, asset=SILVER_KEY, blocking=True,
-                                   description="All 18 lakehouse/tests checks match FACILITATOR_GUIDE.md")],
+                                   description="All 19 lakehouse/tests checks match FACILITATOR_GUIDE.md")],
 )
 def load_lake(context: dg.AssetExecutionContext, config: LoadConfig):
     metrics = lake.run(regenerate=config.regenerate)

@@ -37,6 +37,8 @@ TABLE_COMMENTS = {
                              "Ordered codes are VARCHAR with a matching _rank column.",
     "silver.hero_offenders_exceptions": "Every value a rule flagged, one row each. Records are never dropped.",
     "silver.conduct_notes_answer_key": "Answer key with offender_number as BIGINT so it joins to silver.",
+    "silver.trust_test": "The course's Trust Test scorecard (lnl.trust): each question answered from a default load "
+                         "and from the cleansed, typed data. Aggregates only.",
     "ops.load_runs": "One row per load: counts, timing and the DuckLake snapshot it produced.",
 }
 
@@ -145,6 +147,17 @@ def exceptions_table(s2: pd.DataFrame, s3: pd.DataFrame, silver: pd.DataFrame) -
     return out[["offender_number", "sid_number", "rule", "column_name", "value_as_written", "reason"]]
 
 
+def trust_test_table(naive: pd.DataFrame, typed: pd.DataFrame) -> pd.DataFrame:
+    """The course's Trust Test scorecard (lnl.trust, as notebook 4 builds it), one row per question.
+    naive = a pandas-defaults load (pipeline.load_naive); typed = the data after session 4. Aggregates only."""
+    from lnl import trust
+    card = trust.scorecard(trust.naive_answers(naive), trust.typed_answers(typed))
+    return pd.DataFrame({"question_id": card.index, "question": card["Question"].values,
+                         "as_loaded": card["Session 1 (as loaded)"].values,
+                         "cleansed": card["Session 4 (cleansed + typed)"].values,
+                         "changed": (card["Changed?"] == "yes").values})
+
+
 # ---- Loading ------------------------------------------------------------------------------------
 def _replace(con, table: str, view: str, frame=None) -> None:
     if frame is not None:
@@ -207,6 +220,7 @@ def run(regenerate: bool = False) -> dict:
     s3 = dates.session3(s2)
     silver = conversions.session4(s3)
     exc = exceptions_table(s2, s3, silver)
+    trust = trust_test_table(pipeline.load_naive(), silver)
     silver_frame = to_lake_frame(silver)
     key = to_lake_frame(pipeline.answer_key())
 
@@ -227,6 +241,7 @@ def run(regenerate: bool = False) -> dict:
         _replace(con, "silver.hero_offenders", "silver_df", silver_frame)
         _replace(con, "silver.hero_offenders_exceptions", "exc_df", exc)
         _replace(con, "silver.conduct_notes_answer_key", "key_df", key)
+        _replace(con, "silver.trust_test", "trust_df", trust)
         con.execute("COMMIT")
     except Exception:
         con.execute("ROLLBACK")

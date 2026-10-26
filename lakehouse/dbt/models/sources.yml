@@ -11,6 +11,8 @@ sources:
       - name: hero_offenders_exceptions
         description: One row per flagged value. Records are flagged, never dropped.
       - name: conduct_notes_answer_key
+      - name: trust_test
+        description: The course's Trust Test scorecard (lnl.trust), one row per question.
 
   - name: bronze
     database: lake

@@ -74,3 +74,13 @@ def test_restitution_total_to_the_cent(con):
 
 def test_confirmed_stg_records(con):
     assert scalar(con, "SELECT count(*) FROM silver.hero_offenders WHERE stg_status = 'Confirmed'") == 3612
+
+
+def test_trust_test_all_eight_answers_change(con):
+    """Session 4's contract: all 8 Trust Test answers change between a default load and the cleansed, typed data.
+    Q1 and Q2 are the guide's own numbers (1,536 to 2,991 and 19 to 3)."""
+    got = {q: (a, b, changed) for q, a, b, changed in
+           con.execute("SELECT question_id, as_loaded, cleansed, changed FROM silver.trust_test").fetchall()}
+    assert sorted(got) == [f"Q{i}" for i in range(1, 9)]
+    assert all(changed for _, _, changed in got.values())
+    assert got["Q1"][:2] == ("1536", "2991") and got["Q2"][:2] == ("19", "3")
