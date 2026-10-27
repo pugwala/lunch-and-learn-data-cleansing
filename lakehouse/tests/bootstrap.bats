@@ -15,7 +15,7 @@ setup() {
   make_stubs
   export PATH="$T/bin:$PATH" FAKE_LOG=$T/calls.log
   export FAKE_MOUNT_SRC=/dev/fakelake FAKE_LAKE_DEV='' FAKE_MOUNTED_AT='' FAKE_BUILD_EXIT=0 FAKE_HAVE_DATA=yes
-  export FAKE_CURL_DOWN="" FAKE_DASH_EXIT=0 FAKE_MODEL_EXIT=0 FAKE_MASKS_EXIT=0
+  export FAKE_CURL_DOWN="" FAKE_DASH_EXIT=0 FAKE_MODEL_EXIT=0 FAKE_MASKS_EXIT=0 FAKE_RULES_EXIT=0
   export FAKE_MASKS_OUT="Cube masks: in step with OpenMetadata (6 restricted columns masked)"
   export FAKE_PG_UP=""   # what `up -d --wait catalog-pg` prints; Compose says "Recreated" when it replaced the container
   : > "$FAKE_LOG"
@@ -65,6 +65,7 @@ case "$*" in
   *"openmetadata/om_sync.py"*)               echo "OpenMetadata sync: in step with the repo and lake"; exit 0 ;;
   *"openmetadata/setup_admin.py"*)           echo "OpenMetadata admin: password set"; exit 0 ;;
   *"openmetadata/om_to_rdf.py"*)             echo "Fuseki glossary graph: in step with OpenMetadata (715 triples)"; exit 0 ;;
+  *"ontology/check_rules.py"*)               [ "$FAKE_RULES_EXIT" = 0 ] && echo "Business rules: all 2 shapes hold" || echo "Business rules: 1 violation of 2 shapes (TermShape)"; exit "$FAKE_RULES_EXIT" ;;
   *"cube/sync_masks.py"*)                    echo "$FAKE_MASKS_OUT"; exit "$FAKE_MASKS_EXIT" ;;
   *"grafana/set_home.py"*)                   echo "Grafana home: Home Lakehouse"; exit 0 ;;
   *"superset/dashboards.py"*)                 echo "Superset dashboards (Trust Test, Custody): in place"; exit "$FAKE_DASH_EXIT" ;;
@@ -486,6 +487,22 @@ set_env()       { sed -i "/^$1=/d" "$ENV"; [ $# = 1 ] || echo "$1=$2" >> "$ENV";
   run_bootstrap --check
   called "lakehouse/openmetadata/om_to_rdf.py --check"
   not_called "om_to_rdf.py$"
+}
+
+@test "checks the business rules after publishing the graph, in both modes" {
+  run_bootstrap
+  [ "$status" -eq 0 ]
+  called "exec -T jupyter python lakehouse/ontology/check_rules.py"
+  [ "$(grep -n 'om_to_rdf.py$' "$FAKE_LOG" | head -1 | cut -d: -f1)" -lt "$(grep -n 'check_rules.py' "$FAKE_LOG" | head -1 | cut -d: -f1)" ]
+  : > "$FAKE_LOG"
+  run_bootstrap --check
+  called "lakehouse/ontology/check_rules.py"
+}
+
+@test "a broken business rule fails the run, naming the shape" {
+  FAKE_RULES_EXIT=1 run_bootstrap --check
+  [ "$status" -eq 1 ]
+  [[ $output == *"FAIL"*"Business rules: 1 violation of 2 shapes (TermShape)"* ]]
 }
 
 @test "keeps Cube's masks in step with OpenMetadata's tags, as the repo's owner, and only checks with --check" {

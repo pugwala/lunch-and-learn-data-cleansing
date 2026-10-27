@@ -68,6 +68,13 @@ groups:
 
   - name: data
     rules:
+      - alert: BusinessRuleViolated
+        # Something in the catalog breaks a business rule in ontology/shapes.ttl (the daily run checks them all, and
+        # Dagster's fuseki/glossary check business_rules_hold names each violation).
+        expr: lakehouse_business_rule_violations > 0
+        labels: {severity: warning}
+        annotations:
+          summary: "{{ $value }} thing(s) break the business rule {{ $labels.shape }}; see business_rules_hold in Dagster"
       - alert: SilverDroppedRows
         # Flagged values are flagged, never dropped: silver must hold every bronze row.
         expr: lakehouse_load_rows{layer="silver"} < ignoring(layer) lakehouse_load_rows{layer="bronze"}

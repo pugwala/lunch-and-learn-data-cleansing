@@ -4,7 +4,8 @@
     gold (dbt build)    -> gold.dim_*, gold.fct_offender_record, gold.dq_scorecard, plus dbt tests
     openmetadata/lake   -> om_sync.py after gold, so OpenMetadata knows today's tables; a non-blocking check that
                            Cube's masks still match OpenMetadata's Restricted tags
-    fuseki/glossary     -> om_to_rdf.py: OpenMetadata's glossary and column tags as one RDF graph in Fuseki
+    fuseki/glossary     -> om_to_rdf.py: OpenMetadata's glossary and column tags as RDF in Fuseki, with the rulebook
+                           and deduced facts; check business_rules_hold (ontology/shapes.ttl), pushed to Prometheus
     monitoring/data_quality -> gold.dq_scorecard's pass rates, pushed to the Pushgateway for Prometheus
     monitoring/data_products -> each data product's freshness, coverage and headline numbers, after its mart
     push_run_success/failure -> sensors that push every job's last success, duration and last failure
@@ -178,16 +179,35 @@ def openmetadata_lake(context: dg.AssetExecutionContext):
 FUSEKI_KEY = dg.AssetKey(["fuseki", "glossary"])
 
 
+RULES_CHECK = "business_rules_hold"
+
+
 @dg.asset(key=FUSEKI_KEY, group_name="openmetadata", kinds={"sparql", "python"}, deps=[OM_KEY],
-          description="OpenMetadata's glossary (SKOS) and column sensitivity as one graph in Fuseki (om_to_rdf.py).")
+          description="OpenMetadata's glossary (SKOS) and column sensitivity in Fuseki, with the rulebook and the "
+                      "deduced facts beside it (om_to_rdf.py).",
+          check_specs=[dg.AssetCheckSpec(RULES_CHECK, asset=FUSEKI_KEY, blocking=False,
+                                         description="Every business rule in ontology/shapes.ttl holds")])
 def fuseki_glossary(context: dg.AssetExecutionContext):
-    """Replace the Fuseki graph with what OpenMetadata holds after today's sync."""
+    """Replace the Fuseki graphs with what OpenMetadata and the rules say after today's sync, then check the business
+    rules and push the violations per shape to Prometheus (BusinessRuleViolated alerts on any)."""
+    from lakehouse.ontology import check_rules
     rdf = run_script("lakehouse/openmetadata/om_to_rdf.py")
     if rdf.returncode != 0:
         raise dg.Failure(f"om_to_rdf.py failed: {(rdf.stdout + rdf.stderr)[-1500:]}")
     summary = rdf.stdout.strip().splitlines()[-1]
     context.log.info(summary)
-    return dg.MaterializeResult(metadata={"summary": summary})
+    yield dg.MaterializeResult(asset_key=FUSEKI_KEY, metadata={"summary": summary})
+    found = check_rules.violations()
+    for v in found:
+        context.log.warning(f"business rule broken: {v['shape']}: {v['focus']}: {v['message']}")
+    error = push("lakehouse_business_rules", [
+        ("lakehouse_business_rule_violations", "Things breaking each business rule (SHACL shape) right now.",
+         sum(v["shape"] == name for v in found), {"shape": name}) for name in check_rules.shapes()])
+    if error:
+        context.log.warning(error)
+    yield dg.AssetCheckResult(asset_key=FUSEKI_KEY, check_name=RULES_CHECK, passed=not found,
+                              severity=dg.AssetCheckSeverity.WARN,
+                              metadata={"violations": len(found), "shapes": len(check_rules.shapes())})
 
 
 DQ_FLOOR = 95   # dbt/tests/dq_score_floor.sql warns below this score

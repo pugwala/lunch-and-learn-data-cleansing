@@ -70,7 +70,8 @@ load_lake ──► parity check (blocking) ──► dbt build (gold, then mart
 - **`openmetadata/lake`** runs `om_sync.py`, so OpenMetadata knows today's tables. Its non-blocking check,
   `cube_masks_match_openmetadata`, warns when a steward has tagged a column Restricted that the Cube model doesn't
   mask yet; fixing that (rewriting the model, restarting Cube) stays a reviewed `bootstrap.sh` step.
-- **`fuseki/glossary`** runs `om_to_rdf.py`, so the SPARQL graph carries the same day's meaning.
+- **`fuseki/glossary`** runs `om_to_rdf.py`, so the SPARQL graphs carry the same day's meaning, then its non-blocking
+  check `business_rules_hold` validates `ontology/shapes.ttl` and pushes the violations per rule to Prometheus.
 
 Jobs: `daily_lake` (scheduled 05:00 Central, on by default), `regenerate_lake` (rebuilds the CSV first) and
 `notebook_smoke` (Sundays 06:00 Central, on by default): it runs the seven course notebooks as delivered plus
@@ -109,7 +110,7 @@ What it does, in order:
    `/lake/openmetadata/keys`, never in the repo), starts the twenty-one long-running services by name, reloads Caddy, makes Prometheus and Alertmanager reread
    their config (SIGHUP), and restarts Dagster if catalog-pg was recreated (its pooled connections would be dead).
 6. **Lake data and meaning.** Runs the loader if silver or `ref.null_tokens` is missing, stages session 7's model,
-   replaces OpenMetadata's default admin password, runs `om_sync.py`, `om_to_rdf.py` (Fuseki's graph), then
+   replaces OpenMetadata's default admin password, runs `om_sync.py`, `om_to_rdf.py` (Fuseki's graphs), `ontology/check_rules.py` (the business rules), then
    `cube/sync_masks.py` (restarting Cube if the masks changed), builds the Trust Test and Custody dashboards, and
    makes Home Lakehouse Grafana's home page.
 7. **Proof.** Waits for every health check, runs the 19 parity tests, and checks that every site answers through
@@ -307,7 +308,8 @@ or dropping a dimension's `mask:` to match. `bootstrap.sh` runs it and restarts 
 Apache Jena Fuseki 6.2.0 serves one dataset, `lakehouse`, at `https://<LAKE_TS_HOST>/fuseki/` (TDB2 under
 `/lake/fuseki`). The image is built from Apache's own release: `fuseki/Dockerfile` pins its SHA-512 and checks its
 signature against Apache's Jena KEYS on every build. `openmetadata/om_to_rdf.py` reads OpenMetadata (as the
-read-only `mcp-reader`) and replaces one named graph, `<https://lakehouse.invalid/graph/openmetadata>`:
+read-only `mcp-reader`) and replaces one named graph, `<https://lakehouse.invalid/graph/openmetadata>` (the
+rulebook and deduced facts sit beside it, in graphs of their own: see Business rules below):
 
 - the glossary as SKOS: each term a `skos:Concept` (`term:offender-number`, ...) with `skos:prefLabel`,
   `skos:definition` and `skos:altLabel`; `broader`, `narrower` and `relatedTo` as SKOS's own relations, the rest
@@ -330,6 +332,37 @@ SELECT ?column WHERE {   # restricted columns that hold part of an offender reco
 
 It answers `stg_group` and `stg_status`.
 
+### Business rules in the ontology
+
+Rules about meaning and governance live in the ontology; rules that compute numbers stay in dbt and Cube, and
+thresholds in Prometheus. All are files in the repo: Fuseki's graphs are rebuilt on every run, so anything typed into
+it by hand is gone the next morning. Three kinds, each with its own graph or check:
+
+| Kind | Where you write it | What it does |
+| --- | --- | --- |
+| The rulebook | `rules:` in `glossary/glossary.yml` | Each rule's statement, the terms it is about and what enforces it, as `lh:BusinessRule` in `graph/rulebook`. `enforced_by` must name something real (`cube:`, `dbt:`, `prometheus:`, `shacl:`, `sparql:`, `test:`). |
+| Deductions | `ontology/rules/<name>.rq`, a SPARQL `CONSTRUCT` | New facts from the published graphs, run until nothing new appears, into `graph/inferred/<name>`, apart from stated ones. Delete the file and its graph goes too. |
+| Constraints | `ontology/shapes.ttl`, SHACL | What must be true. Fuseki validates them (`/fuseki/lakehouse/shacl`); `check_rules.py` names each violation, `bootstrap.sh` fails on one, and `BusinessRuleViolated` alerts. |
+
+Today's deduction: **a person's identifier is a pseudonymous key.** Any column that means a term which
+`identifies` Person (today every `sid_number`, six tables) is `lh:Pseudonymous`: fine in tables, for joining and
+counting people, never shown to a consumer, and a test holds Cube to that. Today's shapes: every glossary term has
+one name and a definition of 40 characters or more, and every rule states itself and names its enforcer.
+
+Which rules involve Person, and where is each enforced:
+
+```sparql
+PREFIX lh: <https://lakehouse.invalid/ontology#>
+PREFIX term: <https://lakehouse.invalid/glossary/>
+PREFIX dct: <http://purl.org/dc/terms/>
+SELECT ?rule ?enforcedBy WHERE { ?r a lh:BusinessRule ; dct:title ?rule ; lh:about term:person ; lh:enforcedBy ?enforcedBy }
+```
+
+**Adding a rule**, test first: write it in `rules:` with what enforces it; for a deduction, add
+`ontology/rules/<name>.rq`; for a constraint, a shape in `shapes.ttl` with named property shapes (`lh:<Shape>-<what>`,
+so a violation names its rule); then run `scripts/bootstrap.sh`. `acceptance/test_business_rules.py` shows how to
+prove a shape catches a violation with a scratch graph.
+
 ## Monitoring and alerting
 
 Everything reports to Prometheus 3.15.0 on this VM (30 days kept on `/lake/prometheus`), and **Home Lakehouse** at
@@ -348,7 +381,7 @@ services. None of the monitoring pieces has a host port (the tailnet can reach a
 | Load numbers and quality pass rates | `load_lake` and the `monitoring/data_quality` asset, through the Pushgateway |
 | The nightly catalog backup | `catalog-backup`, through node-exporter's textfile collector |
 
-**Alerts.** 20 rules in `monitoring/prometheus/rules/lakehouse.yml`, with thresholds well clear of today's values:
+**Alerts.** 21 rules in `monitoring/prometheus/rules/lakehouse.yml`, with thresholds well clear of today's values:
 platform (a target or site down, the certificate under 14 days, a disk over 85% or 95%, memory under 10%, Postgres
 down), pipeline (a job whose last run failed, `daily_lake` not succeeding in 26 hours, `notebook_smoke` in 8 days),
 data (silver holding fewer rows than bronze, over 10% of records flagged where about 3% is normal, a quality
@@ -443,7 +476,7 @@ that explicit; "inmate" and "offender" are roles, so synonyms.
 | --- | --- |
 | Loader, 19 parity checks, DuckLake on Postgres, image build, Postgres roles | On the VM |
 | Dagster webserver and daemon with Postgres storage, their healthchecks, Caddy basic auth | On the VM |
-| `scripts/bootstrap.sh`: 53 bats tests (`bats lakehouse/tests/bootstrap.bats`, needs `apt install bats`), each shown to fail when the behaviour it covers is broken | On the VM, with stub commands; never touches the live stack |
+| `scripts/bootstrap.sh`: 55 bats tests (`bats lakehouse/tests/bootstrap.bats`, needs `apt install bats`), each shown to fail when the behaviour it covers is broken | On the VM, with stub commands; never touches the live stack |
 | dbt gold models and their tests (25 today), Dagster job (both jobs, plus the blocking check stopping gold) | Sandbox, against a plain DuckDB file |
 | Cube v1.8.3 over gold, read-only as `lake_ro`, restricted columns masked except for `restricted_reader`: 15 acceptance tests (`pytest lakehouse/acceptance/test_cube.py`); unmasking everyone made 8 of them fail | On the VM |
 | Superset 6.1.0 under `/superset`, Cube as its only database, the Trust Test and Custody dashboards: 8 acceptance tests (`pytest lakehouse/acceptance/test_superset.py`); the only-Cube check was shown to fail with a decoy database added, the Custody chart checks failed before the dashboard existed, and `--check` exits 1 on a changed layout | On the VM |
@@ -457,10 +490,11 @@ that explicit; "inmate" and "offender" are roles, so synonyms.
 | Tags-to-masks loop (`cube/sync_masks.py`): 4 acceptance tests (`pytest lakehouse/acceptance/test_masks.py`) and 3 bats tests, each seen failing first; live, tagging `gender` Restricted in OpenMetadata masked it in Cube (`***` for all 100,000), and removing the tag restored the real values and a byte-identical model | On the VM |
 | Daily `om_sync` and Fuseki refresh in `daily_lake` (`openmetadata/lake`, `fuseki/glossary`, the non-blocking masks check): 7 acceptance tests across `test_om_sync.py`, `test_glossary_rdf.py` and `test_daily_run.py`, each seen failing first; real runs succeeded | On the VM |
 | Fuseki 6.2.0 under `/fuseki`: 7 acceptance tests (`pytest lakehouse/acceptance/test_fuseki.py`) and 4 bats tests, each seen failing first; removing the writer-only rule made the write test fail | On the VM |
+| Business rules (rulebook, the pseudonymous-key deduction, SHACL shapes through Fuseki, the daily check and `BusinessRuleViolated`): 12 acceptance tests (`pytest lakehouse/acceptance/test_business_rules.py`) and 2 bats tests, each seen failing first; a "TBD" definition in a scratch graph broke `TermShape`, and an inferred graph without its rule file was removed | On the VM |
 | Glossary as RDF (`om_to_rdf.py`): 8 acceptance tests (`pytest lakehouse/acceptance/test_glossary_rdf.py`) and 1 bats test, each seen failing first; a stray triple was flagged by `--check` and removed by the next load | On the VM |
 | Platform metrics (Prometheus 3.15.0, node-exporter, cAdvisor), Grafana 13.2.3 and the Home Lakehouse dashboard, Postgres and blackbox probes: 22 acceptance tests (`pytest lakehouse/acceptance/test_monitoring.py`), each seen failing first; stopping Fuseki dropped its probe to 0 and back; every dashboard panel's query returns data | On the VM |
 | Pipeline and data-quality metrics (Pushgateway, run sensors, `monitoring_selftest`): 8 acceptance tests (`pytest lakehouse/acceptance/test_pipeline_metrics.py`), each seen failing first | On the VM |
-| Alerting (Alertmanager 0.34.1, 20 rules): 9 acceptance tests (`pytest lakehouse/acceptance/test_alerting.py`), each seen failing first; a failed `monitoring_selftest` raised `JobFailing`, ntfy got it at high priority on the selftest topic, and a passing run resolved it, at low priority | On the VM |
+| Alerting (Alertmanager 0.34.1, 21 rules): 9 acceptance tests (`pytest lakehouse/acceptance/test_alerting.py`), each seen failing first; a failed `monitoring_selftest` raised `JobFailing`, ntfy got it at high priority on the selftest topic, and a passing run resolved it, at low priority | On the VM |
 | Alert delivery (ntfy 2.30.0 on port 8443, deny-all, three declared users, the lakehouse template): 7 acceptance tests (`pytest lakehouse/acceptance/test_ntfy.py`), each seen failing first; the Watchdog heartbeat arrives at min priority | On the VM |
 | Nightly catalog backup: 6 acceptance tests (`pytest lakehouse/acceptance/test_backup.py`), each seen failing first; a restore drill matched the live catalog row for row | On the VM |
 | Pinned versions: 28 acceptance tests (`pytest lakehouse/acceptance/test_pins.py`) and 2 bats tests, each seen failing first; the jupyter image was shown by layer match to be built on the `2026-10-12` base, and `daily_lake` and `notebook_smoke` succeeded on it | On the VM |

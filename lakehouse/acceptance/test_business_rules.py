@@ -149,6 +149,16 @@ def test_a_placeholder_definition_breaks_the_term_rule():
     assert [(v["shape"], v["focus"]) for v in found] == [("TermShape", "https://lakehouse.invalid/glossary/scratch-term")]
 
 
+def test_the_daily_run_reports_each_shape_to_prometheus():
+    """The daily run pushes lakehouse_business_rule_violations per shape (all 0), and the alert rule loads."""
+    r = requests.get(f"{PROMETHEUS}/api/v1/query", params={"query": "lakehouse_business_rule_violations"}, timeout=30)
+    got = {x["metric"]["shape"]: float(x["value"][1]) for x in r.json()["data"]["result"]}
+    assert got == {name: 0.0 for name in shape_names()}
+    groups = requests.get(f"{PROMETHEUS}/api/v1/rules", timeout=30).json()["data"]["groups"]
+    rule = next(r for g in groups for r in g["rules"] if r["name"] == "BusinessRuleViolated")
+    assert rule["health"] == "ok" and "lakehouse_business_rule_violations" in rule["query"]
+
+
 def test_a_deduction_whose_rule_was_deleted_is_removed():
     """Deleting a rule file must take its facts with it: an inferred graph with no rule file makes --check fail, and
     the next load deletes that graph."""

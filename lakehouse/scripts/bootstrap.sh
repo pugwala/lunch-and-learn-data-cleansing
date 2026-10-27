@@ -273,11 +273,15 @@ if [ $CHECK = 1 ]; then sync=$(dc exec -T jupyter python lakehouse/openmetadata/
 else sync=$(dc exec -T jupyter python lakehouse/openmetadata/om_sync.py 2>&1); fi \
   && ok "$(echo "$sync" | tail -1)" || bad "$(echo "$sync" | tail -1)"
 
-# om_to_rdf.py publishes what OpenMetadata now holds (glossary as SKOS, column sensitivity and terms) to Fuseki as
-# one named graph, replaced whole; --check only compares.
+# om_to_rdf.py publishes what OpenMetadata now holds (glossary as SKOS, column sensitivity and terms) to Fuseki,
+# with the rulebook and the deduced facts beside it, each graph replaced whole; --check only compares.
 if [ $CHECK = 1 ]; then rdf=$(dc exec -T jupyter python lakehouse/openmetadata/om_to_rdf.py --check 2>&1)
 else rdf=$(dc exec -T jupyter python lakehouse/openmetadata/om_to_rdf.py 2>&1); fi \
   && ok "$(echo "$rdf" | tail -1)" || bad "$(echo "$rdf" | tail -1)"
+# The business rules (ontology/shapes.ttl) are checked against what Fuseki now holds. Checking changes nothing, so
+# both modes run it, and a broken rule fails the run.
+rules=$(dc exec -T jupyter python lakehouse/ontology/check_rules.py 2>&1) \
+  && ok "$(echo "$rules" | tail -1)" || bad "$(echo "$rules" | tail -1)"
 
 # sync_masks.py makes Cube mask exactly the columns OpenMetadata tags Sensitivity.Restricted, a steward's tag from
 # the UI included. It edits cube/model/offender_records.yml, so it runs as the repo's owner (jupyter's own user
