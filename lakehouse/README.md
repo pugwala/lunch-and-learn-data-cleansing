@@ -11,7 +11,7 @@ every number matches the Facilitator Guide. dbt builds gold, and Dagster runs it
 
 | Path | What it does |
 | --- | --- |
-| `compose.yaml` | `core` profile: Postgres catalog, Jupyter, Dagster (UI + daemon), a one-shot loader, Cube, Superset, the MCP server, OpenSearch, OpenMetadata (with a one-shot `om-migrate`), Fuseki, the monitoring stack (Prometheus, node-exporter, cAdvisor, postgres-exporter, blackbox, Pushgateway, Alertmanager, Grafana), the nightly `catalog-backup`, Caddy |
+| `compose.yaml` | `core` profile: Postgres catalog, Jupyter, Dagster (UI + daemon), a one-shot loader, Cube, Superset, the MCP server, OpenSearch, OpenMetadata (with a one-shot `om-migrate`), Fuseki, the monitoring stack (Prometheus, node-exporter, cAdvisor, postgres-exporter, blackbox, Pushgateway, Alertmanager, Grafana), ntfy (where alerts go), the nightly `catalog-backup`, Caddy |
 | `.env.example` | Every setting and secret; copy to `.env` |
 | `postgres/init/` | `01-roles.sh`: `ducklake`, `superset`, `dagster` databases and the `lake_rw` / `lake_ro` roles. `02-dagster.sh`, `03-superset.sh` and `04-openmetadata.sh`: the Dagster, Superset and OpenMetadata roles and databases (safe to re-run) |
 | `jupyter/Dockerfile` | `pyspark-notebook` + course requirements + DuckDB 1.5.6, dbt-duckdb, Dagster; extensions pre-installed. One image for every Python process, so DuckDB versions never drift |
@@ -26,6 +26,8 @@ every number matches the Facilitator Guide. dbt builds gold, and Dagster runs it
 | `mcp/` | The MCP server (`server.py`, Dockerfile, pinned requirements): `query_metric` over Cube, `define_term` over OpenMetadata's glossary |
 | `openmetadata/` | `setup_admin.py` (replaces the default admin password, creates the read-only `mcp-reader`) `om_sync.py` (pushes the glossary, the Sensitivity tags and every lake table into OpenMetadata) and `om_to_rdf.py` (publishes that meaning to Fuseki as RDF) |
 | `monitoring/` | Prometheus config, probe targets and alert rules (`prometheus/`), Alertmanager config (`alertmanager/`), blackbox modules (`blackbox/`), Grafana provisioning, the Home Lakehouse dashboard and `set_home.py` (`grafana/`) |
+| `ntfy/` | ntfy, where alerts go: `server.yml` (deny-all, which user may do what), `start.sh` (declares the users from `.env`), `templates/lakehouse.yml` (the notification and its priority) |
+| `ontology/` | Business rules over the Fuseki graphs: `rules/*.rq` (deductions, one SPARQL CONSTRUCT each), `shapes.ttl` (SHACL constraints), `check_rules.py` (asks Fuseki to validate them) |
 | `products/` | The data products, one descriptor each (`custody-population.yml`, `custody-offenses.yml`), and their domains (`domains/`) |
 | `metrics.py` | `push()`: Dagster's pipeline and data-quality numbers to the Pushgateway (never fails a run) |
 | `backup/backup.sh` | The nightly catalog backup: `pg_dump` of every app database, checked, 14 days kept |
@@ -104,7 +106,7 @@ What it does, in order:
    set, stops on duplicate keys, asks for the Dagster UI login if it's missing, and keeps `.env` at mode 600.
 5. **Image and services.** Builds the image, starts Postgres, creates the `dagster` role (Postgres runs
    `postgres/init/` only on an empty volume), generates OpenMetadata's own JWT signing keys once (under
-   `/lake/openmetadata/keys`, never in the repo), starts the twenty long-running services by name, reloads Caddy, makes Prometheus and Alertmanager reread
+   `/lake/openmetadata/keys`, never in the repo), starts the twenty-one long-running services by name, reloads Caddy, makes Prometheus and Alertmanager reread
    their config (SIGHUP), and restarts Dagster if catalog-pg was recreated (its pooled connections would be dead).
 6. **Lake data and meaning.** Runs the loader if silver or `ref.null_tokens` is missing, stages session 7's model,
    replaces OpenMetadata's default admin password, runs `om_sync.py`, `om_to_rdf.py` (Fuseki's graph), then
@@ -346,18 +348,37 @@ services. None of the monitoring pieces has a host port (the tailnet can reach a
 | Load numbers and quality pass rates | `load_lake` and the `monitoring/data_quality` asset, through the Pushgateway |
 | The nightly catalog backup | `catalog-backup`, through node-exporter's textfile collector |
 
-**Alerts.** 17 rules in `monitoring/prometheus/rules/lakehouse.yml`, with thresholds well clear of today's values:
+**Alerts.** 20 rules in `monitoring/prometheus/rules/lakehouse.yml`, with thresholds well clear of today's values:
 platform (a target or site down, the certificate under 14 days, a disk over 85% or 95%, memory under 10%, Postgres
 down), pipeline (a job whose last run failed, `daily_lake` not succeeding in 26 hours, `notebook_smoke` in 8 days),
 data (silver holding fewer rows than bronze, over 10% of records flagged where about 3% is normal, a quality
 dimension under 95%, more than the one expected rule under the floor), backups (none in 26 hours, or the last one
 failed), and **Watchdog**, which always fires on purpose. A healthy lakehouse fires only Watchdog.
 
-Where alerts go isn't decided yet, so Alertmanager sends every one to the `undecided` receiver, which has no
-integrations: alerts show at `/alertmanager/` and in Grafana, and nothing leaves the VM. To start paging, add an
-integration to that receiver in `monitoring/alertmanager/alertmanager.yml` (for PagerDuty, `pagerduty_configs` with
-`routing_key_file` pointing at a file outside the repo) and run `bootstrap.sh`. Once a real receiver exists,
-Watchdog going quiet means alerting itself is down.
+**Where alerts go: ntfy, on this VM.** Alertmanager posts each alert to ntfy v2.30.0, which pushes it to the ntfy
+phone app. It is reached only on the tailnet, at `https://<LAKE_TS_HOST>:8443/` through Caddy: ntfy can't sit under
+a path, so it has its own port on the same name and certificate. Nothing is open by default (deny-all), and
+`ntfy/start.sh` declares three users from the plain passwords in `.env`, hashed at start: `alertmanager` may only
+publish, `ian` (the phone) and `checker` (the tests) may only read, and only the `lakehouse-*` topics.
+
+| Topic | What goes there | Who reads it |
+| --- | --- | --- |
+| `lakehouse-alerts` | Every alert, except the two below | Ian's phone |
+| `lakehouse-heartbeat` | Watchdog, every 4 hours, at min priority | The tests: silence there means alerting is down |
+| `lakehouse-selftest` | Whatever `monitoring_selftest` raises (the tests fail it on purpose) | The tests, so testing never buzzes the phone |
+
+`ntfy/templates/lakehouse.yml` turns Alertmanager's JSON into the notification and sets its priority from the
+alert's severity: critical while firing is high (sound and a banner), warning default, resolved low, Watchdog min.
+`AlertDeliveryFailing` fires when Alertmanager can't hand a notification over (Prometheus scrapes Alertmanager and
+ntfy too), and `SiteDown` and `TargetDown` cover ntfy itself.
+
+**On the phone.** Install Tailscale and the ntfy app. In ntfy, add a server: `https://<LAKE_TS_HOST>:8443`, user
+`ian`, with the password from `.env`, read in your own SSH session:
+`grep '^NTFY_IAN_PASSWORD=' ~/lunch-and-learn-data-cleansing/lakehouse/.env | cut -d= -f2-`. Then subscribe to
+`lakehouse-alerts` on that server. The same login works in a browser at `https://<LAKE_TS_HOST>:8443/`. On an iPhone, keep
+Tailscale on (its VPN On Demand setting does that): iOS wakes an app only through Apple's push service, so ntfy
+forwards each message's ID and a SHA-256 hash of its topic URL to ntfy.sh (`upstream-base-url` in
+`ntfy/server.yml`), never the title or text, and the app then fetches the alert itself from this server.
 
 **Test an alert.** Launch `monitoring_selftest` in Dagster with config `{"ops": {"selftest": {"config": {"fail":
 true}}}}`: within about a minute `JobFailing` fires for it. Launch it again with `false` and the alert resolves.
@@ -422,7 +443,7 @@ that explicit; "inmate" and "offender" are roles, so synonyms.
 | --- | --- |
 | Loader, 19 parity checks, DuckLake on Postgres, image build, Postgres roles | On the VM |
 | Dagster webserver and daemon with Postgres storage, their healthchecks, Caddy basic auth | On the VM |
-| `scripts/bootstrap.sh`: 51 bats tests (`bats lakehouse/tests/bootstrap.bats`, needs `apt install bats`), each shown to fail when the behaviour it covers is broken | On the VM, with stub commands; never touches the live stack |
+| `scripts/bootstrap.sh`: 53 bats tests (`bats lakehouse/tests/bootstrap.bats`, needs `apt install bats`), each shown to fail when the behaviour it covers is broken | On the VM, with stub commands; never touches the live stack |
 | dbt gold models and their tests (25 today), Dagster job (both jobs, plus the blocking check stopping gold) | Sandbox, against a plain DuckDB file |
 | Cube v1.8.3 over gold, read-only as `lake_ro`, restricted columns masked except for `restricted_reader`: 15 acceptance tests (`pytest lakehouse/acceptance/test_cube.py`); unmasking everyone made 8 of them fail | On the VM |
 | Superset 6.1.0 under `/superset`, Cube as its only database, the Trust Test and Custody dashboards: 8 acceptance tests (`pytest lakehouse/acceptance/test_superset.py`); the only-Cube check was shown to fail with a decoy database added, the Custody chart checks failed before the dashboard existed, and `--check` exits 1 on a changed layout | On the VM |
@@ -439,7 +460,8 @@ that explicit; "inmate" and "offender" are roles, so synonyms.
 | Glossary as RDF (`om_to_rdf.py`): 8 acceptance tests (`pytest lakehouse/acceptance/test_glossary_rdf.py`) and 1 bats test, each seen failing first; a stray triple was flagged by `--check` and removed by the next load | On the VM |
 | Platform metrics (Prometheus 3.15.0, node-exporter, cAdvisor), Grafana 13.2.3 and the Home Lakehouse dashboard, Postgres and blackbox probes: 22 acceptance tests (`pytest lakehouse/acceptance/test_monitoring.py`), each seen failing first; stopping Fuseki dropped its probe to 0 and back; every dashboard panel's query returns data | On the VM |
 | Pipeline and data-quality metrics (Pushgateway, run sensors, `monitoring_selftest`): 8 acceptance tests (`pytest lakehouse/acceptance/test_pipeline_metrics.py`), each seen failing first | On the VM |
-| Alerting (Alertmanager 0.34.1, 17 rules): 7 acceptance tests (`pytest lakehouse/acceptance/test_alerting.py`), each seen failing first; a failed `monitoring_selftest` raised `JobFailing` and a passing run resolved it | On the VM |
+| Alerting (Alertmanager 0.34.1, 20 rules): 9 acceptance tests (`pytest lakehouse/acceptance/test_alerting.py`), each seen failing first; a failed `monitoring_selftest` raised `JobFailing`, ntfy got it at high priority on the selftest topic, and a passing run resolved it, at low priority | On the VM |
+| Alert delivery (ntfy 2.30.0 on port 8443, deny-all, three declared users, the lakehouse template): 7 acceptance tests (`pytest lakehouse/acceptance/test_ntfy.py`), each seen failing first; the Watchdog heartbeat arrives at min priority | On the VM |
 | Nightly catalog backup: 6 acceptance tests (`pytest lakehouse/acceptance/test_backup.py`), each seen failing first; a restore drill matched the live catalog row for row | On the VM |
 | Pinned versions: 28 acceptance tests (`pytest lakehouse/acceptance/test_pins.py`) and 2 bats tests, each seen failing first; the jupyter image was shown by layer match to be built on the `2026-10-12` base, and `daily_lake` and `notebook_smoke` succeeded on it | On the VM |
 | Docstring rule (every Python function and class has a docstring, every shell function a comment above it): 2 acceptance tests (`pytest lakehouse/acceptance/test_docstrings.py`), seen failing first on 23 Python and 9 shell functions written before the rule | On the VM |
