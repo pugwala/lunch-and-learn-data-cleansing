@@ -28,7 +28,8 @@ every number matches the Facilitator Guide. dbt builds gold, and Dagster runs it
 | `monitoring/` | Prometheus config, probe targets and alert rules (`prometheus/`), Alertmanager config (`alertmanager/`), blackbox modules (`blackbox/`), Grafana provisioning, the Home Lakehouse dashboard and `set_home.py` (`grafana/`) |
 | `ntfy/` | ntfy, where alerts go: `server.yml` (deny-all, which user may do what), `start.sh` (declares the users from `.env`), `templates/lakehouse.yml` (the notification and its priority) |
 | `ontology/` | Business rules over the Fuseki graphs: `rules/*.rq` (deductions, one SPARQL CONSTRUCT each), `shapes.ttl` (SHACL constraints), `check_rules.py` (asks Fuseki to validate them) |
-| `products/` | The data products, one descriptor each (`custody-population.yml`, `custody-offenses.yml`), and their domains (`domains/`) |
+| `products/` | The data products, one descriptor each (`custody-population.yml`, `custody-offenses.yml`), their domains (`domains/`), and the business inputs they depend on (`inputs/`, one file each) |
+| `readiness/` | `closes.py`: syncs the declared inputs and dependencies to the lake, records each month a business unit closes (`report`), plays the fictional units (`simulate`), and shows who is late (`status`) |
 | `metrics.py` | `push()`: Dagster's pipeline and data-quality numbers to the Pushgateway (never fails a run) |
 | `backup/backup.sh` | The nightly catalog backup: `pg_dump` of every app database, checked, 14 days kept |
 | `fuseki/` | Apache Jena Fuseki 6.2.0, built from Apache's verified release: `Dockerfile`, `config.ttl` (one dataset; writes need the writer user), `shiro.ini` (no users; admin only inside the container), `start.sh` |
@@ -381,7 +382,7 @@ services. None of the monitoring pieces has a host port (the tailnet can reach a
 | Load numbers and quality pass rates | `load_lake` and the `monitoring/data_quality` asset, through the Pushgateway |
 | The nightly catalog backup | `catalog-backup`, through node-exporter's textfile collector |
 
-**Alerts.** 21 rules in `monitoring/prometheus/rules/lakehouse.yml`, with thresholds well clear of today's values:
+**Alerts.** 22 rules in `monitoring/prometheus/rules/lakehouse.yml`, with thresholds well clear of today's values:
 platform (a target or site down, the certificate under 14 days, a disk over 85% or 95%, memory under 10%, Postgres
 down), pipeline (a job whose last run failed, `daily_lake` not succeeding in 26 hours, `notebook_smoke` in 8 days),
 data (silver holding fewer rows than bronze, over 10% of records flagged where about 3% is normal, a quality
@@ -470,16 +471,59 @@ that explicit; "inmate" and "offender" are roles, so synonyms.
 4. Run `scripts/bootstrap.sh` (or wait for 05:00): OpenMetadata, Fuseki and monitoring pick it up.
    `acceptance/test_products.py` checks every table, view and term it names is real.
 
+### Readiness: is this month's number final yet?
+
+A product's number for a month is only right once every business process that feeds it has finished, each run by
+its own unit on its own schedule. Until then it is **provisional**: fresh, valid, and still not complete. Each
+product declares the **business inputs** it depends on; each input's unit reports when a month is closed; a month is
+**final** once every input has closed it.
+
+| Input (`products/inputs/`) | Unit | Closes within | Custody Population | Custody Offenses |
+| --- | --- | --- | --- | --- |
+| `records`: admissions, releases, transfers | Records | 5 days | needs it | needs it |
+| `classification`: custody-level and threat reviews | Classification | 10 days | needs it | |
+| `courts`: sentencing orders and offense codes | Courts liaison | 7 days | | needs it |
+
+The units are fictional, so the daily run plays them: each closes the month on its `simulate.closes_after_days`, so
+every month starts provisional and turns final over its first ten days. Where it shows:
+
+- **Cube:** `period_status` (`final` or `provisional`) and `waiting_on` in `custody_population` and
+  `custody_offenses`, and every product's months in the `period_readiness` view. One row per month-end, joined by
+  month-end, so no count changes.
+- **The MCP server:** `query_metric` on a product's metric adds `readiness` (the latest month-end, and every month
+  still provisional, with who it waits on).
+- **Superset:** *Period status by month-end*, at the top of the Custody dashboard.
+- **Alerts:** `BusinessInputLate` when a unit is past its own deadline; `lakehouse_product_latest_period_final` per
+  product in Prometheus.
+- **The ontology:** each input an `lh:BusinessInput`, each product `lh:dependsOn` its inputs (`graph/readiness`),
+  with SHACL shapes that no product forgets its inputs.
+
+Under the hood: `readiness/closes.py sync` copies the files to `ops.business_inputs` and `ops.product_inputs`; each
+close is a row in `ops.input_closes` (append-only: the latest report per input counts, so an earlier date reopens a
+month); `mart_readiness.period_readiness` is a dbt **view**, so a close shows on the very next query.
+
+**Report a close, or reopen a month** (a unit's sign-off; the history keeps both):
+
+```bash
+docker compose --profile core exec -T jupyter python lakehouse/readiness/closes.py status
+docker compose --profile core exec -T jupyter python lakehouse/readiness/closes.py report classification 2026-09-30 --by "Classification"
+docker compose --profile core exec -T jupyter python lakehouse/readiness/closes.py report classification 2026-08-31 --by "Classification" --note "reopened: late reviews"
+```
+
+**Adding an input, or a dependency**, with no code: copy `products/inputs/records.yml` to a new file and fill it in;
+add its name to a product's `depends_on:`; run `scripts/bootstrap.sh` (or wait for 05:00). `test_readiness.py`,
+the SHACL shapes and dbt's tests pick it up on their own.
+
 ## Test status
 
 | Piece | Where it has run |
 | --- | --- |
 | Loader, 19 parity checks, DuckLake on Postgres, image build, Postgres roles | On the VM |
 | Dagster webserver and daemon with Postgres storage, their healthchecks, Caddy basic auth | On the VM |
-| `scripts/bootstrap.sh`: 55 bats tests (`bats lakehouse/tests/bootstrap.bats`, needs `apt install bats`), each shown to fail when the behaviour it covers is broken | On the VM, with stub commands; never touches the live stack |
+| `scripts/bootstrap.sh`: 56 bats tests (`bats lakehouse/tests/bootstrap.bats`, needs `apt install bats`), each shown to fail when the behaviour it covers is broken | On the VM, with stub commands; never touches the live stack |
 | dbt gold models and their tests (25 today), Dagster job (both jobs, plus the blocking check stopping gold) | Sandbox, against a plain DuckDB file |
 | Cube v1.8.3 over gold, read-only as `lake_ro`, restricted columns masked except for `restricted_reader`: 15 acceptance tests (`pytest lakehouse/acceptance/test_cube.py`); unmasking everyone made 8 of them fail | On the VM |
-| Superset 6.1.0 under `/superset`, Cube as its only database, the Trust Test and Custody dashboards: 8 acceptance tests (`pytest lakehouse/acceptance/test_superset.py`); the only-Cube check was shown to fail with a decoy database added, the Custody chart checks failed before the dashboard existed, and `--check` exits 1 on a changed layout | On the VM |
+| Superset 6.1.0 under `/superset`, Cube as its only database, the Trust Test and Custody dashboards: 9 acceptance tests (`pytest lakehouse/acceptance/test_superset.py`); the only-Cube check was shown to fail with a decoy database added, the Custody chart checks failed before the dashboard existed, and `--check` exits 1 on a changed layout | On the VM |
 | dbt on DuckLake: the first `daily_lake` run (load 7.5 s, gold 5.5 s, one expected `dq_score_floor` warning), checked by 14 acceptance tests: `docker compose --profile core exec -T jupyter pytest -q lakehouse/acceptance` | On the VM |
 | Trust Test from loader to dashboard (`silver.trust_test` → `gold.trust_test` → Cube → Superset): 1 parity check, 4 acceptance tests and 3 bats tests, each shown failing before the code existed | On the VM |
 | `%load_ext lakehouse.sql_magic` (jupysql, read-only as `lake_ro`): 6 acceptance tests (`pytest lakehouse/acceptance/test_sql.py`), plus a real notebook kernel run from outside the repo; the password and read-only checks were shown to fail on deliberate breaks | On the VM |
@@ -490,11 +534,12 @@ that explicit; "inmate" and "offender" are roles, so synonyms.
 | Tags-to-masks loop (`cube/sync_masks.py`): 4 acceptance tests (`pytest lakehouse/acceptance/test_masks.py`) and 3 bats tests, each seen failing first; live, tagging `gender` Restricted in OpenMetadata masked it in Cube (`***` for all 100,000), and removing the tag restored the real values and a byte-identical model | On the VM |
 | Daily `om_sync` and Fuseki refresh in `daily_lake` (`openmetadata/lake`, `fuseki/glossary`, the non-blocking masks check): 7 acceptance tests across `test_om_sync.py`, `test_glossary_rdf.py` and `test_daily_run.py`, each seen failing first; real runs succeeded | On the VM |
 | Fuseki 6.2.0 under `/fuseki`: 7 acceptance tests (`pytest lakehouse/acceptance/test_fuseki.py`) and 4 bats tests, each seen failing first; removing the writer-only rule made the write test fail | On the VM |
+| Readiness (business inputs in `products/inputs/`, `depends_on:`, `closes.py`, the `period_readiness` view, Cube, MCP, Superset, `BusinessInputLate`): 13 acceptance tests (`pytest lakehouse/acceptance/test_readiness.py`), 1 dbt test and 1 bats test, each seen failing first; Classification reopening September turned Custody Population provisional in the lake and in Cube, live, and closing it turned it final | On the VM |
 | Business rules (rulebook, the pseudonymous-key deduction, SHACL shapes through Fuseki, the daily check and `BusinessRuleViolated`): 12 acceptance tests (`pytest lakehouse/acceptance/test_business_rules.py`) and 2 bats tests, each seen failing first; a "TBD" definition in a scratch graph broke `TermShape`, and an inferred graph without its rule file was removed | On the VM |
 | Glossary as RDF (`om_to_rdf.py`): 8 acceptance tests (`pytest lakehouse/acceptance/test_glossary_rdf.py`) and 1 bats test, each seen failing first; a stray triple was flagged by `--check` and removed by the next load | On the VM |
 | Platform metrics (Prometheus 3.15.0, node-exporter, cAdvisor), Grafana 13.2.3 and the Home Lakehouse dashboard, Postgres and blackbox probes: 22 acceptance tests (`pytest lakehouse/acceptance/test_monitoring.py`), each seen failing first; stopping Fuseki dropped its probe to 0 and back; every dashboard panel's query returns data | On the VM |
 | Pipeline and data-quality metrics (Pushgateway, run sensors, `monitoring_selftest`): 8 acceptance tests (`pytest lakehouse/acceptance/test_pipeline_metrics.py`), each seen failing first | On the VM |
-| Alerting (Alertmanager 0.34.1, 21 rules): 9 acceptance tests (`pytest lakehouse/acceptance/test_alerting.py`), each seen failing first; a failed `monitoring_selftest` raised `JobFailing`, ntfy got it at high priority on the selftest topic, and a passing run resolved it, at low priority | On the VM |
+| Alerting (Alertmanager 0.34.1, 22 rules): 9 acceptance tests (`pytest lakehouse/acceptance/test_alerting.py`), each seen failing first; a failed `monitoring_selftest` raised `JobFailing`, ntfy got it at high priority on the selftest topic, and a passing run resolved it, at low priority | On the VM |
 | Alert delivery (ntfy 2.30.0 on port 8443, deny-all, three declared users, the lakehouse template): 7 acceptance tests (`pytest lakehouse/acceptance/test_ntfy.py`), each seen failing first; the Watchdog heartbeat arrives at min priority | On the VM |
 | Nightly catalog backup: 6 acceptance tests (`pytest lakehouse/acceptance/test_backup.py`), each seen failing first; a restore drill matched the live catalog row for row | On the VM |
 | Pinned versions: 28 acceptance tests (`pytest lakehouse/acceptance/test_pins.py`) and 2 bats tests, each seen failing first; the jupyter image was shown by layer match to be built on the `2026-10-12` base, and `daily_lake` and `notebook_smoke` succeeded on it | On the VM |
