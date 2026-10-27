@@ -1,0 +1,23 @@
+# A data product: one file is its whole promise. om_sync.py publishes it to OpenMetadata (domain, data product,
+# data contracts on its mart tables), om_to_rdf.py to Fuseki (as a DCAT dataset), and acceptance/test_products.py
+# fails if the tables, views, terms or contracts it names drift from what's real.
+name: custody-population
+title: Custody Population
+domain: Custody Operations
+owner: Lakehouse stewards
+question: Who is in custody at each month-end, by unit, custody level and threat level?
+description: >
+  Who is held at each month-end since October 1996, by unit, custody level and threat level. People are distinct
+  SIDs, counted at query time, so a person held under two records is one person; open records are counted too.
+  Records with no sentence or release date can't be placed in time and are left out: snapshot_coverage says how
+  many. No restricted or personal columns, so anyone may use it.
+tables:            # what the product delivers: none may hold a restricted or personal column
+  - mart_custody.custody_snapshot_monthly
+  - mart_custody.snapshot_coverage
+  - gold.dim_unit
+sources:           # where its data comes from
+  - gold.fct_offender_record
+cube_views: [custody_population]
+glossary_terms: [Person, Offender Record, Unit, Custody Level, Threat Level]
+refresh: {every: 1, unit: day, at: "05:00", timezone: America/Chicago}
+max_age_hours: 26

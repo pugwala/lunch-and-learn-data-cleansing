@@ -31,6 +31,11 @@ SENSITIVITY_TAGS = {"restricted": "Restricted", "personal": "Personal"}
 TYPES = {"VARCHAR": "STRING", "BIGINT": "BIGINT", "INTEGER": "INT", "SMALLINT": "SMALLINT", "DOUBLE": "DOUBLE",
          "FLOAT": "FLOAT", "DATE": "DATE", "TIME": "TIME", "BOOLEAN": "BOOLEAN", "TIMESTAMP": "TIMESTAMP",
          "TIMESTAMP WITH TIME ZONE": "TIMESTAMPZ"}
+# OpenMetadata names a contract's timezone by its own labels (a fixed GMT offset plus the zone), not IANA names.
+OM_TIMEZONES = {"America/Chicago": "GMT-06:00 (America/Chicago)"}
+PRODUCT_PROPERTIES = {"lakehouseQuestion": "The question this data product answers",
+                      "lakehouseCubeViews": "Cube views that serve it (comma-separated)",
+                      "lakehouseTerms": "Glossary terms it speaks in (comma-separated)"}
 CUSTOM_PROPERTIES = {"lakehouseColumns": "Lake columns this term maps to (comma-separated)",
                      "lakehouseMetrics": "Cube measures to ask query_metric for (comma-separated)"}
 CUSTOM_RELATIONS = [   # relation types glossary.yml uses that OpenMetadata doesn't define out of the box
@@ -79,6 +84,17 @@ class Sync:
         r = self.http.request(method, f"{OM}/{path}", json=body, timeout=60)
         if not r.ok:
             raise RuntimeError(f"{method} {path} ({what}): {r.status_code} {r.text[:400]}")
+        return r.json()
+
+    def patch(self, path, ops, what):
+        """Record a difference; unless checking, send a JSON Patch (OpenMetadata's partial update) to path."""
+        self.drift.append(what)
+        if self.check:
+            return None
+        r = self.http.patch(f"{OM}/{path}", json=ops, timeout=60,
+                            headers={"Content-Type": "application/json-patch+json"})
+        if not r.ok:
+            raise RuntimeError(f"PATCH {path} ({what}): {r.status_code} {r.text[:400]}")
         return r.json()
 
     def ensure(self, collection, fqn, body, compare, fields=""):
@@ -194,15 +210,17 @@ def sensitivity(s):
 
 
 def custom_properties(s):
-    """Custom string properties on glossary terms for the columns and metrics each maps to."""
-    gt = s.get("metadata/types/name/glossaryTerm", fields="customProperties")
-    have = {p["name"] for p in gt.get("customProperties") or []}
+    """Custom string properties: on glossary terms, the columns and metrics each maps to; on data products, the
+    question, Cube views and glossary terms from the product's descriptor."""
     string_type = s.get("metadata/types/name/string")
-    for name, text in CUSTOM_PROPERTIES.items():
-        if name not in have:
-            s.write("PUT", f"metadata/types/{gt['id']}", {"name": name, "description": text,
-                                                          "propertyType": {"id": string_type["id"], "type": "type"}},
-                    f"custom property {name}")
+    for entity, props in (("glossaryTerm", CUSTOM_PROPERTIES), ("dataProduct", PRODUCT_PROPERTIES)):
+        typ = s.get(f"metadata/types/name/{entity}", fields="customProperties")
+        have = {p["name"] for p in typ.get("customProperties") or []}
+        for name, text in props.items():
+            if name not in have:
+                s.write("PUT", f"metadata/types/{typ['id']}", {"name": name, "description": text,
+                                                               "propertyType": {"id": string_type["id"], "type": "type"}},
+                        f"custom property {entity}.{name}")
 
 
 def glossary(s):
@@ -269,10 +287,86 @@ def tables(s):
                                                             & wanted.get(c["name"], set()))) for c in e["columns"]]))
 
 
+def product_descriptors():
+    """The data products' descriptors (lakehouse/products/*.yml) and their domains (products/domains/*.yml)."""
+    folder = LAKEHOUSE / "products"
+    return ([yaml.safe_load(f.read_text()) for f in sorted(folder.glob("*.yml"))],
+            [yaml.safe_load(f.read_text()) for f in sorted((folder / "domains").glob("*.yml"))])
+
+
+def dbt_contracts():
+    """{model name: [(column, DATA_TYPE)]} for every dbt model whose contract is enforced, columns in order."""
+    out = {}
+    for path in (LAKEHOUSE / "dbt" / "models").rglob("*.yml"):
+        for m in (yaml.safe_load(path.read_text()) or {}).get("models", []):
+            if ((m.get("config") or {}).get("contract") or {}).get("enforced"):
+                out[m["name"]] = [(c["name"], c["data_type"].upper()) for c in m["columns"]]
+    return out
+
+
+def products(s):
+    """Each domain, then each data product (its delivered tables as assets, its question, views and terms as custom
+    properties), then a data contract on every delivered table dbt enforces a contract for: dbt's columns and the
+    descriptor's SLA. A table in two products gets one contract."""
+    descriptors, domains = product_descriptors()
+    for d in domains:
+        s.ensure("domains", d["name"], {"name": d["name"], "domainType": d["type"],
+                                        "description": " ".join(d["description"].split())},
+                 lambda e: (e["name"], e["domainType"], text(e.get("description"))))
+    contracts, tables, done = dbt_contracts(), {}, set()
+    for p in descriptors:
+        refs, domain = [], s.get(f"domains/name/{p['domain']}")
+        for table in p["tables"]:
+            entity = s.get(f"tables/name/{SERVICE}.{DATABASE}.{table}", fields="domains")
+            tables[table] = entity
+            refs.append({"id": entity["id"], "type": "table"})
+            # A data product's assets must sit in its domain; adding keeps any other domain the table serves.
+            have = [{"id": d["id"], "type": "domain"} for d in entity.get("domains") or []]
+            if domain and domain["id"] not in {d["id"] for d in have}:
+                s.patch(f"tables/{entity['id']}", [{"op": "add", "path": "/domains",
+                                                    "value": have + [{"id": domain["id"], "type": "domain"}]}],
+                        f"table {table} into domain {p['domain']}")
+        body = {"name": p["name"], "displayName": p["title"], "description": " ".join(p["description"].split()),
+                "domains": [p["domain"]],
+                "extension": {"lakehouseQuestion": p["question"], "lakehouseCubeViews": ", ".join(p["cube_views"]),
+                              "lakehouseTerms": ", ".join(p["glossary_terms"])}}
+        s.ensure("dataProducts", p["name"], body, fields="domains,extension",
+                 compare=lambda e: (e.get("displayName"), text(e.get("description")),
+                                    sorted(d["name"] if isinstance(d, dict) else d for d in e.get("domains") or []),
+                                    {k: (e.get("extension") or {}).get(k) for k in PRODUCT_PROPERTIES}))
+        # Assets have their own endpoints (a create body's assets are ignored): add what's missing, drop extras.
+        found = s.get(f"dataProducts/name/{p['name']}/assets", limit=1000)
+        have = {a["id"] for a in (found or {}).get("data", [])}
+        want = {r["id"] for r in refs}
+        if want - have:
+            s.write("PUT", f"dataProducts/{p['name']}/assets/add",
+                    {"assets": [r for r in refs if r["id"] in want - have]}, f"assets added to {p['name']}")
+        if have - want:
+            s.write("PUT", f"dataProducts/{p['name']}/assets/remove",
+                    {"assets": [{"id": i, "type": "table"} for i in have - want]}, f"assets removed from {p['name']}")
+    for p in descriptors:
+        r = p["refresh"]
+        for table in p["tables"]:
+            model = table.split(".")[1]
+            if model not in contracts or table in done:   # a table in two products gets one contract
+                continue
+            done.add(table)
+            name = f"{model}-contract"
+            body = {"name": name, "description": f"The shape and freshness {table} promises: its columns as dbt "
+                    "enforces them, refreshed daily by daily_lake.",
+                    "entity": {"id": tables[table]["id"], "type": "table"},
+                    "schema": [{"name": c, "dataType": t} for c, t in contracts[model]],
+                    "sla": {"refreshFrequency": {"interval": r["every"], "unit": r["unit"]},
+                            "maxLatency": {"value": p["max_age_hours"], "unit": "hour"},
+                            "availabilityTime": r["at"], "timezone": OM_TIMEZONES[r["timezone"]]}}
+            s.ensure("dataContracts", f"{SERVICE}.{DATABASE}.{table}.dataContract_{name}", body, fields="sla",
+                     compare=lambda e: ([(c["name"], c["dataType"]) for c in e.get("schema") or []], e.get("sla")))
+
+
 def main(argv):
     """Sync (or --check) everything; print what differed and a summary line."""
     s = Sync(check="--check" in argv)
-    for step in (relation_types, sensitivity, custom_properties, glossary, tables):
+    for step in (relation_types, sensitivity, custom_properties, glossary, tables, products):
         step(s)
     for what in s.drift:
         print(f"  {'differs' if s.check else 'updated'}: {what}")

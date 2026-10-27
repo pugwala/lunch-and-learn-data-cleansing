@@ -9,6 +9,9 @@ Reads OpenMetadata as the read-only mcp-reader and builds one graph, <https://la
   skos:broader, skos:narrower and skos:related; the rest (partOf, hasPart, identifies, ...) become lh:<type>.
 - every lake column as an lh:Column with lh:table ("schema.table"), lh:name, lh:sensitivity (lh:Restricted or
   lh:Personal, from the Sensitivity tags) and lh:means (the glossary term it is linked to).
+- every data product as a dcat:Dataset (W3C DCAT, the data-catalog vocabulary) with dct:title, dct:description,
+  lh:domain, lh:question, lh:usesTable for each table it delivers, lh:usesTerm for each glossary term it speaks in,
+  and dcat:accessService for each Cube view that serves it (a dcat:DataService).
 
 The graph is replaced in one Graph Store PUT as the writer user, so a re-run never piles up old triples. --check
 compares the graph in Fuseki with what OpenMetadata says now and exits 1 if they differ. IRIs live under
@@ -23,7 +26,7 @@ import sys
 import requests
 from rdflib import Graph, Literal, Namespace, URIRef
 from rdflib.compare import isomorphic, to_isomorphic
-from rdflib.namespace import RDF, SKOS
+from rdflib.namespace import DCAT, DCTERMS, RDF, SKOS
 
 OM = os.environ.get("OM_URL", "http://openmetadata-server:8585/openmetadata") + "/api/v1"
 FUSEKI = os.environ.get("FUSEKI_URL", "http://fuseki:3030/fuseki") + "/lakehouse"
@@ -31,7 +34,10 @@ GRAPH = "https://lakehouse.invalid/graph/openmetadata"
 LH = Namespace("https://lakehouse.invalid/ontology#")
 TERM = Namespace("https://lakehouse.invalid/glossary/")
 COLUMN = "https://lakehouse.invalid/lake/"
+PRODUCT = Namespace("https://lakehouse.invalid/product/")
+CUBE_VIEW = Namespace("https://lakehouse.invalid/cube/")
 GLOSSARY = "Lakehouse"
+SERVICE, DATABASE = "lakehouse", "lake"   # OpenMetadata names lake tables lakehouse.lake.<schema>.<table>
 SKOS_RELATIONS = {"broader": SKOS.broader, "narrower": SKOS.narrower, "relatedTo": SKOS.related}
 SENSITIVITY = {"Sensitivity.Restricted": LH.Restricted, "Sensitivity.Personal": LH.Personal}
 
@@ -100,6 +106,24 @@ def build(om):
                     g.add((node, LH.sensitivity, SENSITIVITY[tag["tagFQN"]]))
                 elif tag.get("source") == "Glossary" and tag["tagFQN"].startswith(f"{GLOSSARY}."):
                     g.add((node, LH.means, TERM[slug(tag["tagFQN"].split(".", 1)[1])]))
+    g.bind("dcat", DCAT), g.bind("dct", DCTERMS), g.bind("prod", PRODUCT)
+    for p in listing(om, "dataProducts", fields="domains,extension"):
+        node, ext = PRODUCT[p["name"]], p.get("extension") or {}
+        g.add((node, RDF.type, DCAT.Dataset))
+        g.add((node, DCTERMS.title, Literal(p.get("displayName") or p["name"])))
+        g.add((node, DCTERMS.description, Literal(text(p.get("description")))))
+        for d in p.get("domains") or []:
+            g.add((node, LH.domain, Literal(d["name"])))
+        if ext.get("lakehouseQuestion"):
+            g.add((node, LH.question, Literal(ext["lakehouseQuestion"])))
+        for asset in listing(om, f"dataProducts/name/{p['name']}/assets"):
+            g.add((node, LH.usesTable, Literal(asset["fullyQualifiedName"].removeprefix(f"{SERVICE}.{DATABASE}."))))
+        for term in filter(None, (ext.get("lakehouseTerms") or "").split(", ")):
+            g.add((node, LH.usesTerm, TERM[slug(term)]))
+        for view in filter(None, (ext.get("lakehouseCubeViews") or "").split(", ")):
+            g.add((node, DCAT.accessService, CUBE_VIEW[view]))
+            g.add((CUBE_VIEW[view], RDF.type, DCAT.DataService))
+            g.add((CUBE_VIEW[view], DCTERMS.title, Literal(view)))
     return g
 
 

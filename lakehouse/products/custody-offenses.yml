@@ -1,0 +1,20 @@
+# A data product: one file is its whole promise (see custody-population.yml for how it is published and tested).
+name: custody-offenses
+title: Custody Offenses
+domain: Custody Operations
+owner: Lakehouse stewards
+question: What is the custody population held for, and how many new sentences come in each month, by offense?
+description: >
+  The offense profile of the custody population at each month-end (by NIBRS offense code, offense-against
+  category and violence code), and new sentences by sentence date and offense. People are distinct SIDs, counted
+  at query time. No restricted or personal columns, so anyone may use it.
+tables:            # what the product delivers: none may hold a restricted or personal column
+  - mart_custody.custody_snapshot_monthly
+  - mart_custody.snapshot_coverage
+  - gold.dim_offense
+sources:           # where its data comes from: custody_admissions reads this through Cube, none of its sensitive columns
+  - gold.fct_offender_record
+cube_views: [custody_offenses, custody_admissions]
+glossary_terms: [Person, Offender Record, Offense Code, Offense-Against Category, Violence Code]
+refresh: {every: 1, unit: day, at: "05:00", timezone: America/Chicago}
+max_age_hours: 26
