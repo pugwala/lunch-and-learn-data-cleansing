@@ -32,6 +32,7 @@ every number matches the Facilitator Guide. dbt builds gold, and Dagster runs it
 | `readiness/` | `closes.py`: syncs the declared inputs and dependencies to the lake, records each month a business unit closes (`report`), plays the fictional units (`simulate`), and shows who is late (`status`) |
 | `metrics.py` | `push()`: Dagster's pipeline and data-quality numbers to the Pushgateway (never fails a run) |
 | `housekeeping.py` | DuckLake housekeeping, run weekly by `lake_housekeeping`: expire snapshots older than 30 days, merge small files, delete unneeded and orphaned files (`--dry-run` only reports) |
+| `ci/` | `checks.sh`: every check that needs no secrets and no running stack, for CI and before a push |
 | `backup/backup.sh` | The nightly catalog backup: `pg_dump` of every app database, checked, 14 days kept |
 | `fuseki/` | Apache Jena Fuseki 6.2.0, built from Apache's verified release: `Dockerfile`, `config.ttl` (one dataset; writes need the writer user), `shiro.ini` (no users; admin only inside the container), `start.sh` |
 | `cube/sync_masks.py` | Makes Cube mask exactly the columns OpenMetadata tags `Sensitivity.Restricted` |
@@ -530,6 +531,22 @@ the SHACL shapes and dbt's tests pick it up on their own.
 
 ## Test status
 
+**Before a push, or in CI:** `bash lakehouse/ci/checks.sh` runs every check that needs no secrets and no running stack,
+on a copy of the working tree (never `.env`, never dbt's `target/`), in about a minute and a half:
+
+- **Static checks:** a virtualenv with the lakehouse's pins (installed only from releases before the image's
+  `PIP_CUTOFF`); every Python file compiles and every YAML file parses; the docstring test; the SHACL shapes and
+  SPARQL rules parse.
+- **The 56 bats tests,** and promtool and amtool on the monitoring config.
+- **`compose.yaml`** checked against a dummy `.env` (nothing printed).
+- **A sandbox lake:** generate, load, sync and simulate readiness, `dbt build` with every test, and the 19 parity
+  checks, all on a plain DuckDB file.
+- **`dagster definitions validate`:** it catches what a compile can't. It was shown failing on the `@multi_asset`
+  mistake of 2026-10-27.
+
+GitHub can only start a workflow by hand (this repo gets no push-triggered runs) if the workflow file is on `main`,
+so `.github/workflows/lakehouse-ci.yml` waits for a course-side change on `main`.
+
 | Piece | Where it has run |
 | --- | --- |
 | Loader, 19 parity checks, DuckLake on Postgres, image build, Postgres roles | On the VM |
@@ -555,6 +572,7 @@ the SHACL shapes and dbt's tests pick it up on their own.
 | Pipeline and data-quality metrics (Pushgateway, run sensors, `monitoring_selftest`): 8 acceptance tests (`pytest lakehouse/acceptance/test_pipeline_metrics.py`), each seen failing first | On the VM |
 | Alerting (Alertmanager 0.34.1, 23 rules): 9 acceptance tests (`pytest lakehouse/acceptance/test_alerting.py`), each seen failing first; a failed `monitoring_selftest` raised `JobFailing`, ntfy got it at high priority on the selftest topic, and a passing run resolved it, at low priority | On the VM |
 | Alert delivery (ntfy 2.30.0 on port 8443, deny-all, three declared users, the lakehouse template): 7 acceptance tests (`pytest lakehouse/acceptance/test_ntfy.py`), each seen failing first; the Watchdog heartbeat arrives at min priority | On the VM |
+| CI checks (`lakehouse/ci/checks.sh`): 14 checks, all green on the VM in 73 s; `dagster definitions validate` shown to fail on a copy of the definitions with the `deps=` mistake put back | On the VM |
 | Lake housekeeping (`housekeeping.py`, the weekly `lake_housekeeping` job, `LakeHousekeepingStale`): 8 acceptance tests (`pytest lakehouse/acceptance/test_housekeeping.py`), each seen failing first; the deleting steps are tested on a scratch DuckLake, where history went from every snapshot to just the current one with today's data unchanged, a dry run changed nothing, and a planted orphan file was deleted | On the VM |
 | Nightly catalog backup: 6 acceptance tests (`pytest lakehouse/acceptance/test_backup.py`), each seen failing first; a restore drill matched the live catalog row for row | On the VM |
 | Pinned versions: 28 acceptance tests (`pytest lakehouse/acceptance/test_pins.py`) and 2 bats tests, each seen failing first; the jupyter image was shown by layer match to be built on the `2026-10-12` base, and `daily_lake` and `notebook_smoke` succeeded on it | On the VM |
