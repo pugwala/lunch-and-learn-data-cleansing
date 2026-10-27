@@ -561,6 +561,8 @@ services:
     volumes:
       - ./monitoring/alertmanager:/etc/alertmanager:ro   # the folder, not the file
       - ${LAKE_ROOT:-/lake}/alertmanager:/alertmanager
+    secrets:
+      - ntfy_alertmanager_password   # /run/secrets/ntfy_alertmanager_password, the receivers' password_file
     expose:
       - "9093"
     healthcheck:
@@ -596,6 +598,11 @@ services:
       - grafana
       - alertmanager
       - ntfy
+
+# Compose writes each of these from .env into a file under /run/secrets, for programs that read a password from a file.
+secrets:
+  ntfy_alertmanager_password:
+    environment: NTFY_ALERTMANAGER_PASSWORD
 
 volumes:
   catalog-pg-data:

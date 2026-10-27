@@ -76,6 +76,17 @@ def test_caddy_serves_ntfy_on_its_own_port():
     assert "{$LAKE_TS_HOST}:8443 {" in caddyfile and "reverse_proxy ntfy:8080" in caddyfile
 
 
+def test_the_watchdog_heartbeat_arrives():
+    """Watchdog always fires and is re-sent every 4 hours to lakehouse-heartbeat: alerting works end to end, from
+    Prometheus through Alertmanager to ntfy, right now. It never goes to Ian's phone topic."""
+    deadline = time.time() + 120   # right after a fresh start, the first one lands after Alertmanager's group_wait
+    while not (beats := [m for m in messages("lakehouse-heartbeat", since="5h") if "Watchdog" in m.get("title", "")]):
+        assert time.time() < deadline, "no Watchdog notification on lakehouse-heartbeat in the last 5 hours"
+        time.sleep(10)
+    assert {m.get("priority", 3) for m in beats} == {1}   # min priority: silent even if someone subscribes
+    assert not [m for m in messages("lakehouse-alerts") if "Watchdog" in m.get("title", "")]
+
+
 def test_iphone_wakeups_relay_through_ntfy_sh_without_the_alert():
     """iOS only wakes an app through Apple's push service, so ntfy forwards a poll request to ntfy.sh (a hash of the
     topic URL and the message ID, never the text); the phone then fetches the alert from this server over Tailscale."""

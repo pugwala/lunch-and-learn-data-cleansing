@@ -1,0 +1,14 @@
+# How an Alertmanager webhook becomes an ntfy notification: Alertmanager posts its JSON to <topic>?template=lakehouse
+# (monitoring/alertmanager/alertmanager.yml). The priority follows the alerts' severity: critical while firing is 4
+# (high: sound and a banner), warning 3 (default), any resolved notice 2 (low), and none 1 (min, silent: the Watchdog
+# heartbeat). ntfy ignores a priority passed with the request once a template is in use, so it is set here.
+title: '{{ if eq .status "resolved" }}✅ Resolved{{ else }}🚨 Firing{{ end }}: {{ .commonLabels.alertname }}'
+message: |-
+  Status: {{ if eq .status "resolved" }}Resolved{{ else }}Firing{{ end }}
+  Severity: {{ or .commonLabels.severity "unknown" }}
+  {{- range .alerts }}
+  • {{ .annotations.summary }}{{ with .labels.pipeline }} [{{ . }}]{{ end }}{{ with .labels.site }} [{{ . }}]{{ end }}
+  {{- with .annotations.description }}
+    {{ . }}{{ end }}
+  {{- end }}
+priority: '{{ if eq .status "resolved" }}2{{ else if eq .commonLabels.severity "critical" }}4{{ else if eq .commonLabels.severity "none" }}1{{ else }}3{{ end }}'

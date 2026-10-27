@@ -1,13 +1,36 @@
-# Alertmanager for the home-lab lakehouse (Phase 6). Where alerts go is still Ian's call (PagerDuty, email or both),
-# so every alert ends at "undecided", a receiver with no integrations: it sends nothing anywhere, and alerts show at
-# /alertmanager/ and in Grafana meanwhile. To start sending, add an integration to a receiver (for PagerDuty,
-# pagerduty_configs with routing_key_file pointing at a file outside this repo) and route to it.
+# Alertmanager for the home-lab lakehouse (Phase 6). Alerts go to ntfy on this VM (the ntfy service), one topic each:
+# lakehouse-alerts is what Ian's phone subscribes to; Watchdog, which always fires on purpose, goes to
+# lakehouse-heartbeat instead, so it never buzzes the phone but its silence there means alerting is down; and
+# whatever monitoring_selftest raises (the acceptance tests make it fail on purpose) goes to lakehouse-selftest.
+# ntfy's lakehouse template (ntfy/templates/lakehouse.yml) formats each one and sets its priority from its severity.
+# Every receiver logs in as ntfy's publish-only alertmanager user; the password file is Compose's secret from .env.
 route:
-  receiver: undecided
+  receiver: ntfy-alerts
   group_by: [alertname, pipeline, site]
   group_wait: 30s
   group_interval: 5m
   repeat_interval: 4h
+  routes:
+    - matchers: ['alertname="Watchdog"']
+      receiver: ntfy-heartbeat
+    - matchers: ['pipeline="monitoring_selftest"']
+      receiver: ntfy-selftest
+      group_wait: 5s        # tests wait for these notices; real alerts keep the slower timings above
+      group_interval: 30s
 
 receivers:
-  - name: undecided
+  - name: ntfy-alerts
+    webhook_configs:
+      - url: http://ntfy:8080/lakehouse-alerts?template=lakehouse
+        http_config: &ntfy_login
+          basic_auth:
+            username: alertmanager
+            password_file: /run/secrets/ntfy_alertmanager_password
+  - name: ntfy-heartbeat
+    webhook_configs:
+      - url: http://ntfy:8080/lakehouse-heartbeat?template=lakehouse
+        http_config: *ntfy_login
+  - name: ntfy-selftest
+    webhook_configs:
+      - url: http://ntfy:8080/lakehouse-selftest?template=lakehouse
+        http_config: *ntfy_login

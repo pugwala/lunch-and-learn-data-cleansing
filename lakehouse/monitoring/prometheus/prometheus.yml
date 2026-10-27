@@ -47,6 +47,15 @@ scrape_configs:
     static_configs:
       - targets: ["pushgateway:9091"]
 
+  # Alert delivery: Alertmanager's own counters (AlertDeliveryFailing reads its failed notifications) and ntfy's.
+  - job_name: alertmanager
+    metrics_path: /alertmanager/metrics
+    static_configs:
+      - targets: ["alertmanager:9093"]
+  - job_name: ntfy
+    static_configs:
+      - targets: ["ntfy:9095"]
+
 rule_files:
   - /etc/prometheus/rules/*.yml
 

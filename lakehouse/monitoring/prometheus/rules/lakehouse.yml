@@ -123,8 +123,15 @@ groups:
 
   - name: meta
     rules:
+      - alert: AlertDeliveryFailing
+        # Alertmanager couldn't hand a notification to ntfy. If ntfy itself is down this can't reach the phone either,
+        # but it shows in Alertmanager and Grafana, and TargetDown and SiteDown name ntfy.
+        expr: increase(alertmanager_notifications_failed_total[15m]) > 0
+        labels: {severity: critical}
+        annotations:
+          summary: "Alertmanager failed to deliver notifications through {{ $labels.integration }} in the last 15 minutes"
       - alert: Watchdog
         expr: vector(1)
         labels: {severity: none}
         annotations:
-          summary: "Always firing, on purpose: once a real receiver exists, silence from this alert means alerting is down"
+          summary: "Always firing, on purpose: it reaches ntfy's lakehouse-heartbeat topic every 4 hours, so silence there means alerting is down"
