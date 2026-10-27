@@ -1,0 +1,24 @@
+# ntfy for the home-lab lakehouse: where alerts go (Phase 6). Compose mounts this folder at /etc/ntfy, ntfy's
+# default config folder. Nothing here is secret: the users and their passwords come from .env through start.sh,
+# which hashes each one when ntfy starts. base-url is set by Compose from LAKE_TS_HOST, which stays out of the repo.
+listen-http: ":8080"
+behind-proxy: true                   # Caddy is in front: trust its X-Forwarded-For for rate limits and logs
+cache-file: /var/lib/ntfy/cache.db   # messages, so a phone that was offline catches up
+cache-duration: 72h
+auth-file: /var/lib/ntfy/auth.db
+auth-default-access: deny-all        # nobody reads or publishes anything without a user
+enable-login: true                   # the web app at https://<LAKE_TS_HOST>:8443/ asks for a user
+metrics-listen-http: ":9095"         # Prometheus scrapes this on the compose network; Caddy doesn't route it
+log-level: info
+
+# iPhones: iOS wakes an app only through Apple's push service, which a self-hosted server can't reach, so ntfy
+# forwards a poll request to ntfy.sh for each message: a SHA-256 hash of the topic URL and the message ID, never the
+# title or text. ntfy.sh pushes that to the phone, and the ntfy app fetches the alert itself from this server, over
+# Tailscale. Ian's choice (2026-10-26); without it, iOS shows alerts only while the app is open.
+upstream-base-url: "https://ntfy.sh"
+
+# Each user gets only what it needs, on the lakehouse-* topics only (lakehouse-alerts, -heartbeat, -selftest).
+auth-access:
+  - "alertmanager:lakehouse-*:wo"    # Alertmanager publishes; it can't read
+  - "ian:lakehouse-*:ro"             # Ian's phone and browser read
+  - "checker:lakehouse-*:ro"         # the acceptance tests read

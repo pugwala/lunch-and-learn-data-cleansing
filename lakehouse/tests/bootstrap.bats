@@ -39,6 +39,9 @@ FUSEKI_WRITER_PASSWORD=fuseki-secret
 GRAFANA_ADMIN_PASSWORD=grafana-secret
 LAKE_MONITOR_PASSWORD=monitor-secret
 LAKE_BACKUP_PASSWORD=backup-secret
+NTFY_ALERTMANAGER_PASSWORD=ntfy-am-secret
+NTFY_IAN_PASSWORD=ntfy-ian-secret
+NTFY_CHECKER_PASSWORD=ntfy-checker-secret
 DAGSTER_UI_USER=admin
 DAGSTER_UI_HASH='\$2a\$14\$fakehash'
 LAKE_ROOT=$T/lake
@@ -54,7 +57,7 @@ case "$*" in
   "compose version"|info)                    exit 0 ;;
   *" build "*)                               exit "$FAKE_BUILD_EXIT" ;;
   *" up -d --wait catalog-pg"*)              echo "$FAKE_PG_UP" >&2; exit 0 ;;
-  *" ps --format {{.Service}} {{.Status}}"*) for s in catalog-pg jupyter dagster-webserver dagster-daemon cube superset mcp opensearch openmetadata-server fuseki prometheus node-exporter cadvisor postgres-exporter blackbox pushgateway catalog-backup alertmanager grafana caddy; do
+  *" ps --format {{.Service}} {{.Status}}"*) for s in catalog-pg jupyter dagster-webserver dagster-daemon cube superset mcp opensearch openmetadata-server fuseki prometheus node-exporter cadvisor postgres-exporter blackbox pushgateway catalog-backup ntfy alertmanager grafana caddy; do
                                                echo "$s Up 1 minute (healthy)"; done ;;
   *" ps --format {{.Status}} "*)             echo "Up 1 minute (healthy)" ;;
   *"stage_model.py --check"*)                 exit "$FAKE_MODEL_EXIT" ;;
@@ -87,7 +90,7 @@ EOF
   stub curl <<'EOF'
 [ -n "$FAKE_CURL_DOWN" ] && { printf 000; exit 7; }   # like real curl when nothing answers: prints 000 and fails
 case "$*" in
-  *example.invalid/jupyter/*) printf 302 ;; *example.invalid/dagster/*) printf 401 ;; *example.invalid/superset/*) printf 302 ;; *example.invalid/mcp*) printf 401 ;; *example.invalid/openmetadata/*) printf 200 ;; *example.invalid/fuseki/*) printf 200 ;; *example.invalid/prometheus/*) printf 401 ;; *example.invalid/grafana/*) printf 302 ;; *example.invalid/alertmanager/*) printf 401 ;; *) printf 000 ;;
+  *example.invalid/jupyter/*) printf 302 ;; *example.invalid/dagster/*) printf 401 ;; *example.invalid/superset/*) printf 302 ;; *example.invalid/mcp*) printf 401 ;; *example.invalid/openmetadata/*) printf 200 ;; *example.invalid/fuseki/*) printf 200 ;; *example.invalid/prometheus/*) printf 401 ;; *example.invalid/grafana/*) printf 302 ;; *example.invalid/alertmanager/*) printf 401 ;; *example.invalid:8443/v1/health*) printf 200 ;; *) printf 000 ;;
 esac
 EOF
   stub tailscale <<'EOF'
@@ -213,6 +216,7 @@ set_env()       { sed -i "/^$1=/d" "$ENV"; [ $# = 1 ] || echo "$1=$2" >> "$ENV";
   called "https://lakehouse.example.invalid/prometheus/"
   called "https://lakehouse.example.invalid/grafana/"
   called "https://lakehouse.example.invalid/alertmanager/"
+  called "--resolve lakehouse.example.invalid:8443:127.0.0.1 https://lakehouse.example.invalid:8443/v1/health"   # ntfy: its own port
   [ -z "$(grep 'example.invalid/' "$FAKE_LOG" | grep -E 'curl .*-[a-z]*k')" ]   # no -k: the certificate must be trusted
 }
 
@@ -271,11 +275,11 @@ set_env()       { sed -i "/^$1=/d" "$ENV"; [ $# = 1 ] || echo "$1=$2" >> "$ENV";
   not_called " up "
 }
 
-@test "a healthy install passes, starting the twenty services by name and not running the loader" {
+@test "a healthy install passes, starting the twenty-one services by name and not running the loader" {
   run_bootstrap
   [ "$status" -eq 0 ]
   [[ $output == *"All checks passed"* ]]
-  called "up -d catalog-pg jupyter dagster-webserver dagster-daemon cube superset mcp opensearch openmetadata-server fuseki prometheus node-exporter cadvisor postgres-exporter blackbox pushgateway catalog-backup alertmanager grafana caddy"
+  called "up -d catalog-pg jupyter dagster-webserver dagster-daemon cube superset mcp opensearch openmetadata-server fuseki prometheus node-exporter cadvisor postgres-exporter blackbox pushgateway catalog-backup ntfy alertmanager grafana caddy"
   not_called "run --rm load-lake"
 }
 
@@ -390,6 +394,19 @@ set_env()       { sed -i "/^$1=/d" "$ENV"; [ $# = 1 ] || echo "$1=$2" >> "$ENV";
   [ "$status" -eq 0 ]
   called "chown -R 999:999 $T/lake/catalog-backups"
   not_called "chown -R 1000:100 $T/lake/catalog-backups"
+}
+
+@test "generates the three ntfy passwords when an older .env lacks them" {
+  set_env NTFY_ALERTMANAGER_PASSWORD; set_env NTFY_IAN_PASSWORD; set_env NTFY_CHECKER_PASSWORD
+  run_bootstrap
+  [ "$status" -eq 0 ]
+  for k in NTFY_ALERTMANAGER_PASSWORD NTFY_IAN_PASSWORD NTFY_CHECKER_PASSWORD; do grep -qE "^$k=[0-9a-f]{48}$" "$ENV"; done
+}
+
+@test "creates ntfy's folder on the lake disk" {
+  run_bootstrap
+  [ "$status" -eq 0 ]
+  called "mkdir -p $T/lake/ntfy"
 }
 
 @test "creates Alertmanager's folder on the lake disk" {

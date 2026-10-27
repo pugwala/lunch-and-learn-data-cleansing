@@ -57,3 +57,11 @@
 		reverse_proxy alertmanager:9093
 	}
 }
+
+# ntfy, where alerts go, on its own port: it can't be served under a path. Same name, same Tailscale certificate.
+{$LAKE_TS_HOST}:8443 {
+	tls {
+		get_certificate tailscale
+	}
+	reverse_proxy ntfy:8080
+}

@@ -19,3 +19,5 @@
   labels: {site: grafana}
 - targets: ["https://LAKE_TS_HOST/alertmanager/"]
   labels: {site: alertmanager}
+- targets: ["https://LAKE_TS_HOST:8443/v1/health"]   # ntfy has its own port: it can't sit under a path
+  labels: {site: ntfy}

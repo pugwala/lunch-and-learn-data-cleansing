@@ -109,6 +109,7 @@ services:
       OM_MCP_PASSWORD: ${OM_MCP_PASSWORD:?set OM_MCP_PASSWORD in .env}   # setup_admin.py creates mcp-reader with it
       FUSEKI_WRITER_PASSWORD: ${FUSEKI_WRITER_PASSWORD:?set FUSEKI_WRITER_PASSWORD in .env}   # loads the glossary into Fuseki; its tests
       GRAFANA_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD in .env}   # acceptance/test_monitoring.py
+      NTFY_CHECKER_PASSWORD: ${NTFY_CHECKER_PASSWORD:?set NTFY_CHECKER_PASSWORD in .env}   # ntfy's read-only test user: test_ntfy.py, test_alerting.py
       CUBEJS_API_SECRET: ${CUBEJS_API_SECRET:?set CUBEJS_API_SECRET in .env}   # Cube masking tests mint REST tokens (Jupyter already holds lake_rw)
     command: ["start-notebook.py", "--ServerApp.base_url=/jupyter/"]   # served at https://<tailscale name>/jupyter/
     volumes:
@@ -521,6 +522,32 @@ services:
 
   # Alerts from Prometheus's rules (monitoring/prometheus/rules/), at https://<LAKE_TS_HOST>/alertmanager/ behind
   # basic auth. Every alert goes to the "undecided" receiver, which sends nothing, until Ian picks PagerDuty or email.
+  # Where alerts go: ntfy, only on the tailnet, at https://<LAKE_TS_HOST>:8443/ through Caddy (ntfy can't sit under a
+  # path). Deny-all by default; start.sh declares three users from the plain passwords in .env: alertmanager
+  # (publishes), ian (the phone app reads) and checker (the tests read). Settings in ntfy/server.yml, the notification
+  # format and priority in ntfy/templates/lakehouse.yml. Messages and users live on /lake/ntfy.
+  ntfy:
+    profiles: [core]
+    image: binwiederhier/ntfy:${NTFY_TAG:-v2.30.0}
+    restart: unless-stopped
+    user: "1000:100"
+    entrypoint: ["sh", "/etc/ntfy/start.sh"]
+    environment:
+      NTFY_BASE_URL: https://${LAKE_TS_HOST:?run scripts/bootstrap.sh, which sets it from Tailscale}:8443
+      NTFY_ALERTMANAGER_PASSWORD: ${NTFY_ALERTMANAGER_PASSWORD:?set NTFY_ALERTMANAGER_PASSWORD in .env}
+      NTFY_IAN_PASSWORD: ${NTFY_IAN_PASSWORD:?set NTFY_IAN_PASSWORD in .env}
+      NTFY_CHECKER_PASSWORD: ${NTFY_CHECKER_PASSWORD:?set NTFY_CHECKER_PASSWORD in .env}
+    volumes:
+      - ./ntfy:/etc/ntfy:ro   # the folder, not the file
+      - ${LAKE_ROOT:-/lake}/ntfy:/var/lib/ntfy
+    expose:
+      - "8080"   # the app, through Caddy
+      - "9095"   # metrics, for Prometheus only
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:8080/v1/health"]
+      interval: 30s
+      timeout: 10s
+
   alertmanager:
     profiles: [core]
     image: prom/alertmanager:${ALERTMANAGER_TAG:-v0.34.1}
@@ -552,6 +579,7 @@ services:
     ports:
       - "443:443"
       - "80:80"
+      - "8443:8443"   # ntfy, which can't sit under a path on 443
     volumes:
       - ./caddy:/etc/caddy:ro   # the folder, not the file: a single-file mount keeps the old file after an editor saves a new one
       - caddy-data:/data
@@ -567,6 +595,7 @@ services:
       - prometheus
       - grafana
       - alertmanager
+      - ntfy
 
 volumes:
   catalog-pg-data:
