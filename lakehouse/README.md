@@ -31,6 +31,7 @@ every number matches the Facilitator Guide. dbt builds gold, and Dagster runs it
 | `products/` | The data products, one descriptor each (`custody-population.yml`, `custody-offenses.yml`), their domains (`domains/`), and the business inputs they depend on (`inputs/`, one file each) |
 | `readiness/` | `closes.py`: syncs the declared inputs and dependencies to the lake, records each month a business unit closes (`report`), plays the fictional units (`simulate`), and shows who is late (`status`) |
 | `metrics.py` | `push()`: Dagster's pipeline and data-quality numbers to the Pushgateway (never fails a run) |
+| `housekeeping.py` | DuckLake housekeeping, run weekly by `lake_housekeeping`: expire snapshots older than 30 days, merge small files, delete unneeded and orphaned files (`--dry-run` only reports) |
 | `backup/backup.sh` | The nightly catalog backup: `pg_dump` of every app database, checked, 14 days kept |
 | `fuseki/` | Apache Jena Fuseki 6.2.0, built from Apache's verified release: `Dockerfile`, `config.ttl` (one dataset; writes need the writer user), `shiro.ini` (no users; admin only inside the container), `start.sh` |
 | `cube/sync_masks.py` | Makes Cube mask exactly the columns OpenMetadata tags `Sensitivity.Restricted` |
@@ -78,6 +79,7 @@ Jobs: `daily_lake` (scheduled 05:00 Central, on by default), `regenerate_lake` (
 `notebook_smoke` (Sundays 06:00 Central, on by default): it runs the seven course notebooks as delivered plus
 `08_from_lake.ipynb` with papermill, saves the executed copies in `/lake/notebook-runs/<date>_<run>/`, and fails
 if any cell errors. It's an op job rather than an asset, so `daily_lake`'s all-asset selection never includes it.
+`lake_housekeeping` (Sundays 03:30 Central, on by default) keeps 30 days of DuckLake history; see Lake housekeeping.
 One run at a time, so DuckLake writers never race.
 
 ## Setup, upgrades and health checks: `scripts/bootstrap.sh`
@@ -382,7 +384,7 @@ services. None of the monitoring pieces has a host port (the tailnet can reach a
 | Load numbers and quality pass rates | `load_lake` and the `monitoring/data_quality` asset, through the Pushgateway |
 | The nightly catalog backup | `catalog-backup`, through node-exporter's textfile collector |
 
-**Alerts.** 22 rules in `monitoring/prometheus/rules/lakehouse.yml`, with thresholds well clear of today's values:
+**Alerts.** 23 rules in `monitoring/prometheus/rules/lakehouse.yml`, with thresholds well clear of today's values:
 platform (a target or site down, the certificate under 14 days, a disk over 85% or 95%, memory under 10%, Postgres
 down), pipeline (a job whose last run failed, `daily_lake` not succeeding in 26 hours, `notebook_smoke` in 8 days),
 data (silver holding fewer rows than bronze, over 10% of records flagged where about 3% is normal, a quality
@@ -416,6 +418,18 @@ forwards each message's ID and a SHA-256 hash of its topic URL to ntfy.sh (`upst
 
 **Test an alert.** Launch `monitoring_selftest` in Dagster with config `{"ops": {"selftest": {"config": {"fail":
 true}}}}`: within about a minute `JobFailing` fires for it. Launch it again with `false` and the alert resolves.
+
+**Lake housekeeping.** Every daily load replaces each table, and DuckLake keeps every replaced file so the lake can
+be queried as it was: two days of loads left 302 of 320 Parquet files (533 of 571 MB) as history, about 265 MB a
+day. `housekeeping.py`, run by the `lake_housekeeping` job on Sundays at 03:30 Central, does DuckLake's own
+maintenance in its order: expire snapshots older than **30 days** (the current one never), merge small files,
+delete the files no snapshot needs once they have waited a day (so a running query can finish), and delete orphaned
+files (written, never committed) older than a week. History then levels off at about a month's worth, around 8 GB,
+and personal data that changed or was deleted is gone from history within a month too. Deleting is permanent:
+`docker compose --profile core exec -T jupyter python lakehouse/housekeeping.py --dry-run` reports what it would
+remove and changes nothing. The job pushes `lakehouse_lake_snapshots`, `lakehouse_lake_live_bytes` and
+`lakehouse_lake_total_bytes`; a failed run raises `JobFailing`, and `LakeHousekeepingStale` fires when it hasn't
+succeeded in 8 days.
 
 **Catalog backups.** `catalog-backup` runs `pg_dump` 17 (the same image as catalog-pg) at 02:00 Central, and at
 start when the newest backup is over 23 hours old, as `lake_backup` (`pg_read_all_data`: reads every database,
@@ -539,8 +553,9 @@ the SHACL shapes and dbt's tests pick it up on their own.
 | Glossary as RDF (`om_to_rdf.py`): 8 acceptance tests (`pytest lakehouse/acceptance/test_glossary_rdf.py`) and 1 bats test, each seen failing first; a stray triple was flagged by `--check` and removed by the next load | On the VM |
 | Platform metrics (Prometheus 3.15.0, node-exporter, cAdvisor), Grafana 13.2.3 and the Home Lakehouse dashboard, Postgres and blackbox probes: 22 acceptance tests (`pytest lakehouse/acceptance/test_monitoring.py`), each seen failing first; stopping Fuseki dropped its probe to 0 and back; every dashboard panel's query returns data | On the VM |
 | Pipeline and data-quality metrics (Pushgateway, run sensors, `monitoring_selftest`): 8 acceptance tests (`pytest lakehouse/acceptance/test_pipeline_metrics.py`), each seen failing first | On the VM |
-| Alerting (Alertmanager 0.34.1, 22 rules): 9 acceptance tests (`pytest lakehouse/acceptance/test_alerting.py`), each seen failing first; a failed `monitoring_selftest` raised `JobFailing`, ntfy got it at high priority on the selftest topic, and a passing run resolved it, at low priority | On the VM |
+| Alerting (Alertmanager 0.34.1, 23 rules): 9 acceptance tests (`pytest lakehouse/acceptance/test_alerting.py`), each seen failing first; a failed `monitoring_selftest` raised `JobFailing`, ntfy got it at high priority on the selftest topic, and a passing run resolved it, at low priority | On the VM |
 | Alert delivery (ntfy 2.30.0 on port 8443, deny-all, three declared users, the lakehouse template): 7 acceptance tests (`pytest lakehouse/acceptance/test_ntfy.py`), each seen failing first; the Watchdog heartbeat arrives at min priority | On the VM |
+| Lake housekeeping (`housekeeping.py`, the weekly `lake_housekeeping` job, `LakeHousekeepingStale`): 8 acceptance tests (`pytest lakehouse/acceptance/test_housekeeping.py`), each seen failing first; the deleting steps are tested on a scratch DuckLake, where history went from every snapshot to just the current one with today's data unchanged, a dry run changed nothing, and a planted orphan file was deleted | On the VM |
 | Nightly catalog backup: 6 acceptance tests (`pytest lakehouse/acceptance/test_backup.py`), each seen failing first; a restore drill matched the live catalog row for row | On the VM |
 | Pinned versions: 28 acceptance tests (`pytest lakehouse/acceptance/test_pins.py`) and 2 bats tests, each seen failing first; the jupyter image was shown by layer match to be built on the `2026-10-12` base, and `daily_lake` and `notebook_smoke` succeeded on it | On the VM |
 | Docstring rule (every Python function and class has a docstring, every shell function a comment above it): 2 acceptance tests (`pytest lakehouse/acceptance/test_docstrings.py`), seen failing first on 23 Python and 9 shell functions written before the rule | On the VM |

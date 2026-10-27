@@ -65,6 +65,13 @@ groups:
         labels: {severity: warning}
         annotations:
           summary: "The weekly notebook_smoke run hasn't succeeded in 8 days"
+      - alert: LakeHousekeepingStale
+        # The weekly lake_housekeeping job (housekeeping.py) keeps 30 days of DuckLake history; without it the history,
+        # and any personal data that changed, piles up forever. A failed run raises JobFailing on its own.
+        expr: time() - lakehouse_job_last_success_timestamp_seconds{pipeline="lake_housekeeping"} > 8 * 86400
+        labels: {severity: warning}
+        annotations:
+          summary: "The weekly lake_housekeeping run hasn't succeeded in 8 days, so old snapshots and files pile up"
 
   - name: data
     rules:

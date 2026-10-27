@@ -13,6 +13,8 @@
     monitoring/data_products -> each data product's freshness, coverage, readiness and headline numbers
     push_run_success/failure -> sensors that push every job's last success, duration and last failure
     monitoring_selftest -> a job that fails on request, to exercise the failure path and its alert
+    lake_housekeeping   -> weekly (Sundays 03:30 Central): housekeeping.py keeps 30 days of DuckLake history and
+                           deletes the rest, and pushes the lake's snapshots and size
     notebook_smoke      -> runs the 7 course notebooks and lakehouse/08_from_lake.ipynb weekly (an op job, not
                            an asset, so daily_lake's all-asset selection never picks it up)
 
@@ -371,6 +373,44 @@ daily_schedule = dg.ScheduleDefinition(
     default_status=dg.DefaultScheduleStatus.RUNNING,
     description="05:00 Central, done well before the 07:00 work day.")
 
+# ---- Weekly lake housekeeping --------------------------------------------------------------------------------
+@dg.op(description="Expire DuckLake snapshots older than 30 days, merge small files, delete files nothing needs.")
+def housekeep_lake(context: dg.OpExecutionContext):
+    """Run housekeeping.py on the lake, log what it removed, and push the lake's snapshots and size."""
+    from lakehouse import housekeeping
+    result = housekeeping.run()
+    context.log.info(housekeeping.summary(result))
+    after = result["after"]
+    error = push("lakehouse_housekeeping", [
+        ("lakehouse_lake_snapshots", "DuckLake snapshots kept (time travel), after housekeeping.", after["snapshots"], {}),
+        ("lakehouse_lake_oldest_snapshot_timestamp_seconds", "When the oldest kept snapshot was taken.",
+         after["oldest_snapshot"].timestamp(), {}),
+        ("lakehouse_lake_live_bytes", "Bytes of data files the current snapshot uses.", after["live_bytes"], {}),
+        ("lakehouse_lake_total_bytes", "Bytes of all data files, history included.", after["total_bytes"], {}),
+        ("lakehouse_housekeeping_removed", "What the last housekeeping run removed, by kind.",
+         result["snapshots_expired"], {"kind": "snapshots"}),
+        ("lakehouse_housekeeping_removed", "What the last housekeeping run removed, by kind.",
+         result["files_deleted"] + result["orphans_deleted"], {"kind": "files"})])
+    if error:
+        context.log.warning(error)
+    return dg.Output(after["snapshots"], metadata={"summary": housekeeping.summary(result),
+                                                   "snapshots_expired": result["snapshots_expired"],
+                                                   "files_deleted": result["files_deleted"],
+                                                   "orphans_deleted": result["orphans_deleted"]})
+
+
+@dg.job(description="Keep 30 days of DuckLake history: expire older snapshots, merge small files, delete unneeded files.")
+def lake_housekeeping():
+    """One op: housekeeping.py on the lake."""
+    housekeep_lake()
+
+
+lake_housekeeping_schedule = dg.ScheduleDefinition(
+    name="lake_housekeeping_schedule", job=lake_housekeeping, cron_schedule="30 3 * * 0",
+    execution_timezone="America/Chicago", default_status=dg.DefaultScheduleStatus.RUNNING,
+    description="Sundays 03:30 Central, done before the 05:00 daily load (runs never overlap: one at a time).")
+
+
 # ---- Weekly notebook smoke run --------------------------------------------------------------------------------
 # The course notebooks as delivered (exercise blanks unfilled, so their checkers print a prompt, not an error),
 # plus the lakehouse's own bridge notebook. Executed copies land in /lake/notebook-runs/<date>_<run>/.
@@ -423,8 +463,8 @@ notebook_smoke_schedule = dg.ScheduleDefinition(
 
 defs = dg.Definitions(
     assets=[load_lake, readiness_inputs, gold, openmetadata_lake, fuseki_glossary, data_quality, data_products],
-    jobs=[daily_lake, regenerate_lake, notebook_smoke, monitoring_selftest],
-    schedules=[daily_schedule, notebook_smoke_schedule],
+    jobs=[daily_lake, regenerate_lake, notebook_smoke, monitoring_selftest, lake_housekeeping],
+    schedules=[daily_schedule, notebook_smoke_schedule, lake_housekeeping_schedule],
     sensors=[push_run_success, push_run_failure],
     resources={"dbt": DbtCliResource(project_dir=dbt_project)},
 )
