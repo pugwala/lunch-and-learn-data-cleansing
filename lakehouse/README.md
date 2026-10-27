@@ -26,11 +26,12 @@ every number matches the Facilitator Guide. dbt builds gold, and Dagster runs it
 | `mcp/` | The MCP server (`server.py`, Dockerfile, pinned requirements): `query_metric` over Cube, `define_term` over OpenMetadata's glossary |
 | `openmetadata/` | `setup_admin.py` (replaces the default admin password, creates the read-only `mcp-reader`) `om_sync.py` (pushes the glossary, the Sensitivity tags and every lake table into OpenMetadata) and `om_to_rdf.py` (publishes that meaning to Fuseki as RDF) |
 | `monitoring/` | Prometheus config, probe targets and alert rules (`prometheus/`), Alertmanager config (`alertmanager/`), blackbox modules (`blackbox/`), Grafana provisioning, the Home Lakehouse dashboard and `set_home.py` (`grafana/`) |
+| `products/` | The data products, one descriptor each (`custody-population.yml`, `custody-offenses.yml`), and their domains (`domains/`) |
 | `metrics.py` | `push()`: Dagster's pipeline and data-quality numbers to the Pushgateway (never fails a run) |
 | `backup/backup.sh` | The nightly catalog backup: `pg_dump` of every app database, checked, 14 days kept |
 | `fuseki/` | Apache Jena Fuseki 6.2.0, built from Apache's verified release: `Dockerfile`, `config.ttl` (one dataset; writes need the writer user), `shiro.ini` (no users; admin only inside the container), `start.sh` |
 | `cube/sync_masks.py` | Makes Cube mask exactly the columns OpenMetadata tags `Sensitivity.Restricted` |
-| `glossary/glossary.yml` | The glossary: 14 terms with definitions, synonyms, columns, metrics and typed relations; `om_sync.py` loads it into OpenMetadata |
+| `glossary/glossary.yml` | The glossary: 15 terms with definitions, synonyms, columns, metrics and typed relations; `om_sync.py` loads it into OpenMetadata |
 | `08_from_lake.ipynb` | Session 8 for the lakehouse: the Trust Test answered in SQL over silver, checked against `gold.trust_test` |
 
 ## Tables
@@ -44,15 +45,19 @@ every number matches the Facilitator Guide. dbt builds gold, and Dagster runs it
 | `silver.hero_offenders_exceptions` | One row per flagged value: `domain_unmapped`, `conversion_failed`, `dob_check`, `offense_violence_conflict`. Records are flagged, never dropped |
 | `silver.conduct_notes_answer_key` | Answer key with BIGINT `offender_number`, joins to silver |
 | `gold.dim_unit`, `gold.dim_offense`, `gold.dim_stg_group` | Dimensions from the reference data |
+| `gold.dim_person` | One row per known person (SID): record count, first and latest sentence date, repeat, concurrent records. Derived facts only, no personal data |
 | `gold.fct_offender_record` | One row per record: keys, codes, measures, `exception_count`. No names, aliases, notes or date of birth. Race, religion and STG columns carry `meta.sensitivity: restricted` for the semantic layer to mask |
 | `gold.dq_scorecard` | Score per dimension × column × rule for the latest load: completeness, conformity, validity, consistency, uniqueness, timeliness. Accuracy isn't scored (no ground truth) |
 | `ops.load_runs` | One row per load: counts, seconds, DuckLake snapshot ID |
+| `mart_custody.custody_snapshot_monthly` | The custody mart: one row per offender record per month-end it is open, carrying the SID (4.24 M rows, Oct 1996 to the last complete month). Enforced dbt contract |
+| `mart_custody.snapshot_coverage` | One row saying what the snapshot covers and leaves out (records with no sentence or release date). Enforced dbt contract |
 
 ## The daily run
 
 ```
-load_lake ──► parity check (blocking) ──► dbt build (gold models + tests) ──► openmetadata/lake ──► fuseki/glossary
-                                                                              └──► monitoring/data_quality
+load_lake ──► parity check (blocking) ──► dbt build (gold, then mart_custody) ──► openmetadata/lake ──► fuseki/glossary
+                                                                                  ├──► monitoring/data_quality
+                                                                                  └──► monitoring/data_products
 ```
 
 - **Parity check fails** → the run fails and gold isn't rebuilt. Silver has already been written; DuckLake time
@@ -372,6 +377,43 @@ docker compose --profile core exec -T catalog-pg psql -U postgres -d ducklake_re
 docker compose --profile core exec -T catalog-pg dropdb -U postgres ducklake_restore_check
 ```
 
+## Data products
+
+A data product is a promise about some tables: what question they answer, who owns them, what they mean, that
+their shape won't change silently, and how fresh they are. Each one is a single file in `products/`, and every
+system holds to it:
+
+| The promise | Where it lives |
+| --- | --- |
+| The question, owner, description | `products/<name>.yml`, published to OpenMetadata as a Data Product in its Domain |
+| The tables it delivers | dbt models in a mart schema (`mart_custody`); none may hold a restricted or personal column |
+| A shape that won't change silently | dbt enforced contracts, mirrored as OpenMetadata Data Contracts with the SLA |
+| What it means | Glossary terms on its columns; the product as a DCAT dataset in Fuseki |
+| Who may see what | One Cube view per question, with no restricted members |
+| Fresh by when | `max_age_hours`; `monitoring/data_products` pushes its age, and `DataProductStale` alerts past it |
+
+Two products today, in the **Custody Operations** domain:
+
+- **Custody Population**: who is held at each month-end, by unit, custody level and threat level (Cube view
+  `custody_population`).
+- **Custody Offenses**: what they're held for, and new sentences each month (views `custody_offenses`,
+  `custody_admissions`).
+
+**People, not records.** A person can hold several records, sometimes two at once (1,008 overlapping pairs), so
+the products count people as distinct SIDs at query time, from a snapshot that carries the SID, and never store
+people counts, which don't add up across units. On 2026-09-30: 84,106 open records, 81,409 people.
+`gold.dim_person` and the glossary's Person term (identified by SID Number; an Offender Record is about one) make
+that explicit; "inmate" and "offender" are roles, so synonyms.
+
+**Adding a product**, test first as everything here:
+
+1. Model its tables in dbt under `dbt/models/marts/<subject>/`, with `contract: {enforced: true}` and a type on
+   every column; give the folder a `+schema` in `dbt_project.yml`.
+2. Add a Cube view per question it answers (`cube/model/`), with no restricted members.
+3. Write `products/<name>.yml` (copy one of the two) and, for a new domain, `products/domains/<name>.yml`.
+4. Run `scripts/bootstrap.sh` (or wait for 05:00): OpenMetadata, Fuseki and monitoring pick it up.
+   `acceptance/test_products.py` checks every table, view and term it names is real.
+
 ## Test status
 
 | Piece | Where it has run |
@@ -399,6 +441,10 @@ docker compose --profile core exec -T catalog-pg dropdb -U postgres ducklake_res
 | Nightly catalog backup: 6 acceptance tests (`pytest lakehouse/acceptance/test_backup.py`), each seen failing first; a restore drill matched the live catalog row for row | On the VM |
 | Pinned versions: 28 acceptance tests (`pytest lakehouse/acceptance/test_pins.py`) and 2 bats tests, each seen failing first; the jupyter image was shown by layer match to be built on the `2026-10-12` base, and `daily_lake` and `notebook_smoke` succeeded on it | On the VM |
 | Docstring rule (every Python function and class has a docstring, every shell function a comment above it): 2 acceptance tests (`pytest lakehouse/acceptance/test_docstrings.py`), seen failing first on 23 Python and 9 shell functions written before the rule | On the VM |
+| Person model (glossary term, `isAbout` relation, `gold.dim_person`): 8 acceptance tests (`test_person.py`) and 6 dbt tests, each seen failing first | On the VM |
+| Custody mart (`mart_custody`, enforced contracts): 7 acceptance tests (`test_custody_marts.py`) and 3 dbt tests, each seen failing first; a deliberate type change was refused by dbt | On the VM |
+| Custody products on Cube (three views; the MCP server picks the view that has the dimension): 9 acceptance tests (`test_custody_cube.py`), each seen failing first | On the VM |
+| Product descriptors, OpenMetadata domain, data products and contracts, DCAT in Fuseki, product freshness and coverage alerts: 14 acceptance tests (`test_products.py`), each seen failing first; a made-up view in a descriptor failed its test, and a 30-hour-old refresh fired `DataProductStale` | On the VM |
 
 ## Next phases
 
