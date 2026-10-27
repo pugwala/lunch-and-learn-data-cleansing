@@ -443,7 +443,7 @@ that explicit; "inmate" and "offender" are roles, so synonyms.
 | Docstring rule (every Python function and class has a docstring, every shell function a comment above it): 2 acceptance tests (`pytest lakehouse/acceptance/test_docstrings.py`), seen failing first on 23 Python and 9 shell functions written before the rule | On the VM |
 | Person model (glossary term, `isAbout` relation, `gold.dim_person`): 8 acceptance tests (`test_person.py`) and 6 dbt tests, each seen failing first | On the VM |
 | Custody mart (`mart_custody`, enforced contracts): 7 acceptance tests (`test_custody_marts.py`) and 3 dbt tests, each seen failing first; a deliberate type change was refused by dbt | On the VM |
-| Custody products on Cube (three views; the MCP server picks the view that has the dimension): 9 acceptance tests (`test_custody_cube.py`), each seen failing first | On the VM |
+| Custody products on Cube (three views; the MCP server picks the view that has the dimension): 10 acceptance tests (`test_custody_cube.py`), each seen failing first | On the VM |
 | Product descriptors, OpenMetadata domain, data products and contracts, DCAT in Fuseki, product freshness and coverage alerts: 14 acceptance tests (`test_products.py`), each seen failing first; a made-up view in a descriptor failed its test, and a 30-hour-old refresh fired `DataProductStale` | On the VM |
 
 ## Next phases

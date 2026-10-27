@@ -26,6 +26,10 @@ cubes:
         sql: month_end
         type: time
         description: The month-end the counts are as of.
+      - name: is_latest_month_end
+        sql: "{CUBE}.month_end = (SELECT max(month_end) FROM lake.mart_custody.custody_snapshot_monthly)"
+        type: boolean
+        description: The snapshot's last month-end (the last complete month), so a chart can show "now" without a date.
       - name: unit_code
         sql: unit_code
         type: string
@@ -66,8 +70,8 @@ views:
       with people_in_custody (distinct SIDs, never summed); records_in_custody counts open records.
     cubes:
       - join_path: custody_snapshot
-        includes: [month_end, unit_code, custody_level, threat_level, records_in_custody, people_in_custody,
-                   records_without_sid]
+        includes: [month_end, is_latest_month_end, unit_code, custody_level, threat_level, records_in_custody,
+                   people_in_custody, records_without_sid]
       - join_path: custody_snapshot.units
         includes: [unit_name]
 
@@ -77,7 +81,8 @@ views:
       and violence code. New sentences per month are in custody_admissions.
     cubes:
       - join_path: custody_snapshot
-        includes: [month_end, offense_code, offense_against, violence_code, records_in_custody, people_in_custody]
+        includes: [month_end, is_latest_month_end, offense_code, offense_against, violence_code, records_in_custody,
+                   people_in_custody]
       - join_path: custody_snapshot.offenses
         includes: [offense_description, crime_against]
 

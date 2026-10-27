@@ -80,6 +80,17 @@ def test_offenses_profile_the_same_population(cube):
     assert got["Property"] == 30_212 and got["Person"] == 29_483
 
 
+def test_latest_month_end_flag(cube):
+    """is_latest_month_end picks out exactly the snapshot's last month-end, so charts can show "now" without a date."""
+    from lakehouse import lake
+    last = str(lake.lake_ro_connect().execute("SELECT last_month_end FROM mart_custody.snapshot_coverage").fetchone()[0])
+    flagged = rows(cube, "SELECT MEASURE(people_in_custody) FROM custody_population WHERE is_latest_month_end = true")
+    dated = rows(cube, f"SELECT MEASURE(people_in_custody) FROM custody_population WHERE month_end = CAST('{last}' AS DATE)")
+    assert flagged == dated and flagged[0][0] > 0
+    assert rows(cube, "SELECT offense_against, MEASURE(records_in_custody) FROM custody_offenses "
+                      "WHERE is_latest_month_end = true GROUP BY 1")
+
+
 def test_admissions_by_sentence_month(cube):
     """September 2026 saw 1,557 new sentences, for 1,510 people."""
     got = rows(cube, "SELECT MEASURE(admissions), MEASURE(people_admitted) FROM custody_admissions "
