@@ -573,8 +573,9 @@ on a copy of the working tree (never `.env`, never dbt's `target/`), in about a 
 - **`dagster definitions validate`:** it catches what a compile can't. It was shown failing on the `@multi_asset`
   mistake of 2026-10-27.
 
-GitHub can only start a workflow by hand (this repo gets no push-triggered runs) if the workflow file is on `main`,
-so `.github/workflows/lakehouse-ci.yml` waits for a course-side change on `main`.
+On GitHub, `.github/workflows/lakehouse-ci.yml` runs the same script on every push and pull request, and by hand
+(`gh workflow run lakehouse-ci.yml --ref duckdb-lakehouse`); on the course branch, which has no `lakehouse/`, it
+only says there's nothing to check. Its first run passed all 14 checks on a GitHub runner in about 2.5 minutes.
 
 | Piece | Where it has run |
 | --- | --- |
@@ -602,7 +603,7 @@ so `.github/workflows/lakehouse-ci.yml` waits for a course-side change on `main`
 | Alerting (Alertmanager 0.34.1, 27 rules): 9 acceptance tests (`pytest lakehouse/acceptance/test_alerting.py`), each seen failing first; a failed `monitoring_selftest` raised `JobFailing`, ntfy got it at high priority on the selftest topic, and a passing run resolved it, at low priority | On the VM |
 | Alert delivery (ntfy 2.30.0 on port 8443, deny-all, three declared users, the lakehouse template): 7 acceptance tests (`pytest lakehouse/acceptance/test_ntfy.py`), each seen failing first; the Watchdog heartbeat arrives at min priority | On the VM |
 | Runbooks (23 pages, `runbook_url` on every rule, the link in each ntfy notification): 7 acceptance tests (`pytest lakehouse/acceptance/test_runbooks.py`), each seen failing first, and the end-to-end alert test now requires the link in the notification; every file a page names must exist | On the VM |
-| CI checks (`lakehouse/ci/checks.sh`): 14 checks, all green on the VM in 73 s; `dagster definitions validate` shown to fail on a copy of the definitions with the `deps=` mistake put back | On the VM |
+| CI checks (`lakehouse/ci/checks.sh`, and the `lakehouse-ci` workflow on GitHub): 14 checks, all green on the VM in 73 s and on a GitHub runner; `dagster definitions validate` shown to fail on a copy of the definitions with the `deps=` mistake put back | On the VM |
 | Off-machine backups (`offsite-backup`, restic 0.19.1, the monthly drill, four alerts) and the full restore drill (`backup/restore_drill.sh`): 5 acceptance tests (`pytest lakehouse/acceptance/test_offsite_backup.py`), 5 bats tests for the target and the password, 6 bats tests for the drill (`bats lakehouse/tests/restore_drill.bats`), each seen failing first. The first backup and drill succeeded (330 files identical), and the full drill passed the 19 parity checks on the restored lake | On the VM |
 | Lake housekeeping (`housekeeping.py`, the weekly `lake_housekeeping` job, `LakeHousekeepingStale`): 8 acceptance tests (`pytest lakehouse/acceptance/test_housekeeping.py`), each seen failing first; the deleting steps are tested on a scratch DuckLake, where history went from every snapshot to just the current one with today's data unchanged, a dry run changed nothing, and a planted orphan file was deleted | On the VM |
 | Nightly catalog backup: 6 acceptance tests (`pytest lakehouse/acceptance/test_backup.py`), each seen failing first; a restore drill matched the live catalog row for row | On the VM |
