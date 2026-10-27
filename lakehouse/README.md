@@ -108,8 +108,8 @@ What it does, in order:
    their config (SIGHUP), and restarts Dagster if catalog-pg was recreated (its pooled connections would be dead).
 6. **Lake data and meaning.** Runs the loader if silver or `ref.null_tokens` is missing, stages session 7's model,
    replaces OpenMetadata's default admin password, runs `om_sync.py`, `om_to_rdf.py` (Fuseki's graph), then
-   `cube/sync_masks.py` (restarting Cube if the masks changed), builds the Trust Test dashboard, and makes Home
-   Lakehouse Grafana's home page.
+   `cube/sync_masks.py` (restarting Cube if the masks changed), builds the Trust Test and Custody dashboards, and
+   makes Home Lakehouse Grafana's home page.
 7. **Proof.** Waits for every health check, runs the 19 parity tests, and checks that every site answers through
    Caddy, on the Tailscale name with certificate checking on, so an untrusted certificate fails.
 
@@ -246,6 +246,8 @@ SQL Lab query goes through the governed layer and nothing in Superset reads Duck
 (`postgres/init/03-superset.sh`).
 
 **Trust Test dashboard.** The course's Trust Test scorecard (session 1's eight questions, answered from a default load and from the cleansed, typed data) flows through every layer: the loader computes it with `lnl.trust` into `silver.trust_test`, dbt publishes `gold.trust_test`, Cube serves it as the `trust_test` cube, and `superset/dashboards.py` builds the **Trust Test** dashboard on it through Superset's API. `bootstrap.sh` runs that script (with `--check` when checking), and a re-run changes nothing.
+
+**Custody dashboard.** The same script builds **Custody** (`/superset/dashboard/custody/`) on the custody data products' Cube views: people in custody at each month-end, people by custody level and by offense category at the latest month-end, and new sentences per month. Each chart's metric is Cube's own measure, written as `MEASURE(people_in_custody)`, so people stay distinct SIDs counted by Cube, not a sum Superset makes up. "Latest" is Cube's `is_latest_month_end` flag, so the tables move on by themselves when a month completes. Each dashboard is one entry in `DASHBOARDS` in `superset/dashboards.py`; add a dict there to add one.
 
 In SQL Lab, query cubes with Cube's SQL: `SELECT MEASURE(record_count) FROM offender_records`.
 
@@ -423,7 +425,7 @@ that explicit; "inmate" and "offender" are roles, so synonyms.
 | `scripts/bootstrap.sh`: 51 bats tests (`bats lakehouse/tests/bootstrap.bats`, needs `apt install bats`), each shown to fail when the behaviour it covers is broken | On the VM, with stub commands; never touches the live stack |
 | dbt gold models and their tests (25 today), Dagster job (both jobs, plus the blocking check stopping gold) | Sandbox, against a plain DuckDB file |
 | Cube v1.8.3 over gold, read-only as `lake_ro`, restricted columns masked except for `restricted_reader`: 15 acceptance tests (`pytest lakehouse/acceptance/test_cube.py`); unmasking everyone made 8 of them fail | On the VM |
-| Superset 6.1.0 under `/superset`, Cube as its only database, the Trust Test dashboard: 6 acceptance tests (`pytest lakehouse/acceptance/test_superset.py`); the only-Cube check was shown to fail with a decoy database added | On the VM |
+| Superset 6.1.0 under `/superset`, Cube as its only database, the Trust Test and Custody dashboards: 8 acceptance tests (`pytest lakehouse/acceptance/test_superset.py`); the only-Cube check was shown to fail with a decoy database added, the Custody chart checks failed before the dashboard existed, and `--check` exits 1 on a changed layout | On the VM |
 | dbt on DuckLake: the first `daily_lake` run (load 7.5 s, gold 5.5 s, one expected `dq_score_floor` warning), checked by 14 acceptance tests: `docker compose --profile core exec -T jupyter pytest -q lakehouse/acceptance` | On the VM |
 | Trust Test from loader to dashboard (`silver.trust_test` → `gold.trust_test` → Cube → Superset): 1 parity check, 4 acceptance tests and 3 bats tests, each shown failing before the code existed | On the VM |
 | `%load_ext lakehouse.sql_magic` (jupysql, read-only as `lake_ro`): 6 acceptance tests (`pytest lakehouse/acceptance/test_sql.py`), plus a real notebook kernel run from outside the repo; the password and read-only checks were shown to fail on deliberate breaks | On the VM |

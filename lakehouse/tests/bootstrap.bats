@@ -64,7 +64,7 @@ case "$*" in
   *"openmetadata/om_to_rdf.py"*)             echo "Fuseki glossary graph: in step with OpenMetadata (715 triples)"; exit 0 ;;
   *"cube/sync_masks.py"*)                    echo "$FAKE_MASKS_OUT"; exit "$FAKE_MASKS_EXIT" ;;
   *"grafana/set_home.py"*)                   echo "Grafana home: Home Lakehouse"; exit 0 ;;
-  *"superset/dashboards.py"*)                 echo "Trust Test dashboard: up to date"; exit "$FAKE_DASH_EXIT" ;;
+  *"superset/dashboards.py"*)                 echo "Superset dashboards (Trust Test, Custody): in place"; exit "$FAKE_DASH_EXIT" ;;
   *"exec -T jupyter python"*)                cat >/dev/null; echo "$FAKE_HAVE_DATA" ;;
   *pytest*)                                  echo "19 passed in 0.10s" ;;
   *"run --rm load-lake"*)                    echo "Loaded run fake: 100,000 silver rows" ;;

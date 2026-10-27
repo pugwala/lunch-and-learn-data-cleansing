@@ -5,8 +5,10 @@
 Superset runs under /superset (SUPERSET_APP_ROOT) behind Caddy at https://<LAKE_TS_HOST>/superset/. Its only
 database is Cube, reached over Cube's Postgres-wire SQL API, so every chart goes through the governed semantic
 layer and nothing in Superset can read DuckLake directly. Its own metadata (users, charts, dashboards) lives in
-the superset database on catalog-pg.
+the superset database on catalog-pg. Two dashboards: the Trust Test, and Custody, whose four charts read only the
+custody data products' views and must give Cube's own numbers.
 """
+import json
 import os
 from pathlib import Path
 
@@ -100,3 +102,76 @@ def test_sql_lab_counts_every_record_through_cube(api):
     r.raise_for_status()
     rows = r.json()["data"]
     assert len(rows) == 1 and list(rows[0].values()) == [100_000]
+
+
+# --- the Custody dashboard (data products) ---------------------------------------------------------------------
+
+CUSTODY_VIEWS = {"custody_population", "custody_offenses", "custody_admissions"}
+
+
+def latest_month_end():
+    """The snapshot's latest month-end, as YYYY-MM-DD (mart_custody.snapshot_coverage)."""
+    from lakehouse import lake
+    con = lake.lake_ro_connect()
+    return str(con.execute("SELECT last_month_end FROM mart_custody.snapshot_coverage").fetchone()[0])
+
+
+def custody_charts(api):
+    """{chart name: chart data rows} for every chart on the Custody dashboard."""
+    q = "(filters:!((col:dashboard_title,opr:eq,value:'Custody')))"
+    found = api.get(f"{SUPERSET}/api/v1/dashboard/", params={"q": q}, timeout=30).json()["result"]
+    assert len(found) == 1 and found[0]["published"], "there should be one published Custody dashboard"
+    charts = api.get(f"{SUPERSET}/api/v1/dashboard/{found[0]['id']}/charts", timeout=30).json()["result"]
+    out = {}
+    for c in charts:
+        data = api.get(f"{SUPERSET}/api/v1/chart/{c['id']}/data/", timeout=120)
+        assert data.ok, (c["slice_name"], data.status_code, data.text[:300])
+        out[c["slice_name"]] = data.json()["result"][0]["data"]
+    return out
+
+
+def month_value(rows, month, column, value):
+    """The value column of the row whose time column falls in YYYY-MM (Superset returns epoch milliseconds)."""
+    import datetime as dt
+    for r in rows:
+        when = r[column]
+        when = (dt.datetime.fromtimestamp(when / 1000, dt.timezone.utc) if isinstance(when, (int, float))
+                else dt.datetime.fromisoformat(str(when)))
+        if when.strftime("%Y-%m") == month:
+            return r[value]
+    raise AssertionError(f"no {month} row")
+
+
+def test_custody_dashboard_reads_only_the_product_views(api):
+    """Its four charts all sit on custody product views: the governed path, nothing straight from the lake."""
+    q = "(filters:!((col:dashboard_title,opr:eq,value:'Custody')))"
+    dash = api.get(f"{SUPERSET}/api/v1/dashboard/", params={"q": q}, timeout=30).json()["result"][0]
+    charts = api.get(f"{SUPERSET}/api/v1/dashboard/{dash['id']}/charts", timeout=30).json()["result"]
+    assert len(charts) == 4
+    for c in charts:
+        chart = api.get(f"{SUPERSET}/api/v1/chart/{c['id']}", timeout=30).json()["result"]
+        ds_id = json.loads(chart["params"])["datasource"].split("__")[0]   # params name the dataset: "<id>__table"
+        ds = api.get(f"{SUPERSET}/api/v1/dataset/{ds_id}", timeout=30).json()["result"]
+        assert ds["table_name"] in CUSTODY_VIEWS and ds["database"]["database_name"] == "Cube", (c["slice_name"], ds["table_name"])
+
+
+def test_custody_charts_match_cube(api):
+    """People in custody in September 2026 (81,409), by custody level and by offense category on the latest
+    month-end, and September's 1,557 admissions: the same numbers Cube gives directly."""
+    latest = latest_month_end()
+    charts = custody_charts(api)
+    people = charts["People in custody, by month-end"]
+    assert month_value(people, "2026-09", "month_end", "People in custody") == 81_409
+    admissions = charts["New sentences per month"]
+    assert month_value(admissions, "2026-09", "sentence_date", "New sentences") == 1_557
+    by_level = {r["custody_level"]: r["People in custody"] for r in charts["People in custody by custody level, latest month-end"]}
+    by_cat = {r["offense_against"]: r["People in custody"] for r in charts["People in custody by offense category, latest month-end"]}
+    import psycopg2
+    from test_cube import CUBE_SQL
+    with psycopg2.connect(**CUBE_SQL) as conn, conn.cursor() as cur:
+        cur.execute("SELECT custody_level, MEASURE(people_in_custody) FROM custody_population "
+                    f"WHERE month_end = CAST('{latest}' AS DATE) GROUP BY 1")
+        assert by_level == dict(cur.fetchall())
+        cur.execute("SELECT offense_against, MEASURE(people_in_custody) FROM custody_offenses "
+                    f"WHERE month_end = CAST('{latest}' AS DATE) GROUP BY 1")
+        assert by_cat == dict(cur.fetchall())
