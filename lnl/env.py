@@ -35,7 +35,7 @@ def data_dir() -> Path:
 
 
 # Bump whenever the generator's output changes, so a data file cached from an older version is never reused.
-DATA_VERSION = 5
+DATA_VERSION = 6
 
 
 def paths() -> dict:

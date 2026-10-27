@@ -53,6 +53,8 @@ After the sessions, [`enterprise/`](enterprise/README.md) runs the same cleansin
 
 ```
 notebooks/          the seven sessions (ship without outputs; exercises use ___ blanks)
+                    clearing-out-the-old.ipynb: one cell, run once after re-cloning, that clears an older copy's
+                    cached data and session 5 table and checks the workspace is ready for session 2
 lnl/                course helper package; each session's cleansing lives here once taught
   config.py         the settings above
   env.py            environment detection, dependency checks, dataset generation
