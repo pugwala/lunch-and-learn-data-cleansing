@@ -26,7 +26,7 @@ from lakehouse import lake  # noqa: E402
 OM = os.environ.get("OM_URL", "http://openmetadata-server:8585/openmetadata") + "/api/v1"
 LAKEHOUSE = Path(__file__).resolve().parents[1]
 SERVICE, DATABASE, GLOSSARY, CLASSIFICATION = "lakehouse", "lake", "Lakehouse", "Sensitivity"
-SCHEMAS = ("ref", "bronze", "silver", "gold", "ops", "mart_custody")
+SCHEMAS = ("ref", "bronze", "silver", "gold", "ops", "mart_custody", "mart_readiness")
 SENSITIVITY_TAGS = {"restricted": "Restricted", "personal": "Personal"}
 TYPES = {"VARCHAR": "STRING", "BIGINT": "BIGINT", "INTEGER": "INT", "SMALLINT": "SMALLINT", "DOUBLE": "DOUBLE",
          "FLOAT": "FLOAT", "DATE": "DATE", "TIME": "TIME", "BOOLEAN": "BOOLEAN", "TIMESTAMP": "TIMESTAMP",

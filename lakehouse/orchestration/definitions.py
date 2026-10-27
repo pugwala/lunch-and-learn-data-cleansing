@@ -1,13 +1,16 @@
 """Dagster definitions for the home-lab lakehouse.
 
     load_lake (Python)  -> ref.*, bronze.*, silver.*, ops.load_runs, then the parity check
-    gold (dbt build)    -> gold.dim_*, gold.fct_offender_record, gold.dq_scorecard, plus dbt tests
+    readiness_inputs    -> ops.business_inputs, ops.product_inputs, ops.input_closes (readiness/closes.py): the
+                           declared inputs, the fictional units' closes, and each input's days late, pushed
+    gold (dbt build)    -> gold.dim_*, gold.fct_offender_record, gold.dq_scorecard, the marts (custody, and the
+                           readiness view), plus dbt tests
     openmetadata/lake   -> om_sync.py after gold, so OpenMetadata knows today's tables; a non-blocking check that
                            Cube's masks still match OpenMetadata's Restricted tags
     fuseki/glossary     -> om_to_rdf.py: OpenMetadata's glossary and column tags as RDF in Fuseki, with the rulebook
                            and deduced facts; check business_rules_hold (ontology/shapes.ttl), pushed to Prometheus
     monitoring/data_quality -> gold.dq_scorecard's pass rates, pushed to the Pushgateway for Prometheus
-    monitoring/data_products -> each data product's freshness, coverage and headline numbers, after its mart
+    monitoring/data_products -> each data product's freshness, coverage, readiness and headline numbers
     push_run_success/failure -> sensors that push every job's last success, duration and last failure
     monitoring_selftest -> a job that fails on request, to exercise the failure path and its alert
     notebook_smoke      -> runs the 7 course notebooks and lakehouse/08_from_lake.ipynb weekly (an op job, not
@@ -232,19 +235,55 @@ def data_quality(context: dg.AssetExecutionContext):
 
 
 PRODUCTS_DIR = REPO / "lakehouse" / "products"
+READINESS_TABLES = {
+    "business_inputs": "Business inputs data products need (lakehouse/products/inputs/), synced by closes.py.",
+    "product_inputs": "Which inputs each data product depends on (depends_on:), synced by closes.py.",
+    "input_closes": "Every close a business unit reported: complete through a month-end. Append-only.",
+}
+
+
+@dg.multi_asset(
+    name="readiness_inputs",
+    specs=[dg.AssetSpec(dg.AssetKey(["ops", table]), group_name="readiness", kinds={"duckdb", "python"},
+                        description=text, deps=list(load_lake.keys))   # after the load: never two lake writers
+           for table, text in READINESS_TABLES.items()],
+)
+def readiness_inputs(context: dg.AssetExecutionContext):
+    """Sync the declared inputs and dependencies (products/inputs/, depends_on:), play the fictional business
+    units' scheduled closes, and push each input's days late (BusinessInputLate alerts on any)."""
+    from lakehouse.readiness import closes
+    drift = closes.sync()
+    for line in closes.simulate(closes.today_central()):
+        context.log.info(line)
+    status = closes.status(closes.today_central())
+    error = push("lakehouse_readiness", [
+        ("lakehouse_input_days_late", "Days past its deadline that a business input hasn't closed a month (0 = on time).",
+         s["days_late"], {"input": s["input"], "unit": s["unit"]}) for s in status] + [
+        ("lakehouse_input_complete_through_timestamp_seconds", "The month-end a business input is complete through.",
+         time.mktime(s["complete_through"].timetuple()) if s["complete_through"] else 0,
+         {"input": s["input"], "unit": s["unit"]}) for s in status])
+    if error:
+        context.log.warning(error)
+    for table in READINESS_TABLES:
+        yield dg.MaterializeResult(asset_key=dg.AssetKey(["ops", table]),
+                                   metadata={"synced": ", ".join(drift) or "unchanged",
+                                             **{f"days_late_{s['input']}": s["days_late"] for s in status}})
 
 
 @dg.asset(key=dg.AssetKey(["monitoring", "data_products"]), group_name="monitoring", kinds={"prometheus", "python"},
-          deps=[k for k in gold.keys if k.path[0] == "mart_custody"],
-          description="Each data product's freshness, coverage and headline numbers, pushed for Prometheus.")
+          deps=[k for k in gold.keys if k.path[0] in ("mart_custody", "mart_readiness")],
+          description="Each data product's freshness, coverage, readiness and headline numbers, pushed for Prometheus.")
 def data_products(context: dg.AssetExecutionContext):
     """Push, per product in lakehouse/products/: when it was refreshed (now: this runs right after its mart is
     rebuilt, so a failed mart leaves it unrefreshed), its max age from the descriptor, the snapshot's coverage
-    when the product delivers it, and the latest month-end headline when it is served by custody_population."""
+    when the product delivers it, the latest month-end headline when it is served by custody_population, and
+    whether its latest month-end is final (every business input it depends on has closed it)."""
     con = lake.lake_ro_connect()
     total, undated = con.sql("SELECT records_total, records_without_dates FROM mart_custody.snapshot_coverage").fetchone()
     records, people = con.sql("SELECT count(*), count(DISTINCT sid_number) FROM mart_custody.custody_snapshot_monthly "
                               "WHERE month_end = (SELECT max(month_end) FROM mart_custody.custody_snapshot_monthly)").fetchone()
+    final = dict(con.sql("SELECT product, is_final FROM mart_readiness.period_readiness "
+                         "WHERE month_end = (SELECT max(month_end) FROM mart_readiness.period_readiness)").fetchall())
     con.close()
     now, pushed = time.time(), []
     for f in sorted(PRODUCTS_DIR.glob("*.yml")):
@@ -258,6 +297,10 @@ def data_products(context: dg.AssetExecutionContext):
         if "custody_population" in p["cube_views"]:
             samples += [("lakehouse_product_people_in_custody", "People held at the latest month-end.", people, {}),
                         ("lakehouse_product_records_in_custody", "Records open at the latest month-end.", records, {})]
+        if p["name"] in final:
+            samples.append(("lakehouse_product_latest_period_final",
+                            "1 when the product's latest month-end is final (every input closed it), else 0.",
+                            float(final[p["name"]]), {}))
         error = push("lakehouse_data_products", samples, {"product": p["name"]})
         if error:
             context.log.warning(error)
@@ -379,7 +422,7 @@ notebook_smoke_schedule = dg.ScheduleDefinition(
     description="Sundays 06:00 Central, an hour after daily_lake, so the notebooks see a fresh lake.")
 
 defs = dg.Definitions(
-    assets=[load_lake, gold, openmetadata_lake, fuseki_glossary, data_quality, data_products],
+    assets=[load_lake, readiness_inputs, gold, openmetadata_lake, fuseki_glossary, data_quality, data_products],
     jobs=[daily_lake, regenerate_lake, notebook_smoke, monitoring_selftest],
     schedules=[daily_schedule, notebook_smoke_schedule],
     sensors=[push_run_success, push_run_failure],

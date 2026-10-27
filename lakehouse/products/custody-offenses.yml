@@ -16,5 +16,6 @@ sources:           # where its data comes from: custody_admissions reads this th
   - gold.fct_offender_record
 cube_views: [custody_offenses, custody_admissions]
 glossary_terms: [Person, Offender Record, Offense Code, Offense-Against Category, Violence Code]
+depends_on: [records, courts]   # products/inputs/: a month is final once each has closed it: who is held (Records) and for what (Courts liaison)
 refresh: {every: 1, unit: day, at: "05:00", timezone: America/Chicago}
 max_age_hours: 26

@@ -21,6 +21,9 @@ models:
       custody:
         +materialized: table
         +schema: mart_custody
+      readiness:
+        +materialized: view      # live: a business unit's close shows on the next query, with no rebuild
+        +schema: mart_readiness
 
 tests:
   lakehouse_gold:

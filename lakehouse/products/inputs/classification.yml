@@ -1,0 +1,11 @@
+# A business input (see records.yml for what each field means).
+name: classification
+title: Custody-level and threat reviews
+unit: Classification
+system: Case management
+description: >
+  The month's custody-level and threat-level reviews, signed off by the Classification unit. Until they are, a
+  person's custody and threat level at the month-end may still change.
+closes_within_days: 10
+simulate:
+  closes_after_days: 8

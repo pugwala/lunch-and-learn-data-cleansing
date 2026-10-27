@@ -1,0 +1,31 @@
+version: 2
+
+models:
+  - name: period_readiness
+    description: >
+      Whether each data product's numbers for a month-end are final: final once every business input the product
+      depends on has been reported complete through that month-end, otherwise provisional, with the units it is
+      waiting on. Inputs are declared in lakehouse/products/inputs/, dependencies in each product's depends_on:,
+      and closes reported with lakehouse/readiness/closes.py. A view, so a close shows on the next query.
+    columns:
+      - name: product
+        description: The data product (its descriptor's name, e.g. custody-population).
+        data_tests: [not_null]
+      - name: month_end
+        description: The month-end the product's numbers are for.
+        data_tests: [not_null]
+      - name: inputs_required
+        description: How many inputs the product depends on.
+      - name: inputs_closed
+        description: How many of them have closed this month.
+      - name: is_final
+        description: Every input has closed this month.
+        data_tests: [not_null]
+      - name: period_status
+        description: final or provisional.
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ['final', 'provisional']
+      - name: waiting_on
+        description: The units whose inputs are still open for this month, comma-separated; empty when final.

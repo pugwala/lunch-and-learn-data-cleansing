@@ -19,5 +19,6 @@ sources:           # where its data comes from
   - gold.fct_offender_record
 cube_views: [custody_population]
 glossary_terms: [Person, Offender Record, Unit, Custody Level, Threat Level]
+depends_on: [records, classification]   # products/inputs/: a month is final once each has closed it: who is held (Records) and at what custody and threat level (Classification)
 refresh: {every: 1, unit: day, at: "05:00", timezone: America/Chicago}
 max_age_hours: 26

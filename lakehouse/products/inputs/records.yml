@@ -1,0 +1,14 @@
+# A business input: something a data product needs from a business unit before a month's numbers are final.
+# One file per input; a product lists the inputs it needs in depends_on: in its descriptor. The unit reports each
+# month closed ("complete through" a month-end) with readiness/closes.py; until every input a product depends on
+# has closed a month, that product's number for the month is provisional. Copy this file to add an input.
+name: records                     # the file's name, and how depends_on: and closes.py refer to it
+title: Admissions, releases and transfers
+unit: Records                     # the business unit that owns it: what "waiting on" names
+system: Offender management       # where the unit records it
+description: >
+  Every admission, release and transfer between units for the month, posted by the Records unit. Until the month
+  is posted, who was held at the month-end isn't settled.
+closes_within_days: 5             # the unit's promise: a month is complete this many days after it ends
+simulate:                         # the units are fictional, so the lakehouse plays this one, closing on this day
+  closes_after_days: 3

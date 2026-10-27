@@ -65,6 +65,8 @@ case "$*" in
   *"openmetadata/om_sync.py"*)               echo "OpenMetadata sync: in step with the repo and lake"; exit 0 ;;
   *"openmetadata/setup_admin.py"*)           echo "OpenMetadata admin: password set"; exit 0 ;;
   *"openmetadata/om_to_rdf.py"*)             echo "Fuseki glossary graph: in step with OpenMetadata (715 triples)"; exit 0 ;;
+  *"readiness/closes.py sync --check"*)      echo "Readiness: inputs and dependencies in step with the files (3 inputs, 4 dependencies)"; exit 0 ;;
+  *"readiness/closes.py sync"*)              echo "Readiness: synced 3 inputs and 4 dependencies"; exit 0 ;;
   *"ontology/check_rules.py"*)               [ "$FAKE_RULES_EXIT" = 0 ] && echo "Business rules: all 2 shapes hold" || echo "Business rules: 1 violation of 2 shapes (TermShape)"; exit "$FAKE_RULES_EXIT" ;;
   *"cube/sync_masks.py"*)                    echo "$FAKE_MASKS_OUT"; exit "$FAKE_MASKS_EXIT" ;;
   *"grafana/set_home.py"*)                   echo "Grafana home: Home Lakehouse"; exit 0 ;;
@@ -497,6 +499,16 @@ set_env()       { sed -i "/^$1=/d" "$ENV"; [ $# = 1 ] || echo "$1=$2" >> "$ENV";
   : > "$FAKE_LOG"
   run_bootstrap --check
   called "lakehouse/ontology/check_rules.py"
+}
+
+@test "syncs the declared inputs and dependencies, and only checks them with --check" {
+  run_bootstrap
+  [ "$status" -eq 0 ]
+  called "exec -T jupyter python lakehouse/readiness/closes.py sync$"
+  : > "$FAKE_LOG"
+  run_bootstrap --check
+  called "lakehouse/readiness/closes.py sync --check"
+  not_called "closes.py sync$"
 }
 
 @test "a broken business rule fails the run, naming the shape" {

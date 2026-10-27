@@ -96,3 +96,13 @@ sources:
     tables:
       - name: load_runs
         description: One row per load run, written by the loader.
+      - name: business_inputs
+        description: >
+          One row per business input a data product needs (its owning unit, system and days to close a month),
+          copied from lakehouse/products/inputs/ by lakehouse/readiness/closes.py sync.
+      - name: product_inputs
+        description: One row per data product and input it depends on (depends_on:), copied by closes.py sync.
+      - name: input_closes
+        description: >
+          Every close a business unit reported: complete through a month-end, by whom, when (closes.py report).
+          Append-only; the latest report per input counts.

@@ -273,6 +273,12 @@ if [ $CHECK = 1 ]; then sync=$(dc exec -T jupyter python lakehouse/openmetadata/
 else sync=$(dc exec -T jupyter python lakehouse/openmetadata/om_sync.py 2>&1); fi \
   && ok "$(echo "$sync" | tail -1)" || bad "$(echo "$sync" | tail -1)"
 
+# closes.py copies the declared business inputs (products/inputs/) and each product's depends_on: into the lake,
+# where mart_readiness.period_readiness reads them; --check only compares. Closes themselves come from the units.
+if [ $CHECK = 1 ]; then ready=$(dc exec -T jupyter python lakehouse/readiness/closes.py sync --check 2>&1)
+else ready=$(dc exec -T jupyter python lakehouse/readiness/closes.py sync 2>&1); fi \
+  && ok "$(echo "$ready" | tail -1)" || bad "$(echo "$ready" | tail -1)"
+
 # om_to_rdf.py publishes what OpenMetadata now holds (glossary as SKOS, column sensitivity and terms) to Fuseki,
 # with the rulebook and the deduced facts beside it, each graph replaced whole; --check only compares.
 if [ $CHECK = 1 ]; then rdf=$(dc exec -T jupyter python lakehouse/openmetadata/om_to_rdf.py --check 2>&1)
