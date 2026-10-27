@@ -11,4 +11,6 @@ message: |-
   {{- with .annotations.description }}
     {{ . }}{{ end }}
   {{- end }}
+  {{- with .commonAnnotations.runbook_url }}
+  Runbook: {{ . }}{{ end }}
 priority: '{{ if eq .status "resolved" }}2{{ else if eq .commonLabels.severity "critical" }}4{{ else if eq .commonLabels.severity "none" }}1{{ else }}3{{ end }}'

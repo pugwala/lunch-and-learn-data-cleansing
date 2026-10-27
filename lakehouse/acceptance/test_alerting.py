@@ -140,5 +140,6 @@ def test_a_failed_job_raises_an_alert_and_a_success_clears_it():
     notices = selftest_notices(started)
     assert {p for m, p in notices if "Status: Firing" in m} == {4}, notices
     assert {p for m, p in notices if "Status: Resolved" in m} == {2}, notices
+    assert all("runbooks/JobFailing.md" in m for m, _ in notices), notices   # the link to what to do, on the phone
     assert not [m for m in messages("lakehouse-alerts", since="1h") if m["time"] >= started
                 and "monitoring_selftest" in m["message"]], "the selftest's alert reached Ian's phone topic"

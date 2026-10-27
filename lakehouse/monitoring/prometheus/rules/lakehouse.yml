@@ -8,42 +8,49 @@ groups:
         for: 5m
         labels: {severity: critical}
         annotations:
+          runbook_url: https://github.com/pugwala/lunch-and-learn-data-cleansing/blob/duckdb-lakehouse/lakehouse/runbooks/TargetDown.md
           summary: "Prometheus can't scrape {{ $labels.job }} ({{ $labels.instance }})"
       - alert: SiteDown
         expr: probe_success{job="sites"} == 0
         for: 5m
         labels: {severity: critical}
         annotations:
+          runbook_url: https://github.com/pugwala/lunch-and-learn-data-cleansing/blob/duckdb-lakehouse/lakehouse/runbooks/SiteDown.md
           summary: "/{{ $labels.site }}/ doesn't answer through Caddy"
       - alert: CertificateExpiresSoon
         expr: min by (site) (probe_ssl_earliest_cert_expiry{job="sites"}) - time() < 14 * 86400
         for: 1h
         labels: {severity: warning}
         annotations:
+          runbook_url: https://github.com/pugwala/lunch-and-learn-data-cleansing/blob/duckdb-lakehouse/lakehouse/runbooks/CertificateExpiresSoon.md
           summary: "The Tailscale certificate expires in under 14 days (Caddy should have renewed it)"
       - alert: DiskFilling
         expr: 1 - node_filesystem_avail_bytes{mountpoint=~"/|/lake"} / node_filesystem_size_bytes{mountpoint=~"/|/lake"} > 0.85
         for: 30m
         labels: {severity: warning}
         annotations:
+          runbook_url: https://github.com/pugwala/lunch-and-learn-data-cleansing/blob/duckdb-lakehouse/lakehouse/runbooks/DiskFilling.md
           summary: "{{ $labels.mountpoint }} is over 85% full"
       - alert: DiskAlmostFull
         expr: 1 - node_filesystem_avail_bytes{mountpoint=~"/|/lake"} / node_filesystem_size_bytes{mountpoint=~"/|/lake"} > 0.95
         for: 5m
         labels: {severity: critical}
         annotations:
+          runbook_url: https://github.com/pugwala/lunch-and-learn-data-cleansing/blob/duckdb-lakehouse/lakehouse/runbooks/DiskAlmostFull.md
           summary: "{{ $labels.mountpoint }} is over 95% full"
       - alert: MemoryLow
         expr: node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes < 0.10
         for: 10m
         labels: {severity: warning}
         annotations:
+          runbook_url: https://github.com/pugwala/lunch-and-learn-data-cleansing/blob/duckdb-lakehouse/lakehouse/runbooks/MemoryLow.md
           summary: "Under 10% of the VM's memory is available"
       - alert: PostgresDown
         expr: pg_up == 0
         for: 2m
         labels: {severity: critical}
         annotations:
+          runbook_url: https://github.com/pugwala/lunch-and-learn-data-cleansing/blob/duckdb-lakehouse/lakehouse/runbooks/PostgresDown.md
           summary: "catalog-pg doesn't answer postgres-exporter: the lake's catalog is down"
 
   - name: pipeline
@@ -53,17 +60,20 @@ groups:
         expr: lakehouse_job_last_failure_timestamp_seconds > (lakehouse_job_last_success_timestamp_seconds or lakehouse_job_last_failure_timestamp_seconds * 0)
         labels: {severity: critical}
         annotations:
+          runbook_url: https://github.com/pugwala/lunch-and-learn-data-cleansing/blob/duckdb-lakehouse/lakehouse/runbooks/JobFailing.md
           summary: "Dagster job {{ $labels.pipeline }}'s latest run failed"
       - alert: DailyLakeStale
         expr: time() - max(lakehouse_job_last_success_timestamp_seconds{pipeline="daily_lake"}) > 26 * 3600 or absent(lakehouse_job_last_success_timestamp_seconds{pipeline="daily_lake"})
         for: 1h
         labels: {severity: critical}
         annotations:
+          runbook_url: https://github.com/pugwala/lunch-and-learn-data-cleansing/blob/duckdb-lakehouse/lakehouse/runbooks/DailyLakeStale.md
           summary: "daily_lake hasn't succeeded in 26 hours: gold is stale"
       - alert: NotebookSmokeStale
         expr: time() - lakehouse_job_last_success_timestamp_seconds{pipeline="notebook_smoke"} > 8 * 86400
         labels: {severity: warning}
         annotations:
+          runbook_url: https://github.com/pugwala/lunch-and-learn-data-cleansing/blob/duckdb-lakehouse/lakehouse/runbooks/NotebookSmokeStale.md
           summary: "The weekly notebook_smoke run hasn't succeeded in 8 days"
       - alert: LakeHousekeepingStale
         # The weekly lake_housekeeping job (housekeeping.py) keeps 30 days of DuckLake history; without it the history,
@@ -71,6 +81,7 @@ groups:
         expr: time() - lakehouse_job_last_success_timestamp_seconds{pipeline="lake_housekeeping"} > 8 * 86400
         labels: {severity: warning}
         annotations:
+          runbook_url: https://github.com/pugwala/lunch-and-learn-data-cleansing/blob/duckdb-lakehouse/lakehouse/runbooks/LakeHousekeepingStale.md
           summary: "The weekly lake_housekeeping run hasn't succeeded in 8 days, so old snapshots and files pile up"
 
   - name: data
@@ -81,29 +92,34 @@ groups:
         expr: lakehouse_business_rule_violations > 0
         labels: {severity: warning}
         annotations:
+          runbook_url: https://github.com/pugwala/lunch-and-learn-data-cleansing/blob/duckdb-lakehouse/lakehouse/runbooks/BusinessRuleViolated.md
           summary: "{{ $value }} thing(s) break the business rule {{ $labels.shape }}; see business_rules_hold in Dagster"
       - alert: SilverDroppedRows
         # Flagged values are flagged, never dropped: silver must hold every bronze row.
         expr: lakehouse_load_rows{layer="silver"} < ignoring(layer) lakehouse_load_rows{layer="bronze"}
         labels: {severity: critical}
         annotations:
+          runbook_url: https://github.com/pugwala/lunch-and-learn-data-cleansing/blob/duckdb-lakehouse/lakehouse/runbooks/SilverDroppedRows.md
           summary: "Silver has fewer rows than bronze: the load dropped records"
       - alert: FlaggedShareHigh
         # About 3% of records carry a flagged value today; a jump means the source or the cleansing changed.
         expr: lakehouse_load_records_with_exceptions / ignoring(layer) lakehouse_load_rows{layer="silver"} > 0.10
         labels: {severity: warning}
         annotations:
+          runbook_url: https://github.com/pugwala/lunch-and-learn-data-cleansing/blob/duckdb-lakehouse/lakehouse/runbooks/FlaggedShareHigh.md
           summary: "Over 10% of records have a flagged value (about 3% is normal)"
       - alert: DataQualityBelowFloor
         expr: lakehouse_dq_pass_rate_percent < 95
         labels: {severity: warning}
         annotations:
+          runbook_url: https://github.com/pugwala/lunch-and-learn-data-cleansing/blob/duckdb-lakehouse/lakehouse/runbooks/DataQualityBelowFloor.md
           summary: "{{ $labels.dimension }} pass rate is under the 95% floor"
       - alert: MoreRulesBelowFloor
         # One rule (disciplinary_points completeness, 94.15%) is under the floor by design of the course data.
         expr: lakehouse_dq_rules_below_floor > 1
         labels: {severity: warning}
         annotations:
+          runbook_url: https://github.com/pugwala/lunch-and-learn-data-cleansing/blob/duckdb-lakehouse/lakehouse/runbooks/MoreRulesBelowFloor.md
           summary: "{{ $value }} quality rules are under 95% (1, disciplinary_points, is expected)"
 
   - name: backup
@@ -113,11 +129,13 @@ groups:
         for: 30m
         labels: {severity: critical}
         annotations:
+          runbook_url: https://github.com/pugwala/lunch-and-learn-data-cleansing/blob/duckdb-lakehouse/lakehouse/runbooks/CatalogBackupStale.md
           summary: "No catalog backup in 26 hours: lose the catalog and the Parquet files are just files"
       - alert: CatalogBackupFailed
         expr: lakehouse_backup_last_failure_timestamp_seconds > (lakehouse_backup_last_success_timestamp_seconds or lakehouse_backup_last_failure_timestamp_seconds * 0)
         labels: {severity: critical}
         annotations:
+          runbook_url: https://github.com/pugwala/lunch-and-learn-data-cleansing/blob/duckdb-lakehouse/lakehouse/runbooks/CatalogBackupFailed.md
           summary: "The latest catalog backup failed (docker compose logs catalog-backup)"
 
   - name: products
@@ -127,12 +145,14 @@ groups:
         expr: time() - lakehouse_product_refreshed_timestamp_seconds > lakehouse_product_max_age_seconds
         labels: {severity: critical}
         annotations:
+          runbook_url: https://github.com/pugwala/lunch-and-learn-data-cleansing/blob/duckdb-lakehouse/lakehouse/runbooks/DataProductStale.md
           summary: "Data product {{ $labels.product }} is older than it promises"
       - alert: DataProductCoverageLow
         # About 6% of records have no sentence or release date today, so the snapshot can't place them.
         expr: lakehouse_product_records_without_dates / lakehouse_product_records_total > 0.10
         labels: {severity: warning}
         annotations:
+          runbook_url: https://github.com/pugwala/lunch-and-learn-data-cleansing/blob/duckdb-lakehouse/lakehouse/runbooks/DataProductCoverageLow.md
           summary: "Over 10% of records can't be placed in time for {{ $labels.product }} (about 6% is normal)"
       - alert: BusinessInputLate
         # A business unit hasn't closed a month by its own deadline (closes_within_days in lakehouse/products/inputs/),
@@ -141,6 +161,7 @@ groups:
         expr: lakehouse_input_days_late > 0
         labels: {severity: warning}
         annotations:
+          runbook_url: https://github.com/pugwala/lunch-and-learn-data-cleansing/blob/duckdb-lakehouse/lakehouse/runbooks/BusinessInputLate.md
           summary: "{{ $labels.unit }} is {{ $value }} day(s) late closing the month for {{ $labels.input }}; products that need it stay provisional"
 
   - name: meta
@@ -151,9 +172,11 @@ groups:
         expr: increase(alertmanager_notifications_failed_total[15m]) > 0
         labels: {severity: critical}
         annotations:
+          runbook_url: https://github.com/pugwala/lunch-and-learn-data-cleansing/blob/duckdb-lakehouse/lakehouse/runbooks/AlertDeliveryFailing.md
           summary: "Alertmanager failed to deliver notifications through {{ $labels.integration }} in the last 15 minutes"
       - alert: Watchdog
         expr: vector(1)
         labels: {severity: none}
         annotations:
+          runbook_url: https://github.com/pugwala/lunch-and-learn-data-cleansing/blob/duckdb-lakehouse/lakehouse/runbooks/Watchdog.md
           summary: "Always firing, on purpose: it reaches ntfy's lakehouse-heartbeat topic every 4 hours, so silence there means alerting is down"

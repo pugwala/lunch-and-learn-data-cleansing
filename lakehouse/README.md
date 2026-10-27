@@ -33,6 +33,7 @@ every number matches the Facilitator Guide. dbt builds gold, and Dagster runs it
 | `metrics.py` | `push()`: Dagster's pipeline and data-quality numbers to the Pushgateway (never fails a run) |
 | `housekeeping.py` | DuckLake housekeeping, run weekly by `lake_housekeeping`: expire snapshots older than 30 days, merge small files, delete unneeded and orphaned files (`--dry-run` only reports) |
 | `ci/` | `checks.sh`: every check that needs no secrets and no running stack, for CI and before a push |
+| `runbooks/` | One page per alert (what it means, what to check, how to fix it, when it clears), linked from each rule's `runbook_url` and from the ntfy notification |
 | `backup/backup.sh` | The nightly catalog backup: `pg_dump` of every app database, checked, 14 days kept |
 | `fuseki/` | Apache Jena Fuseki 6.2.0, built from Apache's verified release: `Dockerfile`, `config.ttl` (one dataset; writes need the writer user), `shiro.ini` (no users; admin only inside the container), `start.sh` |
 | `cube/sync_masks.py` | Makes Cube mask exactly the columns OpenMetadata tags `Sensitivity.Restricted` |
@@ -385,7 +386,8 @@ services. None of the monitoring pieces has a host port (the tailnet can reach a
 | Load numbers and quality pass rates | `load_lake` and the `monitoring/data_quality` asset, through the Pushgateway |
 | The nightly catalog backup | `catalog-backup`, through node-exporter's textfile collector |
 
-**Alerts.** 23 rules in `monitoring/prometheus/rules/lakehouse.yml`, with thresholds well clear of today's values:
+**Alerts.** 23 rules in `monitoring/prometheus/rules/lakehouse.yml`, each with a runbook in `runbooks/` that its
+notification links to, with thresholds well clear of today's values:
 platform (a target or site down, the certificate under 14 days, a disk over 85% or 95%, memory under 10%, Postgres
 down), pipeline (a job whose last run failed, `daily_lake` not succeeding in 26 hours, `notebook_smoke` in 8 days),
 data (silver holding fewer rows than bronze, over 10% of records flagged where about 3% is normal, a quality
@@ -572,6 +574,7 @@ so `.github/workflows/lakehouse-ci.yml` waits for a course-side change on `main`
 | Pipeline and data-quality metrics (Pushgateway, run sensors, `monitoring_selftest`): 8 acceptance tests (`pytest lakehouse/acceptance/test_pipeline_metrics.py`), each seen failing first | On the VM |
 | Alerting (Alertmanager 0.34.1, 23 rules): 9 acceptance tests (`pytest lakehouse/acceptance/test_alerting.py`), each seen failing first; a failed `monitoring_selftest` raised `JobFailing`, ntfy got it at high priority on the selftest topic, and a passing run resolved it, at low priority | On the VM |
 | Alert delivery (ntfy 2.30.0 on port 8443, deny-all, three declared users, the lakehouse template): 7 acceptance tests (`pytest lakehouse/acceptance/test_ntfy.py`), each seen failing first; the Watchdog heartbeat arrives at min priority | On the VM |
+| Runbooks (23 pages, `runbook_url` on every rule, the link in each ntfy notification): 7 acceptance tests (`pytest lakehouse/acceptance/test_runbooks.py`), each seen failing first, and the end-to-end alert test now requires the link in the notification; every file a page names must exist | On the VM |
 | CI checks (`lakehouse/ci/checks.sh`): 14 checks, all green on the VM in 73 s; `dagster definitions validate` shown to fail on a copy of the definitions with the `deps=` mistake put back | On the VM |
 | Lake housekeeping (`housekeeping.py`, the weekly `lake_housekeeping` job, `LakeHousekeepingStale`): 8 acceptance tests (`pytest lakehouse/acceptance/test_housekeeping.py`), each seen failing first; the deleting steps are tested on a scratch DuckLake, where history went from every snapshot to just the current one with today's data unchanged, a dry run changed nothing, and a planted orphan file was deleted | On the VM |
 | Nightly catalog backup: 6 acceptance tests (`pytest lakehouse/acceptance/test_backup.py`), each seen failing first; a restore drill matched the live catalog row for row | On the VM |
