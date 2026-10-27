@@ -120,17 +120,18 @@ def load_lake(context: dg.AssetExecutionContext, config: LoadConfig):
 
 
 class GoldTranslator(DagsterDbtTranslator):
-    """dbt models become gold/<model>; sources keep [schema, table] so they match load_lake."""
+    """dbt models become <schema>/<model> (gold/..., mart_custody/...); sources keep [schema, table] so they match
+    load_lake."""
 
     def get_asset_key(self, dbt_resource_props):
-        """gold/<model> for a dbt model; dagster-dbt's default ([schema, table]) for a source."""
+        """<schema>/<model> for a dbt model; dagster-dbt's default ([schema, table]) for a source."""
         if dbt_resource_props["resource_type"] == "model":
-            return dg.AssetKey(["gold", dbt_resource_props["name"]])
+            return dg.AssetKey([dbt_resource_props["config"]["schema"], dbt_resource_props["name"]])
         return super().get_asset_key(dbt_resource_props)
 
     def get_group_name(self, dbt_resource_props):
-        """Models go in the gold group; sources keep whatever group load_lake gave them."""
-        return "gold" if dbt_resource_props["resource_type"] == "model" else None
+        """Models go in their schema's group (gold, mart_custody); sources keep load_lake's group."""
+        return dbt_resource_props["config"]["schema"] if dbt_resource_props["resource_type"] == "model" else None
 
 
 @dbt_assets(manifest=dbt_project.manifest_path, project=dbt_project, dagster_dbt_translator=GoldTranslator())

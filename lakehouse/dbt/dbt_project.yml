@@ -17,6 +17,10 @@ models:
     gold:
       +materialized: table
       +schema: gold
+    marts:
+      custody:
+        +materialized: table
+        +schema: mart_custody
 
 tests:
   lakehouse_gold:

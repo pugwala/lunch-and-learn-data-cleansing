@@ -1,0 +1,67 @@
+version: 2
+
+# The custody mart: tables shaped for custody operations, built from gold. Contracts are enforced, so a change to a
+# column's name, order or type fails the build instead of reaching the data products that promise this shape.
+
+models:
+  - name: custody_snapshot_monthly
+    description: >
+      Who is in custody at each month-end: one row per offender record per month-end it is open (sentenced on or
+      before it, projected release after it). Carries the SID so people are counted as distinct SIDs, never summed.
+      Complete months only; records with no sentence or release date are left out (snapshot_coverage).
+    config:
+      contract: {enforced: true}
+    columns:
+      - name: month_end
+        data_type: date
+        description: The month-end this row is a snapshot of.
+        data_tests: [not_null]
+      - name: offender_number
+        data_type: bigint
+        description: Record ID, BIGINT.
+        data_tests: [not_null]
+      - name: sid_number
+        data_type: bigint
+        description: The person's ID for life; empty when the record has none (count those as records, not people).
+      - name: unit_code
+        data_type: varchar
+        description: Three-letter unit code where the record is housed.
+      - name: custody_level
+        data_type: varchar
+        description: Custody level, G1 (least) to G5 (most).
+      - name: threat_level
+        data_type: varchar
+        description: Threat level.
+      - name: offense_code
+        data_type: varchar
+        description: FBI NIBRS offense code.
+      - name: offense_against
+        data_type: varchar
+        description: What the offense is against (Person, Property, Society, Group B).
+      - name: violence_code
+        data_type: varchar
+        description: Violence code.
+
+  - name: snapshot_coverage
+    description: One row saying what custody_snapshot_monthly covers and leaves out.
+    config:
+      contract: {enforced: true}
+    columns:
+      - name: records_total
+        data_type: bigint
+        description: Every offender record in gold.
+      - name: records_placed
+        data_type: bigint
+        description: Records with both a sentence date and a projected release date.
+      - name: records_without_dates
+        data_type: bigint
+        description: Records missing a sentence or release date, so not in the snapshot.
+      - name: records_without_sid
+        data_type: bigint
+        description: Records with no SID; they count as records but belong to no known person.
+      - name: first_month_end
+        data_type: date
+        description: The snapshot's first month-end.
+      - name: last_month_end
+        data_type: date
+        description: The snapshot's last month-end (the last complete month).

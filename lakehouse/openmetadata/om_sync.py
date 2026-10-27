@@ -26,7 +26,7 @@ from lakehouse import lake  # noqa: E402
 OM = os.environ.get("OM_URL", "http://openmetadata-server:8585/openmetadata") + "/api/v1"
 LAKEHOUSE = Path(__file__).resolve().parents[1]
 SERVICE, DATABASE, GLOSSARY, CLASSIFICATION = "lakehouse", "lake", "Lakehouse", "Sensitivity"
-SCHEMAS = ("ref", "bronze", "silver", "gold", "ops")
+SCHEMAS = ("ref", "bronze", "silver", "gold", "ops", "mart_custody")
 SENSITIVITY_TAGS = {"restricted": "Restricted", "personal": "Personal"}
 TYPES = {"VARCHAR": "STRING", "BIGINT": "BIGINT", "INTEGER": "INT", "SMALLINT": "SMALLINT", "DOUBLE": "DOUBLE",
          "FLOAT": "FLOAT", "DATE": "DATE", "TIME": "TIME", "BOOLEAN": "BOOLEAN", "TIMESTAMP": "TIMESTAMP",
@@ -95,12 +95,34 @@ def glossary_terms():
     return yaml.safe_load((LAKEHOUSE / "glossary" / "glossary.yml").read_text())["terms"]
 
 
+def dbt_model_schemas():
+    """{models/ subfolder: schema} from dbt_project.yml's +schema settings, e.g. gold -> gold, marts/custody ->
+    mart_custody: where dbt writes the models in that folder."""
+    out = {}
+
+    def walk(node, prefix):
+        """Record each folder's +schema, then descend into its subfolders."""
+        for key, value in node.items():
+            if isinstance(value, dict):
+                folder = f"{prefix}/{key}" if prefix else key
+                if "+schema" in value:
+                    out[folder] = value["+schema"]
+                walk(value, folder)
+
+    walk(yaml.safe_load((LAKEHOUSE / "dbt" / "dbt_project.yml").read_text())["models"]["lakehouse_gold"], "")
+    return out
+
+
 def dbt_docs():
-    """{(schema, table): {"description": str, "columns": {name: {"description": str, "sensitivity": str}}}} from dbt."""
-    docs = {}
-    for path in (LAKEHOUSE / "dbt" / "models").rglob("*.yml"):
+    """{(schema, table): {"description": str, "columns": {name: {"description": str, "sensitivity": str}}}} from dbt.
+    A model's schema is its folder's +schema in dbt_project.yml (the deepest folder that sets one)."""
+    docs, schemas = {}, dbt_model_schemas()
+    models_dir = LAKEHOUSE / "dbt" / "models"
+    for path in models_dir.rglob("*.yml"):
         doc = yaml.safe_load(path.read_text()) or {}
-        entries = [("gold", m) for m in doc.get("models", [])]
+        folder = path.parent.relative_to(models_dir).as_posix()
+        owner = max((f for f in schemas if folder == f or folder.startswith(f + "/")), key=len, default=None)
+        entries = [(schemas.get(owner, "gold"), m) for m in doc.get("models", [])]
         entries += [(src["schema"], t) for src in doc.get("sources", []) for t in src.get("tables", [])]
         for schema, entry in entries:
             cols = {c["name"]: {"description": " ".join((c.get("description") or "").split()),
