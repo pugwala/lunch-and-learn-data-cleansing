@@ -520,8 +520,44 @@ services:
       timeout: 10s
       start_period: 180s
 
+  # The off-machine backup (backup/offsite.sh): every night at 02:30 Central, after catalog-backup's 02:00 dump, restic
+  # copies the catalog dumps and the lake's data together, encrypted, to the backup target (BACKUP_TARGET: a TrueNAS
+  # NFS share, a local folder until that exists; bootstrap.sh prepares it). It reads the lake read-only, runs as
+  # root so it can read the private dumps and write an NFS share mapped for root, and runs a restore drill monthly.
+  # The repository password is RESTIC_PASSWORD in .env: keep a copy off this VM too, or a backup can't be read.
+  offsite-backup:
+    profiles: [core]
+    image: restic/restic:${RESTIC_TAG:-0.19.1}
+    restart: unless-stopped
+    entrypoint: ["sh", "/opt/offsite/offsite.sh"]
+    environment:
+      TZ: America/Chicago
+      BACKUP_AT: "02:30"
+      KEEP_DAILY: "7"
+      KEEP_WEEKLY: "4"
+      KEEP_MONTHLY: "6"
+      DRILL_DAYS: "30"
+      RESTIC_REPOSITORY: /target/restic   # here, not only in the script, so `exec offsite-backup restic ...` works too
+      RESTIC_PASSWORD_FILE: /run/secrets/restic_password
+      RESTIC_CACHE_DIR: /cache/restic
+    secrets:
+      - restic_password
+    volumes:
+      - ./backup:/opt/offsite:ro   # the folder, not the file
+      - ${LAKE_ROOT:-/lake}/data:/lake/data:ro
+      - ${LAKE_ROOT:-/lake}/catalog-backups:/lake/catalog-backups:ro
+      - ${LAKE_ROOT:-/lake}/catalog-backups/metrics:/metrics   # node-exporter's textfile collector reads these
+      - ${LAKE_ROOT:-/lake}/offsite-cache:/cache   # restic's cache, the drill's scratch space, status.json
+      - ${BACKUP_TARGET:-/mnt/lakehouse-backups}:/target
+    healthcheck:
+      test: ["CMD-SHELL", "find /cache/status.json -mmin -1560 | grep -q ."]
+      interval: 60s
+      timeout: 10s
+      start_period: 900s
+
   # Alerts from Prometheus's rules (monitoring/prometheus/rules/), at https://<LAKE_TS_HOST>/alertmanager/ behind
-  # basic auth. Every alert goes to the "undecided" receiver, which sends nothing, until Ian picks PagerDuty or email.
+  # basic auth. Alertmanager hands each one to ntfy (monitoring/alertmanager/alertmanager.yml), which pushes it to
+  # Ian's phone; Watchdog and the selftest's alerts go to topics of their own.
   # Where alerts go: ntfy, only on the tailnet, at https://<LAKE_TS_HOST>:8443/ through Caddy (ntfy can't sit under a
   # path). Deny-all by default; start.sh declares three users from the plain passwords in .env: alertmanager
   # (publishes), ian (the phone app reads) and checker (the tests read). Settings in ntfy/server.yml, the notification
@@ -603,6 +639,8 @@ services:
 secrets:
   ntfy_alertmanager_password:
     environment: NTFY_ALERTMANAGER_PASSWORD
+  restic_password:
+    environment: RESTIC_PASSWORD
 
 volumes:
   catalog-pg-data:

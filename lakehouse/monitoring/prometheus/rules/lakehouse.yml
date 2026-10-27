@@ -137,6 +137,34 @@ groups:
         annotations:
           runbook_url: https://github.com/pugwala/lunch-and-learn-data-cleansing/blob/duckdb-lakehouse/lakehouse/runbooks/CatalogBackupFailed.md
           summary: "The latest catalog backup failed (docker compose logs catalog-backup)"
+      - alert: OffsiteBackupStale
+        # offsite-backup (backup/offsite.sh) copies the catalog dumps and the data off the VM nightly at 02:30.
+        expr: time() - lakehouse_offsite_backup_last_success_timestamp_seconds > 26 * 3600 or absent(lakehouse_offsite_backup_last_success_timestamp_seconds)
+        for: 30m
+        labels: {severity: critical}
+        annotations:
+          summary: "No off-machine backup in 26 hours: lose the VM and the lake goes with it"
+          runbook_url: https://github.com/pugwala/lunch-and-learn-data-cleansing/blob/duckdb-lakehouse/lakehouse/runbooks/OffsiteBackupStale.md
+      - alert: OffsiteBackupFailed
+        expr: lakehouse_offsite_backup_last_failure_timestamp_seconds > (lakehouse_offsite_backup_last_success_timestamp_seconds or lakehouse_offsite_backup_last_failure_timestamp_seconds * 0)
+        labels: {severity: critical}
+        annotations:
+          summary: "The latest off-machine backup failed (docker compose logs offsite-backup)"
+          runbook_url: https://github.com/pugwala/lunch-and-learn-data-cleansing/blob/duckdb-lakehouse/lakehouse/runbooks/OffsiteBackupFailed.md
+      - alert: RestoreDrillStale
+        # The monthly drill reads every byte back and compares each restored file with its original.
+        expr: time() - lakehouse_restore_drill_last_success_timestamp_seconds > 35 * 86400 or absent(lakehouse_restore_drill_last_success_timestamp_seconds)
+        for: 1h
+        labels: {severity: warning}
+        annotations:
+          summary: "No successful restore drill in 35 days: nobody knows the backup can be restored"
+          runbook_url: https://github.com/pugwala/lunch-and-learn-data-cleansing/blob/duckdb-lakehouse/lakehouse/runbooks/RestoreDrillStale.md
+      - alert: RestoreDrillFailed
+        expr: lakehouse_restore_drill_last_failure_timestamp_seconds > (lakehouse_restore_drill_last_success_timestamp_seconds or lakehouse_restore_drill_last_failure_timestamp_seconds * 0)
+        labels: {severity: critical}
+        annotations:
+          summary: "The latest restore drill failed: the backup may not restore what was backed up"
+          runbook_url: https://github.com/pugwala/lunch-and-learn-data-cleansing/blob/duckdb-lakehouse/lakehouse/runbooks/RestoreDrillFailed.md
 
   - name: products
     rules:

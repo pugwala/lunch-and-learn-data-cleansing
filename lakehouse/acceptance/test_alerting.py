@@ -28,7 +28,8 @@ SERVICES = yaml.safe_load((LAKEHOUSE / "compose.yaml").read_text())["services"]
 RULES = {"TargetDown", "SiteDown", "CertificateExpiresSoon", "DiskFilling", "DiskAlmostFull", "MemoryLow",
          "PostgresDown", "JobFailing", "DailyLakeStale", "NotebookSmokeStale", "SilverDroppedRows",
          "FlaggedShareHigh", "DataQualityBelowFloor", "MoreRulesBelowFloor", "CatalogBackupStale",
-         "CatalogBackupFailed", "AlertDeliveryFailing", "BusinessRuleViolated", "BusinessInputLate", "LakeHousekeepingStale", "Watchdog"}
+         "CatalogBackupFailed", "AlertDeliveryFailing", "BusinessRuleViolated", "BusinessInputLate", "LakeHousekeepingStale", "OffsiteBackupStale", "OffsiteBackupFailed",
+         "RestoreDrillStale", "RestoreDrillFailed", "Watchdog"}
 NTFY_URL = "http://ntfy:8080/"
 
 

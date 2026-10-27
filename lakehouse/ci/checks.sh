@@ -12,7 +12,7 @@
 #   yaml        every YAML file parses
 #   docstrings  every function has a docstring (acceptance/test_docstrings.py)
 #   ontology    the SHACL shapes parse, each deduction rule is valid SPARQL, the rulebook and readiness graphs build
-#   bats        bootstrap.sh's 56 tests, with stub commands
+#   bats        bootstrap.sh's and restore_drill.sh's tests, with stub commands
 #   prometheus  promtool checks prometheus.yml and the alert rules
 #   alertmanager amtool checks alertmanager.yml
 #   compose     compose.yaml validates against a dummy .env made from .env.example (nothing printed: -q)
@@ -111,7 +111,7 @@ check compile "$PY" -m compileall -q "$REPO/lakehouse" "$REPO/lnl" "$REPO/genera
 check yaml yaml_parses
 check docstrings "$PY" -m pytest -q -p no:cacheprovider "$REPO/lakehouse/acceptance/test_docstrings.py"
 check ontology ontology_parses
-check bats bats "$REPO/lakehouse/tests/bootstrap.bats"
+check bats bats "$REPO/lakehouse/tests/bootstrap.bats" "$REPO/lakehouse/tests/restore_drill.bats"
 check prometheus docker run --rm -v "$REPO/lakehouse/monitoring/prometheus:/etc/prometheus:ro" --entrypoint promtool \
   "prom/prometheus:$(image_tag prom/prometheus)" check rules /etc/prometheus/rules/lakehouse.yml
 check alertmanager docker run --rm -v "$REPO/lakehouse/monitoring/alertmanager:/etc/alertmanager:ro" --entrypoint amtool \

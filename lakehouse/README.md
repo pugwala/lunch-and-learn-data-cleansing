@@ -112,7 +112,7 @@ What it does, in order:
    set, stops on duplicate keys, asks for the Dagster UI login if it's missing, and keeps `.env` at mode 600.
 5. **Image and services.** Builds the image, starts Postgres, creates the `dagster` role (Postgres runs
    `postgres/init/` only on an empty volume), generates OpenMetadata's own JWT signing keys once (under
-   `/lake/openmetadata/keys`, never in the repo), starts the twenty-one long-running services by name, reloads Caddy, makes Prometheus and Alertmanager reread
+   `/lake/openmetadata/keys`, never in the repo), starts the twenty-two long-running services by name, reloads Caddy, makes Prometheus and Alertmanager reread
    their config (SIGHUP), and restarts Dagster if catalog-pg was recreated (its pooled connections would be dead).
 6. **Lake data and meaning.** Runs the loader if silver or `ref.null_tokens` is missing, stages session 7's model,
    replaces OpenMetadata's default admin password, runs `om_sync.py`, `om_to_rdf.py` (Fuseki's graphs), `ontology/check_rules.py` (the business rules), then
@@ -386,7 +386,7 @@ services. None of the monitoring pieces has a host port (the tailnet can reach a
 | Load numbers and quality pass rates | `load_lake` and the `monitoring/data_quality` asset, through the Pushgateway |
 | The nightly catalog backup | `catalog-backup`, through node-exporter's textfile collector |
 
-**Alerts.** 23 rules in `monitoring/prometheus/rules/lakehouse.yml`, each with a runbook in `runbooks/` that its
+**Alerts.** 27 rules in `monitoring/prometheus/rules/lakehouse.yml`, each with a runbook in `runbooks/` that its
 notification links to, with thresholds well clear of today's values:
 platform (a target or site down, the certificate under 14 days, a disk over 85% or 95%, memory under 10%, Postgres
 down), pipeline (a job whose last run failed, `daily_lake` not succeeding in 26 hours, `notebook_smoke` in 8 days),
@@ -433,6 +433,33 @@ and personal data that changed or was deleted is gone from history within a mont
 remove and changes nothing. The job pushes `lakehouse_lake_snapshots`, `lakehouse_lake_live_bytes` and
 `lakehouse_lake_total_bytes`; a failed run raises `JobFailing`, and `LakeHousekeepingStale` fires when it hasn't
 succeeded in 8 days.
+
+**Off-machine backups.** `offsite-backup` (restic 0.19.1, `backup/offsite.sh`) copies the catalog dumps and the
+lake's data together every night at 02:30 Central, after the 02:00 dump and before Sunday's 03:30 housekeeping, into
+an encrypted, deduplicated repository on the backup target. It keeps 7 daily, 4 weekly and 6 monthly snapshots and
+checks the repository each night; the first backup took 550 MB of files to 126 MB. Once a month it runs a restore
+drill: it reads every byte back, restores the latest snapshot, and compares each file with its original (the first
+drill: all 330 identical). Metrics go to node-exporter; `OffsiteBackupStale`, `OffsiteBackupFailed`,
+`RestoreDrillStale` and `RestoreDrillFailed` alert; `/lake/offsite-cache/status.json` says what happened.
+
+- **Where the backup goes.** The target is `BACKUP_TARGET` (`/mnt/lakehouse-backups`). It must hold
+  `.lakehouse-backup-target`, saying `local` or `truenas`, so a share that didn't mount fails loudly instead of
+  filling the VM's own disk. Until the TrueNAS share exists, `bootstrap.sh` prepares a **local** folder; that works
+  but doesn't survive losing the VM, and `bootstrap.sh` and the `lakehouse_offsite_backup_off_machine` metric say so.
+- **Switching to TrueNAS.** On TrueNAS, create a dataset and an NFS share for this VM's LAN address (Maproot User
+  `root`, Maproot Group `wheel`) and turn on the NFS service. On the VM:
+  1. Stop the service: `docker compose --profile core stop offsite-backup`.
+  2. Mount the share at `/mnt/lakehouse-backups` with `nofail` in `/etc/fstab` (the local repository moves aside
+     first, or starts over).
+  3. Write the marker: `echo truenas | sudo tee /mnt/lakehouse-backups/.lakehouse-backup-target`.
+  4. Start it again: `docker compose --profile core up -d offsite-backup`.
+
+  It makes a new repository there and backs up within a minute.
+- **The password.** `RESTIC_PASSWORD` in `.env` encrypts the repository. **Keep a copy off this VM** (a password
+  manager): if the VM is lost, the backup can't be read without it.
+- **The full restore drill**, by hand: `bash lakehouse/backup/restore_drill.sh`. It restores the latest snapshot,
+  restores its catalog dump into a scratch database, runs the 19 parity checks on the restored lake, and cleans up.
+  The first run passed against the backup of 2026-10-27.
 
 **Catalog backups.** `catalog-backup` runs `pg_dump` 17 (the same image as catalog-pg) at 02:00 Central, and at
 start when the newest backup is over 23 hours old, as `lake_backup` (`pg_read_all_data`: reads every database,
@@ -553,7 +580,7 @@ so `.github/workflows/lakehouse-ci.yml` waits for a course-side change on `main`
 | --- | --- |
 | Loader, 19 parity checks, DuckLake on Postgres, image build, Postgres roles | On the VM |
 | Dagster webserver and daemon with Postgres storage, their healthchecks, Caddy basic auth | On the VM |
-| `scripts/bootstrap.sh`: 56 bats tests (`bats lakehouse/tests/bootstrap.bats`, needs `apt install bats`), each shown to fail when the behaviour it covers is broken | On the VM, with stub commands; never touches the live stack |
+| `scripts/bootstrap.sh`: 61 bats tests (`bats lakehouse/tests/bootstrap.bats`, needs `apt install bats`), each shown to fail when the behaviour it covers is broken | On the VM, with stub commands; never touches the live stack |
 | dbt gold models and their tests (25 today), Dagster job (both jobs, plus the blocking check stopping gold) | Sandbox, against a plain DuckDB file |
 | Cube v1.8.3 over gold, read-only as `lake_ro`, restricted columns masked except for `restricted_reader`: 15 acceptance tests (`pytest lakehouse/acceptance/test_cube.py`); unmasking everyone made 8 of them fail | On the VM |
 | Superset 6.1.0 under `/superset`, Cube as its only database, the Trust Test and Custody dashboards: 9 acceptance tests (`pytest lakehouse/acceptance/test_superset.py`); the only-Cube check was shown to fail with a decoy database added, the Custody chart checks failed before the dashboard existed, and `--check` exits 1 on a changed layout | On the VM |
@@ -572,10 +599,11 @@ so `.github/workflows/lakehouse-ci.yml` waits for a course-side change on `main`
 | Glossary as RDF (`om_to_rdf.py`): 8 acceptance tests (`pytest lakehouse/acceptance/test_glossary_rdf.py`) and 1 bats test, each seen failing first; a stray triple was flagged by `--check` and removed by the next load | On the VM |
 | Platform metrics (Prometheus 3.15.0, node-exporter, cAdvisor), Grafana 13.2.3 and the Home Lakehouse dashboard, Postgres and blackbox probes: 22 acceptance tests (`pytest lakehouse/acceptance/test_monitoring.py`), each seen failing first; stopping Fuseki dropped its probe to 0 and back; every dashboard panel's query returns data | On the VM |
 | Pipeline and data-quality metrics (Pushgateway, run sensors, `monitoring_selftest`): 8 acceptance tests (`pytest lakehouse/acceptance/test_pipeline_metrics.py`), each seen failing first | On the VM |
-| Alerting (Alertmanager 0.34.1, 23 rules): 9 acceptance tests (`pytest lakehouse/acceptance/test_alerting.py`), each seen failing first; a failed `monitoring_selftest` raised `JobFailing`, ntfy got it at high priority on the selftest topic, and a passing run resolved it, at low priority | On the VM |
+| Alerting (Alertmanager 0.34.1, 27 rules): 9 acceptance tests (`pytest lakehouse/acceptance/test_alerting.py`), each seen failing first; a failed `monitoring_selftest` raised `JobFailing`, ntfy got it at high priority on the selftest topic, and a passing run resolved it, at low priority | On the VM |
 | Alert delivery (ntfy 2.30.0 on port 8443, deny-all, three declared users, the lakehouse template): 7 acceptance tests (`pytest lakehouse/acceptance/test_ntfy.py`), each seen failing first; the Watchdog heartbeat arrives at min priority | On the VM |
 | Runbooks (23 pages, `runbook_url` on every rule, the link in each ntfy notification): 7 acceptance tests (`pytest lakehouse/acceptance/test_runbooks.py`), each seen failing first, and the end-to-end alert test now requires the link in the notification; every file a page names must exist | On the VM |
 | CI checks (`lakehouse/ci/checks.sh`): 14 checks, all green on the VM in 73 s; `dagster definitions validate` shown to fail on a copy of the definitions with the `deps=` mistake put back | On the VM |
+| Off-machine backups (`offsite-backup`, restic 0.19.1, the monthly drill, four alerts) and the full restore drill (`backup/restore_drill.sh`): 5 acceptance tests (`pytest lakehouse/acceptance/test_offsite_backup.py`), 5 bats tests for the target and the password, 6 bats tests for the drill (`bats lakehouse/tests/restore_drill.bats`), each seen failing first. The first backup and drill succeeded (330 files identical), and the full drill passed the 19 parity checks on the restored lake | On the VM |
 | Lake housekeeping (`housekeeping.py`, the weekly `lake_housekeeping` job, `LakeHousekeepingStale`): 8 acceptance tests (`pytest lakehouse/acceptance/test_housekeeping.py`), each seen failing first; the deleting steps are tested on a scratch DuckLake, where history went from every snapshot to just the current one with today's data unchanged, a dry run changed nothing, and a planted orphan file was deleted | On the VM |
 | Nightly catalog backup: 6 acceptance tests (`pytest lakehouse/acceptance/test_backup.py`), each seen failing first; a restore drill matched the live catalog row for row | On the VM |
 | Pinned versions: 28 acceptance tests (`pytest lakehouse/acceptance/test_pins.py`) and 2 bats tests, each seen failing first; the jupyter image was shown by layer match to be built on the `2026-10-12` base, and `daily_lake` and `notebook_smoke` succeeded on it | On the VM |

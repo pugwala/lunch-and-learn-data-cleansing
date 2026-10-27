@@ -42,6 +42,8 @@ LAKE_BACKUP_PASSWORD=backup-secret
 NTFY_ALERTMANAGER_PASSWORD=ntfy-am-secret
 NTFY_IAN_PASSWORD=ntfy-ian-secret
 NTFY_CHECKER_PASSWORD=ntfy-checker-secret
+RESTIC_PASSWORD=restic-secret
+BACKUP_TARGET=$T/backup-target
 DAGSTER_UI_USER=admin
 DAGSTER_UI_HASH='\$2a\$14\$fakehash'
 LAKE_ROOT=$T/lake
@@ -57,7 +59,7 @@ case "$*" in
   "compose version"|info)                    exit 0 ;;
   *" build "*)                               exit "$FAKE_BUILD_EXIT" ;;
   *" up -d --wait catalog-pg"*)              echo "$FAKE_PG_UP" >&2; exit 0 ;;
-  *" ps --format {{.Service}} {{.Status}}"*) for s in catalog-pg jupyter dagster-webserver dagster-daemon cube superset mcp opensearch openmetadata-server fuseki prometheus node-exporter cadvisor postgres-exporter blackbox pushgateway catalog-backup ntfy alertmanager grafana caddy; do
+  *" ps --format {{.Service}} {{.Status}}"*) for s in catalog-pg jupyter dagster-webserver dagster-daemon cube superset mcp opensearch openmetadata-server fuseki prometheus node-exporter cadvisor postgres-exporter blackbox pushgateway catalog-backup offsite-backup ntfy alertmanager grafana caddy; do
                                                echo "$s Up 1 minute (healthy)"; done ;;
   *" ps --format {{.Status}} "*)             echo "Up 1 minute (healthy)" ;;
   *"stage_model.py --check"*)                 exit "$FAKE_MODEL_EXIT" ;;
@@ -278,11 +280,11 @@ set_env()       { sed -i "/^$1=/d" "$ENV"; [ $# = 1 ] || echo "$1=$2" >> "$ENV";
   not_called " up "
 }
 
-@test "a healthy install passes, starting the twenty-one services by name and not running the loader" {
+@test "a healthy install passes, starting the twenty-two services by name and not running the loader" {
   run_bootstrap
   [ "$status" -eq 0 ]
   [[ $output == *"All checks passed"* ]]
-  called "up -d catalog-pg jupyter dagster-webserver dagster-daemon cube superset mcp opensearch openmetadata-server fuseki prometheus node-exporter cadvisor postgres-exporter blackbox pushgateway catalog-backup ntfy alertmanager grafana caddy"
+  called "up -d catalog-pg jupyter dagster-webserver dagster-daemon cube superset mcp opensearch openmetadata-server fuseki prometheus node-exporter cadvisor postgres-exporter blackbox pushgateway catalog-backup offsite-backup ntfy alertmanager grafana caddy"
   not_called "run --rm load-lake"
 }
 
@@ -404,6 +406,42 @@ set_env()       { sed -i "/^$1=/d" "$ENV"; [ $# = 1 ] || echo "$1=$2" >> "$ENV";
   run_bootstrap
   [ "$status" -eq 0 ]
   for k in NTFY_ALERTMANAGER_PASSWORD NTFY_IAN_PASSWORD NTFY_CHECKER_PASSWORD; do grep -qE "^$k=[0-9a-f]{48}$" "$ENV"; done
+}
+
+@test "generates the restic repository password when an older .env lacks it" {
+  set_env RESTIC_PASSWORD
+  run_bootstrap
+  [ "$status" -eq 0 ]
+  grep -qE '^RESTIC_PASSWORD=[0-9a-f]{48}$' "$ENV"
+}
+
+@test "creates the off-machine backup's cache folder on the lake disk" {
+  run_bootstrap
+  [ "$status" -eq 0 ]
+  called "mkdir -p $T/lake/offsite-cache"
+}
+
+@test "prepares a local backup target with its marker, and says backups aren't off the machine yet" {
+  run_bootstrap
+  [ "$status" -eq 0 ]
+  [ "$(cat "$T/backup-target/.lakehouse-backup-target")" = local ]
+  [[ $output == *"warn"*"backups go to a local folder"* ]]
+}
+
+@test "leaves a TrueNAS backup target as it is" {
+  mkdir -p "$T/backup-target" && echo truenas > "$T/backup-target/.lakehouse-backup-target"
+  run_bootstrap
+  [ "$status" -eq 0 ]
+  [ "$(cat "$T/backup-target/.lakehouse-backup-target")" = truenas ]
+  [[ $output == *"ok"*"backups go to truenas"* ]]
+}
+
+@test "--check fails when the backup target has no marker, and creates nothing" {
+  mkdir -p "$T/backup-target"
+  run_bootstrap --check
+  [ "$status" -eq 1 ]
+  [[ $output == *"FAIL"*"backup target"*"marker"* ]]
+  [ ! -e "$T/backup-target/.lakehouse-backup-target" ]
 }
 
 @test "creates ntfy's folder on the lake disk" {

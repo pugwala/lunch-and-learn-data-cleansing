@@ -24,8 +24,8 @@ done
 SECRETS=(POSTGRES_PASSWORD LAKE_RW_PASSWORD LAKE_RO_PASSWORD DAGSTER_PG_PASSWORD JUPYTER_TOKEN
          CUBEJS_API_SECRET CUBE_SQL_PASSWORD SUPERSET_SECRET_KEY SUPERSET_PG_PASSWORD SUPERSET_ADMIN_PASSWORD
          MCP_TOKEN OM_DB_PASSWORD OM_ADMIN_PASSWORD OM_FERNET_KEY OM_MCP_PASSWORD FUSEKI_WRITER_PASSWORD GRAFANA_ADMIN_PASSWORD LAKE_MONITOR_PASSWORD LAKE_BACKUP_PASSWORD
-         NTFY_ALERTMANAGER_PASSWORD NTFY_IAN_PASSWORD NTFY_CHECKER_PASSWORD)
-SERVICES=(catalog-pg jupyter dagster-webserver dagster-daemon cube superset mcp opensearch openmetadata-server fuseki prometheus node-exporter cadvisor postgres-exporter blackbox pushgateway catalog-backup ntfy alertmanager grafana caddy)   # never a bare `up`: it also runs load-lake
+         NTFY_ALERTMANAGER_PASSWORD NTFY_IAN_PASSWORD NTFY_CHECKER_PASSWORD RESTIC_PASSWORD)
+SERVICES=(catalog-pg jupyter dagster-webserver dagster-daemon cube superset mcp opensearch openmetadata-server fuseki prometheus node-exporter cadvisor postgres-exporter blackbox pushgateway catalog-backup offsite-backup ntfy alertmanager grafana caddy)   # never a bare `up`: it also runs load-lake
 ROLE_SCRIPTS=(02-dagster.sh 03-superset.sh 04-openmetadata.sh 05-monitor.sh 06-backup.sh)   # app roles on catalog-pg; postgres/init/ only runs on an empty volume
 CONTAINER_UID=1000 CONTAINER_GID=100                                    # jovyan:users in the image
 BACKUP_UID=999 BACKUP_GID=999   # catalog-backup's postgres user: the dumps hold every app database, so not uid 1000
@@ -85,7 +85,7 @@ Formatting erases a disk, so this script never does it. Once you're sure which d
 Then run this script again."
 fi
 
-for d in landing data notebook-runs catalog-backups models dagster openmetadata fuseki prometheus grafana pushgateway alertmanager ntfy; do
+for d in landing data notebook-runs catalog-backups models dagster openmetadata fuseki prometheus grafana pushgateway alertmanager ntfy offsite-cache; do
   p="$LAKE_ROOT/$d"
   [ -d "$p" ] || { [ $CHECK = 1 ] && { bad "$p is missing"; continue; }; sudo mkdir -p "$p"; did "created $p"; }
   owner=$CONTAINER_UID:$CONTAINER_GID
@@ -94,6 +94,28 @@ for d in landing data notebook-runs catalog-backups models dagster openmetadata 
   elif [ $CHECK = 1 ]; then bad "$p is owned by $(stat -c %u:%g "$p"), want $owner"
   else sudo chown -R "$owner" "$p"; did "chown $owner $p"; fi
 done
+
+# The off-machine backup's target (BACKUP_TARGET: a TrueNAS NFS mount once it exists) must hold a marker saying what
+# it is, so a share that failed to mount is an error rather than a silent copy onto this VM's own disk. Without a
+# share yet, an empty folder here becomes a local target, which works but doesn't protect against losing the VM.
+BACKUP_TARGET=$(env_val BACKUP_TARGET); BACKUP_TARGET=${BACKUP_TARGET:-/mnt/lakehouse-backups}
+marker="$BACKUP_TARGET/.lakehouse-backup-target"
+if [ -f "$marker" ]; then
+  kind=$(cat "$marker")
+  if [ "$kind" = local ]; then
+    warn "backups go to a local folder ($BACKUP_TARGET), not off the machine yet: mount the TrueNAS share there"
+  else ok "backups go to $kind ($BACKUP_TARGET)"; fi
+elif mountpoint -q "$BACKUP_TARGET" 2>/dev/null; then
+  bad "backup target $BACKUP_TARGET is mounted but has no marker: echo truenas | sudo tee $marker"
+elif [ $CHECK = 1 ]; then
+  bad "backup target $BACKUP_TARGET has no marker (.lakehouse-backup-target): is the share mounted?"
+elif [ -n "$(ls -A "$BACKUP_TARGET" 2>/dev/null)" ]; then
+  bad "backup target $BACKUP_TARGET isn't empty and has no marker: look at it before using it"
+else
+  sudo mkdir -p "$BACKUP_TARGET" && echo local | sudo tee "$marker" >/dev/null \
+    && did "prepared $BACKUP_TARGET as a local backup target" \
+    && warn "backups go to a local folder ($BACKUP_TARGET), not off the machine yet: mount the TrueNAS share there"
+fi
 
 # ---------------------------------------------------------------------------------------------------------------
 step "3/7 Repo permissions"

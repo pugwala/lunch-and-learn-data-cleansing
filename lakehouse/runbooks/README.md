@@ -12,7 +12,7 @@ tailnet at `https://<LAKE_TS_HOST>/...`.
 | Platform | [TargetDown](TargetDown.md) · [SiteDown](SiteDown.md) · [CertificateExpiresSoon](CertificateExpiresSoon.md) · [DiskFilling](DiskFilling.md) · [DiskAlmostFull](DiskAlmostFull.md) · [MemoryLow](MemoryLow.md) · [PostgresDown](PostgresDown.md) |
 | Pipeline | [JobFailing](JobFailing.md) · [DailyLakeStale](DailyLakeStale.md) · [NotebookSmokeStale](NotebookSmokeStale.md) · [LakeHousekeepingStale](LakeHousekeepingStale.md) |
 | Data | [BusinessRuleViolated](BusinessRuleViolated.md) · [SilverDroppedRows](SilverDroppedRows.md) · [FlaggedShareHigh](FlaggedShareHigh.md) · [DataQualityBelowFloor](DataQualityBelowFloor.md) · [MoreRulesBelowFloor](MoreRulesBelowFloor.md) |
-| Backups | [CatalogBackupStale](CatalogBackupStale.md) · [CatalogBackupFailed](CatalogBackupFailed.md) |
+| Backups | [CatalogBackupStale](CatalogBackupStale.md) · [CatalogBackupFailed](CatalogBackupFailed.md) · [OffsiteBackupStale](OffsiteBackupStale.md) · [OffsiteBackupFailed](OffsiteBackupFailed.md) · [RestoreDrillStale](RestoreDrillStale.md) · [RestoreDrillFailed](RestoreDrillFailed.md) |
 | Data products | [DataProductStale](DataProductStale.md) · [DataProductCoverageLow](DataProductCoverageLow.md) · [BusinessInputLate](BusinessInputLate.md) |
 | Alerting itself | [AlertDeliveryFailing](AlertDeliveryFailing.md) · [Watchdog](Watchdog.md) |
 
