@@ -94,6 +94,10 @@ cubes:
       - name: record_count
         type: count
         description: Offender records.
+      - name: people
+        sql: sid_number
+        type: count_distinct
+        description: Distinct people (SIDs) across these records; a person can have several records.
       - name: records_with_exceptions
         type: count
         filters:

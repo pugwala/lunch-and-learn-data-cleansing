@@ -1,0 +1,100 @@
+# The custody data products. custody_snapshot (hidden) reads mart_custody.custody_snapshot_monthly: one row per
+# offender record per month-end it is open. People are counted as distinct SIDs at query time, so a person held
+# under two records is one person at any breakdown; the mart never stores people counts, which don't add up.
+# Consumers see three views, one per product question. None has a restricted or personal member, so no masking
+# applies; admissions reuse offender_records, whose own masks stay as they are.
+cubes:
+  - name: custody_snapshot
+    sql_table: lake.mart_custody.custody_snapshot_monthly
+    public: false
+    description: Who is in custody at each month-end, one row per open record (mart_custody).
+
+    joins:
+      - name: units
+        relationship: many_to_one
+        sql: "{CUBE}.unit_code = {units}.unit_code"
+      - name: offenses
+        relationship: many_to_one
+        sql: "{CUBE}.offense_code = {offenses}.offense_code"
+
+    dimensions:
+      - name: snapshot_key
+        sql: "CAST({CUBE}.month_end AS VARCHAR) || '-' || CAST({CUBE}.offender_number AS VARCHAR)"
+        type: string
+        primary_key: true
+      - name: month_end
+        sql: month_end
+        type: time
+        description: The month-end the counts are as of.
+      - name: unit_code
+        sql: unit_code
+        type: string
+      - name: custody_level
+        sql: custody_level
+        type: string
+      - name: threat_level
+        sql: threat_level
+        type: string
+      - name: offense_code
+        sql: offense_code
+        type: string
+      - name: offense_against
+        sql: offense_against
+        type: string
+      - name: violence_code
+        sql: violence_code
+        type: string
+
+    measures:
+      - name: records_in_custody
+        type: count
+        description: Offender records open at the month-end.
+      - name: people_in_custody
+        sql: sid_number
+        type: count_distinct
+        description: Distinct people (SIDs) held at the month-end; records with no SID aren't counted here.
+      - name: records_without_sid
+        type: count
+        filters:
+          - sql: "{CUBE}.sid_number IS NULL"
+        description: Open records that belong to no known person.
+
+views:
+  - name: custody_population
+    description: >
+      Custody population: who is held at each month-end, by unit, custody level and threat level. Count people
+      with people_in_custody (distinct SIDs, never summed); records_in_custody counts open records.
+    cubes:
+      - join_path: custody_snapshot
+        includes: [month_end, unit_code, custody_level, threat_level, records_in_custody, people_in_custody,
+                   records_without_sid]
+      - join_path: custody_snapshot.units
+        includes: [unit_name]
+
+  - name: custody_offenses
+    description: >
+      Custody offenses: what the custody population is held for at each month-end, by offense code, category
+      and violence code. New sentences per month are in custody_admissions.
+    cubes:
+      - join_path: custody_snapshot
+        includes: [month_end, offense_code, offense_against, violence_code, records_in_custody, people_in_custody]
+      - join_path: custody_snapshot.offenses
+        includes: [offense_description, crime_against]
+
+  - name: custody_admissions
+    description: >
+      Custody admissions: new sentences by sentence date and offense. admissions counts records sentenced;
+      people_admitted counts distinct people (SIDs).
+    cubes:
+      - join_path: offender_records
+        includes:
+          - sentence_date
+          - offense_code
+          - offense_against
+          - violence_code
+          - name: record_count
+            alias: admissions
+          - name: people
+            alias: people_admitted
+      - join_path: offender_records.offenses
+        includes: [offense_description]

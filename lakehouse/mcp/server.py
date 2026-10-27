@@ -111,6 +111,22 @@ def number(value):
     return int(d) if d == d.to_integral_value() else float(d)
 
 
+def pick(metric, group_by, cat):
+    """(measure, dimensions) as full Cube names, or (None, []) for an unknown metric. Several views can offer the
+    same metric (people_in_custody is in custody_population and custody_offenses): the first that also has every
+    dimension asked for wins; otherwise the first, its dimensions resolved across Cube, where joins reach them."""
+    measures = [m for m in cat["measures"] if m == metric or m.split(".", 1)[1] == metric]
+    if not measures:
+        return None, []
+    for measure in measures:
+        own = [d for d in cat["dimensions"] if d.startswith(measure.split(".", 1)[0] + ".")]
+        dims = [resolve(name, own) for name in group_by]
+        if all(dims):
+            return measure, dims
+    measure = measures[0]
+    return measure, [resolve(name, cat["dimensions"], prefer_cube=measure.split(".", 1)[0]) for name in group_by]
+
+
 @server.tool()
 def query_metric(metric: str, group_by: list[str] | None = None, limit: int = 100) -> MetricResult:
     """A governed metric from Cube by name (for example record_count, total_restitution, answers_changed),
@@ -118,17 +134,14 @@ def query_metric(metric: str, group_by: list[str] | None = None, limit: int = 10
     an unknown name returns the list of real ones. Only Cube's model is reachable: restricted and personal
     columns aren't in it."""
     cat = catalog()
-    measure = resolve(metric, cat["measures"])
+    measure, dims = pick(metric, group_by or [], cat)
     if measure is None:
         raise ToolError(f"No metric named {metric!r}. Metrics: " +
-                         ", ".join(sorted(m.split(".", 1)[1] for m in cat["measures"])))
-    dims = []
-    for name in group_by or []:
-        dim = resolve(name, cat["dimensions"], prefer_cube=measure.split(".", 1)[0])
+                         ", ".join(sorted({m.split(".", 1)[1] for m in cat["measures"]})))
+    for name, dim in zip(group_by or [], dims):
         if dim is None:
             raise ToolError(f"No dimension named {name!r}. Dimensions: " +
-                             ", ".join(sorted(d.split(".", 1)[1] for d in cat["dimensions"])))
-        dims.append(dim)
+                             ", ".join(sorted({d.split(".", 1)[1] for d in cat["dimensions"]})))
     data = cube("load", {"query": {"measures": [measure], "dimensions": dims, "limit": max(1, min(limit, 1000))}})
     short = lambda full: full.split(".", 1)[1]   # noqa: E731
     rows = [{short(k): (number(v) if k == measure else v) for k, v in row.items() if k in dims + [measure]}
