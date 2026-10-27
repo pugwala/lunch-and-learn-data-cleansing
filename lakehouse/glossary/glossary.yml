@@ -1,6 +1,6 @@
 # The lakehouse glossary: what the mock data's terms mean and how they relate. The MCP tool define_term serves it
 # now; Phase 5 loads the same file into OpenMetadata's glossary. Everything here describes the fictional course
-# data. Relation types: identifies, partOf, broader (a wider category), relatedTo.
+# data. Relation types: identifies, isAbout, partOf, broader (a wider category), relatedTo.
 # columns: names in gold.fct_offender_record and Cube (dimensions); metrics: Cube measures to ask query_metric for.
 
 terms:
@@ -12,6 +12,16 @@ terms:
     synonyms: [record, offender record]
     metrics: [record_count, records_with_exceptions]
     columns: [offender_number]
+    relations:
+      - {type: isAbout, term: Person}
+
+  - name: Person
+    definition: >
+      An individual in the mock dataset, identified for life by their SID Number. A person can have several
+      Offender Records over time, sometimes two open at once (concurrent sentences). "Inmate" and "offender" are
+      roles a person has while a record is open, not different things. Count people by distinct SID; records with
+      no SID belong to no known person. gold.dim_person has one row per known person, with no personal data.
+    synonyms: [person, individual, inmate, offender]
 
   - name: Offender Number
     definition: >
@@ -29,6 +39,7 @@ terms:
     synonyms: [SID, person ID]
     columns: [sid_number]
     relations:
+      - {type: identifies, term: Person}
       - {type: partOf, term: Offender Record}
 
   - name: Unit

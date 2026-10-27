@@ -121,7 +121,7 @@ def test_gold_trust_test_is_the_course_scorecard(con):
     assert got == [(*row, True) for row in TRUST_TEST]
 
 
-@pytest.mark.parametrize("dim", ["dim_unit", "dim_offense", "dim_stg_group"])
+@pytest.mark.parametrize("dim", ["dim_unit", "dim_offense", "dim_stg_group", "dim_person"])
 def test_dimensions_have_rows(con, dim):
     """Each dimension built from reference data is populated."""
     assert scalar(con, f"SELECT count(*) FROM gold.{dim}") > 0

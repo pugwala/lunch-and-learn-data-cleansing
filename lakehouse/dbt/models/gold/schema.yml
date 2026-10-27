@@ -14,6 +14,28 @@ models:
       - name: unit_name
         data_tests: [unique, not_null]
 
+  - name: dim_person
+    description: >
+      One row per known person (SID), with facts derived from their offender records only. No names, birth dates
+      or other personal data, which stay in silver. Records with no SID belong to no known person and aren't here.
+    columns:
+      - name: sid_number
+        description: The person's ID for life (SID Number).
+        data_tests: [unique, not_null]
+      - name: record_count
+        description: How many offender records the person has.
+        data_tests: [not_null]
+      - name: first_sentence_date
+        description: Sentence date of the person's first record.
+      - name: latest_sentence_date
+        description: Sentence date of the person's latest record.
+      - name: is_repeat
+        description: The person has more than one record.
+        data_tests: [not_null]
+      - name: has_concurrent_records
+        description: Two of the person's records were open at the same time (concurrent sentences).
+        data_tests: [not_null]
+
   - name: dim_offense
     description: FBI NIBRS offense codes.
     columns:

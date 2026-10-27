@@ -38,6 +38,10 @@ CUSTOM_RELATIONS = [   # relation types glossary.yml uses that OpenMetadata does
      "description": "This term's value picks out exactly one instance of the other term."},
     {"name": "identifiedBy", "displayName": "Identified by", "inverseRelation": "identifies",
      "description": "Instances of this term are picked out by the other term's value."},
+    {"name": "isAbout", "displayName": "Is about", "inverseRelation": "subjectOf",
+     "description": "Each instance of this term describes one instance of the other (a record is about a person)."},
+    {"name": "subjectOf", "displayName": "Subject of", "inverseRelation": "isAbout",
+     "description": "Instances of this term are described by instances of the other."},
 ]
 
 
@@ -139,7 +143,8 @@ def column_entity(name, dtype, doc, glossary_links):
 
 # ---- Steps ---------------------------------------------------------------------------------------------------
 def relation_types(s):
-    """Add the custom relation types glossary.yml needs (identifies / identifiedBy) to OpenMetadata's settings."""
+    """Add the custom relation types glossary.yml needs (identifies / identifiedBy, isAbout / subjectOf) to
+    OpenMetadata's settings."""
     current = s.get("system/settings/glossaryTermRelationSettings")
     types = (current or {}).get("config_value", {}).get("relationTypes", [])
     missing = [t for t in CUSTOM_RELATIONS if t["name"] not in {x["name"] for x in types}]
