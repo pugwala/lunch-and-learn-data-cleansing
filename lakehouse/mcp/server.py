@@ -1,7 +1,8 @@
 """MCP server for the home-lab lakehouse: governed metrics from Cube, meanings from the glossary.
 
 Tools
-    query_metric(metric, group_by=None, limit=100)   a Cube measure by name, optionally grouped by dimensions
+    query_metric(metric, group_by=None, limit=100)   a Cube measure by name, optionally grouped by dimensions; a
+                                                      data product's metric also says which months are final
     define_term(term)                                 a glossary term from OpenMetadata: definition, synonyms,
                                                       columns, metrics, sensitivity and typed relations
 
@@ -43,11 +44,27 @@ server = MCPServer(
 
 
 # ---- Results (typed, so clients get structured content with a schema) -----------------------------------------
+class PeriodStatus(BaseModel):
+    """One month-end of a data product: final, or provisional and the business units it still waits on."""
+    month_end: str
+    status: str
+    waiting_on: list[str]
+
+
+class Readiness(BaseModel):
+    """Whether a data product's numbers are final: its latest month-end, and every month still provisional."""
+    product: str
+    latest: PeriodStatus
+    provisional: list[PeriodStatus]
+
+
 class MetricResult(BaseModel):
-    """A metric's rows: one per combination of the group_by dimensions, each with the metric's value."""
+    """A metric's rows: one per combination of the group_by dimensions, each with the metric's value. When the
+    metric comes from a data product's view, readiness says which of its month-ends are final yet."""
     metric: str
     group_by: list[str]
     rows: list[dict[str, Any]]
+    readiness: Readiness | None = None
 
 
 class Relation(BaseModel):
@@ -86,10 +103,28 @@ def cube(path, payload=None):
 
 
 def catalog():
-    """Every public measure and dimension Cube offers, as {"measures": [...], "dimensions": [...]} of full names."""
+    """Every public measure and dimension Cube offers, as {"measures": [...], "dimensions": [...]} of full names,
+    plus "products": {view: data product} for views tagged meta.product."""
     meta = cube("meta")
-    return {kind: [m["name"] for c in meta["cubes"] for m in c.get(kind, []) if m.get("public", True)]
-            for kind in ("measures", "dimensions")}
+    out = {kind: [m["name"] for c in meta["cubes"] for m in c.get(kind, []) if m.get("public", True)]
+           for kind in ("measures", "dimensions")}
+    out["products"] = {c["name"]: c["meta"]["product"] for c in meta["cubes"] if (c.get("meta") or {}).get("product")}
+    return out
+
+
+def readiness(product):
+    """A data product's readiness from Cube's period_readiness view: its latest month-end and any still
+    provisional (a month is final once every business input the product depends on has closed it)."""
+    dims = ["period_readiness.month_end", "period_readiness.period_status", "period_readiness.waiting_on"]
+    data = cube("load", {"query": {"dimensions": dims, "order": {"period_readiness.month_end": "desc"}, "limit": 5000,
+                                   "filters": [{"member": "period_readiness.product", "operator": "equals",
+                                                "values": [product]}]}})
+    periods = [PeriodStatus(month_end=str(r[dims[0]])[:10], status=r[dims[1]],
+                            waiting_on=[u.strip() for u in (r[dims[2]] or "").split(",") if u.strip()])
+               for r in data.get("data", [])]
+    if not periods:
+        return None
+    return Readiness(product=product, latest=periods[0], provisional=[p for p in periods if p.status == "provisional"])
 
 
 def resolve(name, options, prefer_cube=None):
@@ -132,7 +167,8 @@ def query_metric(metric: str, group_by: list[str] | None = None, limit: int = 10
     """A governed metric from Cube by name (for example record_count, total_restitution, answers_changed),
     optionally grouped by dimensions (for example custody_level, unit_name, offense_against). Short names work;
     an unknown name returns the list of real ones. Only Cube's model is reachable: restricted and personal
-    columns aren't in it."""
+    columns aren't in it. A metric from a data product also returns readiness: whether its latest month-end is
+    final, and which months are still provisional and who they wait on; say so when you report a provisional month."""
     cat = catalog()
     measure, dims = pick(metric, group_by or [], cat)
     if measure is None:
@@ -146,7 +182,9 @@ def query_metric(metric: str, group_by: list[str] | None = None, limit: int = 10
     short = lambda full: full.split(".", 1)[1]   # noqa: E731
     rows = [{short(k): (number(v) if k == measure else v) for k, v in row.items() if k in dims + [measure]}
             for row in data.get("data", [])]
-    return MetricResult(metric=short(measure), group_by=[short(d) for d in dims], rows=rows)
+    product = cat["products"].get(measure.split(".", 1)[0])
+    return MetricResult(metric=short(measure), group_by=[short(d) for d in dims], rows=rows,
+                        readiness=readiness(product) if product else None)
 
 
 # ---- Glossary (OpenMetadata) ----------------------------------------------------------------------------------

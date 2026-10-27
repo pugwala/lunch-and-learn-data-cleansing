@@ -119,6 +119,91 @@ def test_readiness_follows_the_watermarks():
                                                                   len(PRODUCTS[name]["depends_on"]) - len(open_inputs))
 
 
+def test_a_reopened_input_makes_the_month_provisional_and_a_close_makes_it_final():
+    """Live, with no rebuild: Classification reopening the latest month-end makes Custody Population provisional,
+    waiting on Classification, in the lake and in Cube, while Custody Offenses (which doesn't need Classification)
+    stays as it was; reporting the month closed makes it final again. The test's own reports are deleted after."""
+    latest = max(m for _, m in readiness())
+    before = readiness()
+    previous = latest.replace(day=1) - dt.timedelta(days=1)
+    try:
+        assert closes("report", "classification", str(previous), "--by", TESTER).returncode == 0
+        reopened = readiness()
+        assert reopened[("custody-population", latest)]["period_status"] == "provisional"
+        assert "Classification" in reopened[("custody-population", latest)]["waiting_on"]
+        assert reopened[("custody-offenses", latest)] == before[("custody-offenses", latest)]
+        deadline = time.time() + 90   # Cube re-reads the view once its cache refreshes
+        while cube_sql(f"SELECT period_status FROM custody_population WHERE month_end = CAST('{latest}' AS DATE) "
+                       "GROUP BY 1") != [("provisional",)]:
+            assert time.time() < deadline, "Cube never showed the reopened month as provisional"
+            time.sleep(5)
+        assert closes("report", "classification", str(latest), "--by", TESTER).returncode == 0
+        closed = readiness()[("custody-population", latest)]
+        assert closed["inputs_closed"] == reopened[("custody-population", latest)]["inputs_closed"] + 1
+    finally:
+        con = lake.lake_connect()
+        con.execute("DELETE FROM lake.ops.input_closes WHERE reported_by = ?", [TESTER])
+        con.close()
+    assert readiness() == before
+
+
+def test_cube_carries_the_status_without_changing_the_numbers():
+    """period_status rides along in both product views without fanning out the counts (81,409 people on
+    2026-09-30), and the period_readiness view lists every product's months."""
+    sept = "month_end = CAST('2026-09-30' AS DATE)"
+    pop = cube_sql(f"SELECT MEASURE(people_in_custody), period_status FROM custody_population WHERE {sept} GROUP BY 2")
+    assert [p for p, _ in pop] == [81_409]
+    off = cube_sql(f"SELECT MEASURE(people_in_custody), period_status FROM custody_offenses WHERE {sept} GROUP BY 2")
+    assert [p for p, _ in off] == [81_409]
+    rows = cube_sql("SELECT product, period_status FROM period_readiness WHERE month_end = CAST('2026-09-30' AS DATE)")
+    assert {p for p, _ in rows} == set(PRODUCTS)
+
+
+def test_the_mcp_answer_says_whether_the_month_is_final():
+    """query_metric on a product view returns the product's readiness: its latest month-end, final or provisional
+    and what it waits on, plus any month still provisional."""
+    is_error, result, text = call("query_metric", metric="people_in_custody", group_by=["custody_level"])
+    assert not is_error, text
+    r = result["readiness"]
+    assert r["product"] == "custody-population"
+    assert r["latest"]["month_end"] == str(max(m for _, m in readiness()))
+    assert r["latest"]["status"] in ("final", "provisional")
+    assert all(p["status"] == "provisional" and p["waiting_on"] for p in r["provisional"])
+
+
+def test_a_metric_outside_any_product_has_no_readiness():
+    """record_count isn't part of a product, so its answer carries no readiness block."""
+    is_error, result, text = call("query_metric", metric="record_count")
+    assert not is_error and result.get("readiness") is None, text
+
+
+# --- the ontology, the daily run and the alert -----------------------------------------------------------------
+
+def test_the_ontology_knows_who_each_product_waits_on():
+    """Fuseki: each product lh:dependsOn its inputs, each an lh:BusinessInput with its unit and deadline."""
+    rows = select("""PREFIX dcat: <http://www.w3.org/ns/dcat#> PREFIX dct: <http://purl.org/dc/terms/>
+        SELECT ?product ?input ?unit WHERE { ?p a dcat:Dataset ; dct:title ?product ; lh:dependsOn ?i .
+        ?i a lh:BusinessInput ; dct:title ?input ; lh:unit ?unit ; lh:closesWithinDays ?days }""")
+    want = {(p["title"], INPUTS[i]["title"], INPUTS[i]["unit"]) for p in PRODUCTS.values() for i in p["depends_on"]}
+    assert {(r["product"], r["input"], r["unit"]) for r in rows} == want
+    assert not ask("PREFIX dcat: <http://www.w3.org/ns/dcat#> ASK { ?p a dcat:Dataset FILTER NOT EXISTS { ?p lh:dependsOn ?i } }")
+
+
+def test_the_daily_run_reports_each_input_and_product():
+    """The daily run pushes each input's days late (0 today) and whether each product's latest month is final;
+    BusinessInputLate loads."""
+    def query(q):
+        """An instant PromQL query as {label value: value}."""
+        r = requests.get(f"{PROMETHEUS}/api/v1/query", params={"query": q}, timeout=30).json()["data"]["result"]
+        return r
+    late = {x["metric"]["input"]: float(x["value"][1]) for x in query("lakehouse_input_days_late")}
+    assert late == {name: 0.0 for name in INPUTS}
+    final = {x["metric"]["product"] for x in query("lakehouse_product_latest_period_final")}
+    assert final == set(PRODUCTS)
+    groups = requests.get(f"{PROMETHEUS}/api/v1/rules", timeout=30).json()["data"]["groups"]
+    rule = next(r for g in groups for r in g["rules"] if r["name"] == "BusinessInputLate")
+    assert rule["health"] == "ok" and "lakehouse_input_days_late" in rule["query"]
+
 
 # --- the date rules, on fixed dates ----------------------------------------------------------------------------
 

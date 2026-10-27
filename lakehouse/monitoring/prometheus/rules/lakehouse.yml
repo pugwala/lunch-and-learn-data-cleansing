@@ -127,6 +127,14 @@ groups:
         labels: {severity: warning}
         annotations:
           summary: "Over 10% of records can't be placed in time for {{ $labels.product }} (about 6% is normal)"
+      - alert: BusinessInputLate
+        # A business unit hasn't closed a month by its own deadline (closes_within_days in lakehouse/products/inputs/),
+        # so every product that depends on that input stays provisional for the month. A business process is late,
+        # not the pipeline: readiness/closes.py status names who and since when.
+        expr: lakehouse_input_days_late > 0
+        labels: {severity: warning}
+        annotations:
+          summary: "{{ $labels.unit }} is {{ $value }} day(s) late closing the month for {{ $labels.input }}; products that need it stay provisional"
 
   - name: meta
     rules:

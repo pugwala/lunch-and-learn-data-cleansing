@@ -16,6 +16,12 @@ cubes:
       - name: offenses
         relationship: many_to_one
         sql: "{CUBE}.offense_code = {offenses}.offense_code"
+      - name: population_readiness
+        relationship: many_to_one
+        sql: "{CUBE}.month_end = {population_readiness}.month_end"
+      - name: offenses_readiness
+        relationship: many_to_one
+        sql: "{CUBE}.month_end = {offenses_readiness}.month_end"
 
     dimensions:
       - name: snapshot_key
@@ -63,33 +69,91 @@ cubes:
           - sql: "{CUBE}.sid_number IS NULL"
         description: Open records that belong to no known person.
 
+  # Readiness (mart_readiness.period_readiness, a view): is a product's number for a month-end final, or still
+  # waiting on a business unit? One cube per product, one row per month-end, joined to the snapshot by month-end,
+  # so it rides along without changing any count. A short refresh key, because a unit's close changes it at once.
+  - name: all_readiness
+    sql_table: lake.mart_readiness.period_readiness
+    public: false
+    refresh_key: {every: 10 second}
+    description: Every data product's months, final or provisional (lakehouse/readiness).
+    dimensions: &readiness_dimensions
+      - name: period_key
+        sql: "{CUBE}.product || '-' || CAST({CUBE}.month_end AS VARCHAR)"
+        type: string
+        primary_key: true
+      - name: product
+        sql: product
+        type: string
+      - name: month_end
+        sql: month_end
+        type: time
+      - name: period_status
+        sql: period_status
+        type: string
+        description: final once every business input the product depends on has closed the month, else provisional.
+      - name: waiting_on
+        sql: waiting_on
+        type: string
+        description: The business units whose inputs are still open for the month (empty when final).
+      - name: inputs_required
+        sql: inputs_required
+        type: number
+      - name: inputs_closed
+        sql: inputs_closed
+        type: number
+    measures:
+      - name: periods
+        type: count
+
+  - name: population_readiness
+    sql: "SELECT * FROM lake.mart_readiness.period_readiness WHERE product = 'custody-population'"
+    public: false
+    refresh_key: {every: 10 second}
+    dimensions: *readiness_dimensions
+
+  - name: offenses_readiness
+    sql: "SELECT * FROM lake.mart_readiness.period_readiness WHERE product = 'custody-offenses'"
+    public: false
+    refresh_key: {every: 10 second}
+    dimensions: *readiness_dimensions
+
 views:
   - name: custody_population
     description: >
       Custody population: who is held at each month-end, by unit, custody level and threat level. Count people
       with people_in_custody (distinct SIDs, never summed); records_in_custody counts open records.
+      period_status says whether a month-end's numbers are final yet, waiting_on who they still wait for.
+    meta: {product: custody-population}
     cubes:
       - join_path: custody_snapshot
         includes: [month_end, is_latest_month_end, unit_code, custody_level, threat_level, records_in_custody,
                    people_in_custody, records_without_sid]
       - join_path: custody_snapshot.units
         includes: [unit_name]
+      - join_path: custody_snapshot.population_readiness
+        includes: [period_status, waiting_on]
 
   - name: custody_offenses
     description: >
       Custody offenses: what the custody population is held for at each month-end, by offense code, category
-      and violence code. New sentences per month are in custody_admissions.
+      and violence code. New sentences per month are in custody_admissions. period_status says whether a
+      month-end's numbers are final yet, waiting_on who they still wait for.
+    meta: {product: custody-offenses}
     cubes:
       - join_path: custody_snapshot
         includes: [month_end, is_latest_month_end, offense_code, offense_against, violence_code, records_in_custody,
                    people_in_custody]
       - join_path: custody_snapshot.offenses
         includes: [offense_description, crime_against]
+      - join_path: custody_snapshot.offenses_readiness
+        includes: [period_status, waiting_on]
 
   - name: custody_admissions
     description: >
       Custody admissions: new sentences by sentence date and offense. admissions counts records sentenced;
       people_admitted counts distinct people (SIDs).
+    meta: {product: custody-offenses}
     cubes:
       - join_path: offender_records
         includes:
@@ -103,3 +167,11 @@ views:
             alias: people_admitted
       - join_path: offender_records.offenses
         includes: [offense_description]
+
+  - name: period_readiness
+    description: >
+      Every data product's month-ends, final or provisional: a month is final once every business input the product
+      depends on has closed it (lakehouse/products/inputs/, depends_on:), and waiting_on names who is still open.
+    cubes:
+      - join_path: all_readiness
+        includes: [product, month_end, period_status, waiting_on, inputs_required, inputs_closed, periods]

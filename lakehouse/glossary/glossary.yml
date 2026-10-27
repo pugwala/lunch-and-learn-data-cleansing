@@ -191,3 +191,15 @@ rules:
     about: [Offender Record]
     enforced_by:
       - prometheus:DataProductCoverageLow
+
+  - name: A month's numbers are final only once every input has closed it
+    statement: >
+      A data product's number for a month is provisional until every business input it depends on (depends_on:,
+      declared in products/inputs/) has been reported complete through that month-end; until then it says who it
+      is waiting on, and a unit past its own deadline raises an alert.
+    about: [Offender Record]
+    enforced_by:
+      - shacl:ProductInputsShape
+      - shacl:InputShape
+      - prometheus:BusinessInputLate
+      - test:test_readiness.py::test_readiness_follows_the_watermarks

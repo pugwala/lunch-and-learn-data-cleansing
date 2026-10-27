@@ -106,7 +106,7 @@ def test_sql_lab_counts_every_record_through_cube(api):
 
 # --- the Custody dashboard (data products) ---------------------------------------------------------------------
 
-CUSTODY_VIEWS = {"custody_population", "custody_offenses", "custody_admissions"}
+CUSTODY_VIEWS = {"custody_population", "custody_offenses", "custody_admissions", "period_readiness"}
 
 
 def latest_month_end():
@@ -143,11 +143,12 @@ def month_value(rows, month, column, value):
 
 
 def test_custody_dashboard_reads_only_the_product_views(api):
-    """Its four charts all sit on custody product views: the governed path, nothing straight from the lake."""
+    """Its five charts all sit on custody product views (and the readiness view): the governed path, nothing
+    straight from the lake."""
     q = "(filters:!((col:dashboard_title,opr:eq,value:'Custody')))"
     dash = api.get(f"{SUPERSET}/api/v1/dashboard/", params={"q": q}, timeout=30).json()["result"][0]
     charts = api.get(f"{SUPERSET}/api/v1/dashboard/{dash['id']}/charts", timeout=30).json()["result"]
-    assert len(charts) == 4
+    assert len(charts) == 5
     for c in charts:
         chart = api.get(f"{SUPERSET}/api/v1/chart/{c['id']}", timeout=30).json()["result"]
         ds_id = json.loads(chart["params"])["datasource"].split("__")[0]   # params name the dataset: "<id>__table"
@@ -175,3 +176,25 @@ def test_custody_charts_match_cube(api):
         cur.execute("SELECT offense_against, MEASURE(people_in_custody) FROM custody_offenses "
                     f"WHERE month_end = CAST('{latest}' AS DATE) GROUP BY 1")
         assert by_cat == dict(cur.fetchall())
+
+
+def month_of(value):
+    """YYYY-MM of a date as Superset returns it (epoch milliseconds, or ISO text)."""
+    import datetime as dt
+    when = (dt.datetime.fromtimestamp(value / 1000, dt.timezone.utc) if isinstance(value, (int, float))
+            else dt.datetime.fromisoformat(str(value)))
+    return when.strftime("%Y-%m")
+
+
+def test_custody_dashboard_says_which_months_are_final(api):
+    """"Period status by month-end" lists the latest month-ends for both products, final or provisional and what
+    each waits on, exactly as mart_readiness.period_readiness says."""
+    from lakehouse import lake
+    rows = custody_charts(api)["Period status by month-end"]
+    con = lake.lake_ro_connect()
+    latest = con.execute("SELECT max(month_end) FROM mart_readiness.period_readiness").fetchone()[0]
+    want = set(con.execute("SELECT product, period_status, waiting_on FROM mart_readiness.period_readiness "
+                           "WHERE month_end = ?", [latest]).fetchall())
+    got = {(r["product"], r["period_status"], r["waiting_on"]) for r in rows if month_of(r["month_end"]) == latest.strftime("%Y-%m")}
+    assert got == want
+

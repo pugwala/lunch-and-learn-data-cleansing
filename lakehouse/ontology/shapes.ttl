@@ -8,6 +8,8 @@
 @prefix skos: <http://www.w3.org/2004/02/skos/core#> .
 @prefix dct:  <http://purl.org/dc/terms/> .
 @prefix lh:   <https://lakehouse.invalid/ontology#> .
+@prefix dcat: <http://www.w3.org/ns/dcat#> .
+@prefix xsd:  <http://www.w3.org/2001/XMLSchema#> .
 
 # Every glossary term has a real definition: one name, and a definition of at least 40 characters (the shortest
 # today is 92), so nobody has to guess a column's meaning from a placeholder like "TBD".
@@ -41,6 +43,40 @@ lh:RuleShape-enforcer a sh:PropertyShape ;
     sh:path lh:enforcedBy ;
     sh:minCount 1 ;
     sh:message "A business rule must name what enforces it" .
+
+# Every data product says which business inputs its numbers need (depends_on: in products/<name>.yml), so its
+# readiness can be worked out: a month is final only once each has closed it.
+lh:ProductInputsShape a sh:NodeShape ;
+    sh:targetClass dcat:Dataset ;
+    sh:property lh:ProductInputsShape-inputs .
+
+lh:ProductInputsShape-inputs a sh:PropertyShape ;
+    sh:path lh:dependsOn ;
+    sh:minCount 1 ;
+    sh:class lh:BusinessInput ;
+    sh:message "A data product must name the business inputs it depends on, each declared in products/inputs/" .
+
+# Every business input says who owns it, where it is recorded, and how many days after a month ends it closes.
+lh:InputShape a sh:NodeShape ;
+    sh:targetClass lh:BusinessInput ;
+    sh:property lh:InputShape-unit, lh:InputShape-system, lh:InputShape-deadline .
+
+lh:InputShape-unit a sh:PropertyShape ;
+    sh:path lh:unit ;
+    sh:minCount 1 ; sh:maxCount 1 ;
+    sh:message "A business input needs the one unit that owns it" .
+
+lh:InputShape-system a sh:PropertyShape ;
+    sh:path lh:system ;
+    sh:minCount 1 ;
+    sh:message "A business input needs the system it is recorded in" .
+
+lh:InputShape-deadline a sh:PropertyShape ;
+    sh:path lh:closesWithinDays ;
+    sh:minCount 1 ; sh:maxCount 1 ;
+    sh:datatype xsd:integer ;
+    sh:minInclusive 0 ;
+    sh:message "A business input needs a whole number of days to close a month" .
 
 lh:RuleShape-terms a sh:PropertyShape ;
     sh:path lh:about ;

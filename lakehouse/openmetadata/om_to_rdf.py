@@ -13,10 +13,13 @@ Reads OpenMetadata as the read-only mcp-reader and builds one graph, <https://la
   lh:domain, lh:question, lh:usesTable for each table it delivers, lh:usesTerm for each glossary term it speaks in,
   and dcat:accessService for each Cube view that serves it (a dcat:DataService).
 
-Beside it, two kinds of graph that come from the repo rather than OpenMetadata (acceptance/test_business_rules.py):
+Beside it, graphs that come from the repo rather than OpenMetadata (acceptance/test_business_rules.py and
+test_readiness.py):
 
 - <https://lakehouse.invalid/graph/rulebook>: the rules: section of glossary/glossary.yml, each rule an
   lh:BusinessRule with dct:title, dct:description (its statement), lh:about (its terms) and lh:enforcedBy.
+- <https://lakehouse.invalid/graph/readiness>: each business input in products/inputs/ as an lh:BusinessInput
+  (dct:title, lh:unit, lh:system, lh:closesWithinDays), and each data product lh:dependsOn its depends_on: inputs.
 - <https://lakehouse.invalid/graph/inferred/<name>>: what each deduction rule ontology/rules/<name>.rq (a SPARQL
   CONSTRUCT) derives from the graphs above, run until nothing new appears. Deduced facts stay apart from stated
   ones, and the graph's name says which rule made them. A graph whose rule file is gone is deleted.
@@ -47,6 +50,8 @@ COLUMN = "https://lakehouse.invalid/lake/"
 PRODUCT = Namespace("https://lakehouse.invalid/product/")
 CUBE_VIEW = Namespace("https://lakehouse.invalid/cube/")
 RULEBOOK = "https://lakehouse.invalid/graph/rulebook"
+READINESS = "https://lakehouse.invalid/graph/readiness"
+INPUT = Namespace("https://lakehouse.invalid/input/")
 INFERRED = "https://lakehouse.invalid/graph/inferred/"
 RULE = Namespace("https://lakehouse.invalid/rule/")
 LAKEHOUSE = Path(__file__).resolve().parents[1]
@@ -157,6 +162,27 @@ def rulebook():
     return g
 
 
+def readiness():
+    """The readiness graph: each business input (products/inputs/<name>.yml) as an lh:BusinessInput with its unit,
+    system and days to close a month, and each data product lh:dependsOn the inputs in its depends_on:."""
+    g = Graph()
+    g.bind("lh", LH), g.bind("dct", DCTERMS), g.bind("prod", PRODUCT), g.bind("input", INPUT)
+    for f in sorted((LAKEHOUSE / "products" / "inputs").glob("*.yml")):
+        i = yaml.safe_load(f.read_text())
+        node = INPUT[i["name"]]
+        g.add((node, RDF.type, LH.BusinessInput))
+        g.add((node, DCTERMS.title, Literal(i["title"])))
+        g.add((node, DCTERMS.description, Literal(" ".join(i["description"].split()))))
+        g.add((node, LH.unit, Literal(i["unit"])))
+        g.add((node, LH.system, Literal(i["system"])))
+        g.add((node, LH.closesWithinDays, Literal(int(i["closes_within_days"]))))
+    for f in sorted((LAKEHOUSE / "products").glob("*.yml")):
+        p = yaml.safe_load(f.read_text())
+        for name in p.get("depends_on", []):
+            g.add((PRODUCT[p["name"]], LH.dependsOn, INPUT[name]))
+    return g
+
+
 def deduce(*stated):
     """{graph IRI: what that rule deduced}: every ontology/rules/*.rq run over the stated graphs and each other's
     results until nothing new appears. A fact goes to the first rule that derived it."""
@@ -207,11 +233,11 @@ def label(graph):
 
 def main(argv):
     """Compare (--check) or replace every graph in Fuseki; print one summary line. Exits 1 when --check finds a gap."""
-    stated, book = build(om_session()), rulebook()
-    wanted = {GRAPH: stated, RULEBOOK: book, **deduce(stated, book)}
+    stated, book, ready = build(om_session()), rulebook(), readiness()
+    wanted = {GRAPH: stated, RULEBOOK: book, READINESS: ready, **deduce(stated, book, ready)}
     gaps = {g: gap(want, current(g)) for g, want in wanted.items()}
     gaps = {g: d for g, d in gaps.items() if d} | {g: "rule file deleted" for g in inferred_in_fuseki() - set(wanted)}
-    sizes = f"{len(stated)} + {len(book)} rulebook + {sum(len(wanted[g]) for g in wanted if g.startswith(INFERRED))} deduced triples"
+    sizes = f"{len(stated)} + {len(book)} rulebook + {len(ready)} readiness + {sum(len(wanted[g]) for g in wanted if g.startswith(INFERRED))} deduced triples"
     if not gaps:
         print(f"Fuseki graphs: in step with OpenMetadata and the rules ({sizes})")
         return 0

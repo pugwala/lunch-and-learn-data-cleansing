@@ -37,7 +37,10 @@ CUSTODY_INTRO = """## Custody
 Who is held, and for what, from the **Custody Population** and **Custody Offenses** data products. People are
 distinct SIDs, counted by Cube: a person held under two records is one person, so these counts are never added up
 from smaller ones. Each month-end is a snapshot of the records open that day; records with no sentence or release
-date (about 6%) can't be placed in time and aren't in it. "Latest month-end" is the last complete month."""
+date (about 6%) can't be placed in time and aren't in it. "Latest month-end" is the last complete month.
+
+A month's numbers are **final** only once every business unit that feeds them has closed the month (Records,
+Classification, Courts liaison); until then they are **provisional**. *Period status* says which, and who is late."""
 
 
 def login():
@@ -94,14 +97,20 @@ def context(ds_id, params, query):
             "form_data": params, "result_format": "json", "result_type": "full"}
 
 
-def trust_table(ds_id):
-    """(params, query_context) for a plain table of the scorecard, one row per question in order."""
-    params = {"datasource": f"{ds_id}__table", "viz_type": "table", "query_mode": "raw",
-              "all_columns": TRUST_COLUMNS, "order_by_cols": [json.dumps(["question_id", True])],
-              "row_limit": 100, "server_pagination": False, "include_search": False, "adhoc_filters": []}
-    query = {"columns": TRUST_COLUMNS, "orderby": [["question_id", True]], "row_limit": 100, "filters": [],
-             "extras": {"having": "", "where": ""}, "metrics": [], "post_processing": []}
-    return params, context(ds_id, params, query)
+def raw_table(columns, order_by, ascending, limit):
+    """A builder of (params, query_context) for a plain table of rows, sorted by one column."""
+    def build(ds_id):
+        """The table's spec for one dataset."""
+        params = {"datasource": f"{ds_id}__table", "viz_type": "table", "query_mode": "raw",
+                  "all_columns": columns, "order_by_cols": [json.dumps([order_by, ascending])],
+                  "row_limit": limit, "server_pagination": False, "include_search": False, "adhoc_filters": []}
+        query = {"columns": columns, "orderby": [[order_by, ascending]], "row_limit": limit, "filters": [],
+                 "extras": {"having": "", "where": ""}, "metrics": [], "post_processing": []}
+        return params, context(ds_id, params, query)
+    return build
+
+
+trust_table = raw_table(TRUST_COLUMNS, "question_id", True, 100)   # the scorecard, one row per question in order
 
 
 def measure(name, label):
@@ -157,6 +166,10 @@ DASHBOARDS = [
      "rows": {"scorecard": [TRUST_CHART]}},
     {"title": CUSTODY_DASHBOARD, "slug": CUSTODY_SLUG, "intro": CUSTODY_INTRO,
      "charts": [
+         {"name": "Period status by month-end", "cell": "status", "table": "period_readiness", "viz": "table",
+          "spec": raw_table(["month_end", "product", "period_status", "waiting_on"], "month_end", False, 12),
+          "height": 40,
+          "description": "Whether each product's numbers for a month-end are final yet, and who they still wait on."},
          {"name": "People in custody, by month-end", "cell": "population", "table": "custody_population", "viz": "echarts_timeseries_line",
           "spec": monthly_line("month_end", PEOPLE), "height": 50,
           "description": "Distinct people held at each month-end (Custody Population)."},
@@ -170,7 +183,8 @@ DASHBOARDS = [
          {"name": "New sentences per month", "cell": "admissions", "table": "custody_admissions", "viz": "echarts_timeseries_line",
           "spec": monthly_line("sentence_date", measure("admissions", "New sentences")), "height": 50,
           "description": "Records sentenced each month (Custody Offenses)."}],
-     "rows": {"population": ["People in custody, by month-end"],
+     "rows": {"status": ["Period status by month-end"],
+              "population": ["People in custody, by month-end"],
               "now": ["People in custody by custody level, latest month-end",
                       "People in custody by offense category, latest month-end"],
               "admissions": ["New sentences per month"]}},
