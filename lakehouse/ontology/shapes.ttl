@@ -1,0 +1,48 @@
+# Business rules as SHACL shapes: what must be true of the published graphs. ontology/check_rules.py asks Fuseki to
+# validate them (its /shacl endpoint, against every graph at once) and reports each violation; the daily run pushes
+# the count per shape to Prometheus, and BusinessRuleViolated alerts on any. Each node shape is a rule in the
+# rulebook (glossary.yml, rules:), whose enforced_by names it as shacl:<shape name>. Property shapes are named too
+# (<shape>-<what>), because a violation report names the property shape that failed, and a name, unlike a blank
+# node, lets check_rules.py find the rule it belongs to.
+@prefix sh:   <http://www.w3.org/ns/shacl#> .
+@prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+@prefix dct:  <http://purl.org/dc/terms/> .
+@prefix lh:   <https://lakehouse.invalid/ontology#> .
+
+# Every glossary term has a real definition: one name, and a definition of at least 40 characters (the shortest
+# today is 92), so nobody has to guess a column's meaning from a placeholder like "TBD".
+lh:TermShape a sh:NodeShape ;
+    sh:targetClass skos:Concept ;
+    sh:property lh:TermShape-name, lh:TermShape-definition .
+
+lh:TermShape-name a sh:PropertyShape ;
+    sh:path skos:prefLabel ;
+    sh:minCount 1 ; sh:maxCount 1 ;
+    sh:message "A glossary term needs exactly one name" .
+
+lh:TermShape-definition a sh:PropertyShape ;
+    sh:path skos:definition ;
+    sh:minCount 1 ;
+    sh:minLength 40 ;
+    sh:message "A glossary term needs a real definition (40 characters or more)" .
+
+# Every rule in the rulebook states itself and names what enforces it, and is only about glossary terms.
+lh:RuleShape a sh:NodeShape ;
+    sh:targetClass lh:BusinessRule ;
+    sh:property lh:RuleShape-statement, lh:RuleShape-enforcer, lh:RuleShape-terms .
+
+lh:RuleShape-statement a sh:PropertyShape ;
+    sh:path dct:description ;
+    sh:minCount 1 ;
+    sh:minLength 40 ;
+    sh:message "A business rule needs a statement of what must hold" .
+
+lh:RuleShape-enforcer a sh:PropertyShape ;
+    sh:path lh:enforcedBy ;
+    sh:minCount 1 ;
+    sh:message "A business rule must name what enforces it" .
+
+lh:RuleShape-terms a sh:PropertyShape ;
+    sh:path lh:about ;
+    sh:class skos:Concept ;
+    sh:message "A business rule can only be about glossary terms" .

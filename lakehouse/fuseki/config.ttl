@@ -16,6 +16,7 @@ PREFIX tdb2:   <http://jena.apache.org/2016/tdb#>
     fuseki:endpoint [ fuseki:operation fuseki:query ; fuseki:name "sparql" ] ;
     fuseki:endpoint [ fuseki:operation fuseki:query ; fuseki:name "query" ] ;
     fuseki:endpoint [ fuseki:operation fuseki:gsp-r ; fuseki:name "get" ] ;
+    fuseki:endpoint [ fuseki:operation fuseki:shacl ; fuseki:name "shacl" ] ;   # validate shapes (ontology/shapes.ttl); read-only
     fuseki:endpoint [ fuseki:operation fuseki:update ; fuseki:name "update" ; fuseki:allowedUsers "writer" ] ;
     fuseki:endpoint [ fuseki:operation fuseki:gsp-rw ; fuseki:name "data" ; fuseki:allowedUsers "writer" ] ;
     fuseki:dataset :dataset .

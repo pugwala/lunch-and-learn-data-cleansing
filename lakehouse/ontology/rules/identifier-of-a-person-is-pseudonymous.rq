@@ -1,0 +1,16 @@
+# Business rule: a column that holds a person's identifier is a pseudonymous key. It may sit in tables, for joining
+# and counting people, but is never shown to a consumer (glossary.yml, rules: "A person's identifier is a
+# pseudonymous key"). Today that is every sid_number column, because the glossary says SID Number identifies Person;
+# a new identifier term with the same relation is covered with no change here.
+#
+# om_to_rdf.py runs each file in ontology/rules/ over the published graphs and writes what it constructs to
+# <https://lakehouse.invalid/graph/inferred/<file name>>, apart from what OpenMetadata states.
+PREFIX lh:   <https://lakehouse.invalid/ontology#>
+PREFIX term: <https://lakehouse.invalid/glossary/>
+
+CONSTRUCT { ?column lh:sensitivity lh:Pseudonymous }
+WHERE {
+  ?column a lh:Column ;
+          lh:means ?identifier .
+  ?identifier lh:identifies term:person .
+}

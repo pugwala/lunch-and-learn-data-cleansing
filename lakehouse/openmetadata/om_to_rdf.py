@@ -13,8 +13,16 @@ Reads OpenMetadata as the read-only mcp-reader and builds one graph, <https://la
   lh:domain, lh:question, lh:usesTable for each table it delivers, lh:usesTerm for each glossary term it speaks in,
   and dcat:accessService for each Cube view that serves it (a dcat:DataService).
 
-The graph is replaced in one Graph Store PUT as the writer user, so a re-run never piles up old triples. --check
-compares the graph in Fuseki with what OpenMetadata says now and exits 1 if they differ. IRIs live under
+Beside it, two kinds of graph that come from the repo rather than OpenMetadata (acceptance/test_business_rules.py):
+
+- <https://lakehouse.invalid/graph/rulebook>: the rules: section of glossary/glossary.yml, each rule an
+  lh:BusinessRule with dct:title, dct:description (its statement), lh:about (its terms) and lh:enforcedBy.
+- <https://lakehouse.invalid/graph/inferred/<name>>: what each deduction rule ontology/rules/<name>.rq (a SPARQL
+  CONSTRUCT) derives from the graphs above, run until nothing new appears. Deduced facts stay apart from stated
+  ones, and the graph's name says which rule made them. A graph whose rule file is gone is deleted.
+
+Each graph is replaced in one Graph Store PUT as the writer user, so a re-run never piles up old triples. --check
+compares every graph in Fuseki with what it should hold now and exits 1 if any differs. IRIs live under
 lakehouse.invalid, a name reserved never to resolve, so nothing here points at a real host.
 """
 import base64
@@ -22,8 +30,10 @@ import html
 import os
 import re
 import sys
+from pathlib import Path
 
 import requests
+import yaml
 from rdflib import Graph, Literal, Namespace, URIRef
 from rdflib.compare import isomorphic, to_isomorphic
 from rdflib.namespace import DCAT, DCTERMS, RDF, SKOS
@@ -36,6 +46,10 @@ TERM = Namespace("https://lakehouse.invalid/glossary/")
 COLUMN = "https://lakehouse.invalid/lake/"
 PRODUCT = Namespace("https://lakehouse.invalid/product/")
 CUBE_VIEW = Namespace("https://lakehouse.invalid/cube/")
+RULEBOOK = "https://lakehouse.invalid/graph/rulebook"
+INFERRED = "https://lakehouse.invalid/graph/inferred/"
+RULE = Namespace("https://lakehouse.invalid/rule/")
+LAKEHOUSE = Path(__file__).resolve().parents[1]
 GLOSSARY = "Lakehouse"
 SERVICE, DATABASE = "lakehouse", "lake"   # OpenMetadata names lake tables lakehouse.lake.<schema>.<table>
 SKOS_RELATIONS = {"broader": SKOS.broader, "narrower": SKOS.narrower, "relatedTo": SKOS.related}
@@ -127,31 +141,93 @@ def build(om):
     return g
 
 
-def current():
-    """The graph as Fuseki holds it now (empty if it was never loaded)."""
-    r = requests.get(f"{FUSEKI}/get", params={"graph": GRAPH}, headers={"Accept": "text/turtle"}, timeout=60)
+def rulebook():
+    """The rulebook graph: each rule in glossary.yml's rules: section as an lh:BusinessRule."""
+    g = Graph()
+    g.bind("lh", LH), g.bind("term", TERM), g.bind("dct", DCTERMS), g.bind("rule", RULE)
+    for r in yaml.safe_load((LAKEHOUSE / "glossary" / "glossary.yml").read_text()).get("rules", []):
+        node = RULE[slug(r["name"])]
+        g.add((node, RDF.type, LH.BusinessRule))
+        g.add((node, DCTERMS.title, Literal(r["name"])))
+        g.add((node, DCTERMS.description, Literal(" ".join(r["statement"].split()))))
+        for term in r.get("about", []):
+            g.add((node, LH.about, TERM[slug(term)]))
+        for ref in r["enforced_by"]:
+            g.add((node, LH.enforcedBy, Literal(ref)))
+    return g
+
+
+def deduce(*stated):
+    """{graph IRI: what that rule deduced}: every ontology/rules/*.rq run over the stated graphs and each other's
+    results until nothing new appears. A fact goes to the first rule that derived it."""
+    rules = {f.stem: f.read_text() for f in sorted((LAKEHOUSE / "ontology" / "rules").glob("*.rq"))}
+    known, out = Graph(), {INFERRED + name: Graph() for name in rules}
+    for g in stated:
+        known += g
+    while True:
+        new = 0
+        for name, query in rules.items():
+            for triple in known.query(query).graph:
+                if triple not in known:
+                    known.add(triple), out[INFERRED + name].add(triple)
+                    new += 1
+        if not new:
+            return out
+
+
+def current(graph=GRAPH):
+    """A graph as Fuseki holds it now (empty if it was never loaded)."""
+    r = requests.get(f"{FUSEKI}/get", params={"graph": graph}, headers={"Accept": "text/turtle"}, timeout=60)
     if r.status_code == 404:
         return Graph()
     r.raise_for_status()
     return Graph().parse(data=r.text, format="turtle")
 
 
-def main(argv):
-    """Compare (--check) or replace the graph in Fuseki; print one summary line. Exits 1 when --check finds a gap."""
-    want, have = build(om_session()), current()
-    if isomorphic(want, have):
-        print(f"Fuseki glossary graph: in step with OpenMetadata ({len(want)} triples)")
-        return 0
-    a, b = to_isomorphic(want), to_isomorphic(have)
-    gap = f"{len(a - b)} to add, {len(b - a)} to remove"
-    if "--check" in argv:
-        print(f"Fuseki glossary graph: behind OpenMetadata ({gap}); run openmetadata/om_to_rdf.py")
-        return 1
-    r = requests.put(f"{FUSEKI}/data", params={"graph": GRAPH}, data=want.serialize(format="turtle").encode(),
-                     headers={"Content-Type": "text/turtle"}, timeout=120,
-                     auth=("writer", os.environ["FUSEKI_WRITER_PASSWORD"]))
+def inferred_in_fuseki():
+    """The IRIs of the inferred graphs Fuseki holds now, so ones whose rule file was deleted can be found."""
+    r = requests.post(f"{FUSEKI}/sparql", timeout=60, headers={"Accept": "application/sparql-results+json"}, data={
+        "query": f'SELECT DISTINCT ?g WHERE {{ GRAPH ?g {{ ?s ?p ?o }} FILTER(STRSTARTS(STR(?g), "{INFERRED}")) }}'})
     r.raise_for_status()
-    print(f"Fuseki glossary graph: loaded {len(want)} triples ({gap})")
+    return {b["g"]["value"] for b in r.json()["results"]["bindings"]}
+
+
+def gap(want, have):
+    """How two graphs differ, in words ("3 to add, 0 to remove"); None when they are the same."""
+    if isomorphic(want, have):
+        return None
+    a, b = to_isomorphic(want), to_isomorphic(have)
+    return f"{len(a - b)} to add, {len(b - a)} to remove"
+
+
+def label(graph):
+    """A graph's short name for messages: openmetadata, rulebook, or inferred/<rule>."""
+    return graph.removeprefix("https://lakehouse.invalid/graph/")
+
+
+def main(argv):
+    """Compare (--check) or replace every graph in Fuseki; print one summary line. Exits 1 when --check finds a gap."""
+    stated, book = build(om_session()), rulebook()
+    wanted = {GRAPH: stated, RULEBOOK: book, **deduce(stated, book)}
+    gaps = {g: gap(want, current(g)) for g, want in wanted.items()}
+    gaps = {g: d for g, d in gaps.items() if d} | {g: "rule file deleted" for g in inferred_in_fuseki() - set(wanted)}
+    sizes = f"{len(stated)} + {len(book)} rulebook + {sum(len(wanted[g]) for g in wanted if g.startswith(INFERRED))} deduced triples"
+    if not gaps:
+        print(f"Fuseki graphs: in step with OpenMetadata and the rules ({sizes})")
+        return 0
+    what = "; ".join(f"{label(g)}: {d}" for g, d in sorted(gaps.items()))
+    if "--check" in argv:
+        print(f"Fuseki graphs: behind ({what}); run openmetadata/om_to_rdf.py")
+        return 1
+    auth = ("writer", os.environ["FUSEKI_WRITER_PASSWORD"])
+    for g in gaps:
+        if g in wanted:
+            r = requests.put(f"{FUSEKI}/data", params={"graph": g}, data=wanted[g].serialize(format="turtle").encode(),
+                             headers={"Content-Type": "text/turtle"}, timeout=120, auth=auth)
+        else:
+            r = requests.delete(f"{FUSEKI}/data", params={"graph": g}, timeout=60, auth=auth)
+        r.raise_for_status()
+    print(f"Fuseki graphs: loaded ({what}); {sizes}")
     return 0
 
 

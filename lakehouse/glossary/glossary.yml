@@ -2,6 +2,10 @@
 # now; Phase 5 loads the same file into OpenMetadata's glossary. Everything here describes the fictional course
 # data. Relation types: identifies, isAbout, partOf, broader (a wider category), relatedTo.
 # columns: names in gold.fct_offender_record and Cube (dimensions); metrics: Cube measures to ask query_metric for.
+# rules: (at the end) the business rules about these terms, each with what enforces it; om_to_rdf.py publishes them
+# to Fuseki as the rulebook. enforced_by entries are kind:name, one of cube:<view.member>, dbt:<test in dbt/tests>,
+# prometheus:<alert>, shacl:<shape in ontology/shapes.ttl>, sparql:<rule in ontology/rules>,
+# test:<file in acceptance>::<function>. acceptance/test_business_rules.py checks each one exists.
 
 terms:
   - name: Offender Record
@@ -143,3 +147,47 @@ terms:
     sensitivity: restricted
     relations:
       - {type: partOf, term: Offender Record}
+
+rules:
+  - name: People are counted by SID
+    statement: >
+      A person is counted once however many records they hold, by distinct SID at query time; people counts are
+      never stored or added up, and records with no SID belong to no known person.
+    about: [Person, SID Number]
+    enforced_by:
+      - cube:custody_population.people_in_custody
+      - dbt:dim_person_counts_every_record
+      - test:test_custody_cube.py::test_people_by_unit_are_distinct_not_summed
+
+  - name: A person's identifier is a pseudonymous key
+    statement: >
+      A column that holds a person's identifier (today, the SID) may sit in tables, for joining and counting
+      people, but is never shown to a consumer: no Cube member exposes it.
+    about: [Person, SID Number]
+    enforced_by:
+      - sparql:identifier-of-a-person-is-pseudonymous
+      - test:test_business_rules.py::test_no_cube_member_exposes_a_pseudonymous_column
+
+  - name: Every glossary term has a real definition
+    statement: >
+      Each term has exactly one name and a definition of at least 40 characters, so nobody has to guess what a
+      column means from a placeholder.
+    about: []
+    enforced_by:
+      - shacl:TermShape
+
+  - name: Data products deliver no restricted or personal column
+    statement: >
+      No table a data product delivers holds a column tagged restricted or personal; such columns may only be
+      among a product's sources, kept out by its Cube views.
+    about: [Offender Record]
+    enforced_by:
+      - test:test_products.py::test_delivered_tables_hold_no_sensitive_column
+
+  - name: The custody snapshot places nearly every record in time
+    statement: >
+      A record with no sentence or release date can't be placed in the custody snapshot; if more than 10% can't,
+      the products' numbers aren't trustworthy (about 6% is normal).
+    about: [Offender Record]
+    enforced_by:
+      - prometheus:DataProductCoverageLow
