@@ -106,6 +106,21 @@ groups:
         annotations:
           summary: "The latest catalog backup failed (docker compose logs catalog-backup)"
 
+  - name: products
+    rules:
+      - alert: DataProductStale
+        # Each product's age against its own promise (max_age_hours in lakehouse/products/<name>.yml).
+        expr: time() - lakehouse_product_refreshed_timestamp_seconds > lakehouse_product_max_age_seconds
+        labels: {severity: critical}
+        annotations:
+          summary: "Data product {{ $labels.product }} is older than it promises"
+      - alert: DataProductCoverageLow
+        # About 6% of records have no sentence or release date today, so the snapshot can't place them.
+        expr: lakehouse_product_records_without_dates / lakehouse_product_records_total > 0.10
+        labels: {severity: warning}
+        annotations:
+          summary: "Over 10% of records can't be placed in time for {{ $labels.product }} (about 6% is normal)"
+
   - name: meta
     rules:
       - alert: Watchdog

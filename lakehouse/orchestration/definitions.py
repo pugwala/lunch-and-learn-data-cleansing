@@ -6,6 +6,7 @@
                            Cube's masks still match OpenMetadata's Restricted tags
     fuseki/glossary     -> om_to_rdf.py: OpenMetadata's glossary and column tags as one RDF graph in Fuseki
     monitoring/data_quality -> gold.dq_scorecard's pass rates, pushed to the Pushgateway for Prometheus
+    monitoring/data_products -> each data product's freshness, coverage and headline numbers, after its mart
     push_run_success/failure -> sensors that push every job's last success, duration and last failure
     monitoring_selftest -> a job that fails on request, to exercise the failure path and its alert
     notebook_smoke      -> runs the 7 course notebooks and lakehouse/08_from_lake.ipynb weekly (an op job, not
@@ -25,6 +26,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import dagster as dg
+import yaml
 from dagster_dbt import DagsterDbtTranslator, DbtCliResource, DbtProject, dbt_assets
 
 REPO = Path(__file__).resolve().parents[2]
@@ -209,6 +211,40 @@ def data_quality(context: dg.AssetExecutionContext):
                                           **{f"pass_rate_{d}": round(p, 2) for d, p in rates}})
 
 
+PRODUCTS_DIR = REPO / "lakehouse" / "products"
+
+
+@dg.asset(key=dg.AssetKey(["monitoring", "data_products"]), group_name="monitoring", kinds={"prometheus", "python"},
+          deps=[k for k in gold.keys if k.path[0] == "mart_custody"],
+          description="Each data product's freshness, coverage and headline numbers, pushed for Prometheus.")
+def data_products(context: dg.AssetExecutionContext):
+    """Push, per product in lakehouse/products/: when it was refreshed (now: this runs right after its mart is
+    rebuilt, so a failed mart leaves it unrefreshed), its max age from the descriptor, the snapshot's coverage
+    when the product delivers it, and the latest month-end headline when it is served by custody_population."""
+    con = lake.lake_ro_connect()
+    total, undated = con.sql("SELECT records_total, records_without_dates FROM mart_custody.snapshot_coverage").fetchone()
+    records, people = con.sql("SELECT count(*), count(DISTINCT sid_number) FROM mart_custody.custody_snapshot_monthly "
+                              "WHERE month_end = (SELECT max(month_end) FROM mart_custody.custody_snapshot_monthly)").fetchone()
+    con.close()
+    now, pushed = time.time(), []
+    for f in sorted(PRODUCTS_DIR.glob("*.yml")):
+        p = yaml.safe_load(f.read_text())
+        samples = [("lakehouse_product_refreshed_timestamp_seconds", "When the data product was last refreshed.", now, {}),
+                   ("lakehouse_product_max_age_seconds", "The oldest the product promises to be (its descriptor).",
+                    p["max_age_hours"] * 3600, {})]
+        if "mart_custody.snapshot_coverage" in p["tables"]:
+            samples += [("lakehouse_product_records_total", "Records the product's snapshot draws on.", total, {}),
+                        ("lakehouse_product_records_without_dates", "Records it can't place in time.", undated, {})]
+        if "custody_population" in p["cube_views"]:
+            samples += [("lakehouse_product_people_in_custody", "People held at the latest month-end.", people, {}),
+                        ("lakehouse_product_records_in_custody", "Records open at the latest month-end.", records, {})]
+        error = push("lakehouse_data_products", samples, {"product": p["name"]})
+        if error:
+            context.log.warning(error)
+        pushed.append(p["name"])
+    return dg.MaterializeResult(metadata={"products": ", ".join(pushed), "people_in_custody": people})
+
+
 def push_run(context, outcome: str):
     """Push a finished run's end time under its job's name, plus how long it took when it succeeded."""
     stats = context.instance.get_run_stats(context.dagster_run.run_id)
@@ -323,7 +359,7 @@ notebook_smoke_schedule = dg.ScheduleDefinition(
     description="Sundays 06:00 Central, an hour after daily_lake, so the notebooks see a fresh lake.")
 
 defs = dg.Definitions(
-    assets=[load_lake, gold, openmetadata_lake, fuseki_glossary, data_quality],
+    assets=[load_lake, gold, openmetadata_lake, fuseki_glossary, data_quality, data_products],
     jobs=[daily_lake, regenerate_lake, notebook_smoke, monitoring_selftest],
     schedules=[daily_schedule, notebook_smoke_schedule],
     sensors=[push_run_success, push_run_failure],

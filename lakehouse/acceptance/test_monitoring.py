@@ -176,12 +176,14 @@ def panels():
 
 
 def test_dashboard_is_provisioned_with_its_three_rows():
-    """Grafana serves "Home Lakehouse" from the repo's JSON, rows Platform, Pipeline and Data quality, as its home."""
+    """Grafana serves "Home Lakehouse" from the repo's JSON, rows Platform, Pipeline, Data quality and Data
+    products, as its home."""
     r = requests.get(f"{GRAFANA}/api/dashboards/uid/home-lakehouse", auth=ADMIN, timeout=30)
     assert r.status_code == 200, r.text
     dash = r.json()["dashboard"]
     assert dash["title"] == "Home Lakehouse"
-    assert [p["title"] for p in dash["panels"] if p["type"] == "row"] == ["Platform", "Pipeline", "Data quality"]
+    assert [p["title"] for p in dash["panels"] if p["type"] == "row"] == ["Platform", "Pipeline", "Data quality",
+                                                                          "Data products"]
     assert r.json()["meta"]["provisioned"] is True
     prefs = requests.get(f"{GRAFANA}/api/org/preferences", auth=ADMIN, timeout=30).json()
     assert prefs.get("homeDashboardUID") == "home-lakehouse", prefs   # the provisioned one, not a second copy

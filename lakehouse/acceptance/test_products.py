@@ -173,3 +173,43 @@ def test_no_product_delivers_a_restricted_column():
     assert not ask(PRODUCT_PREFIXES + "ASK { ?p a dcat:Dataset ; lh:usesTable ?t . "
                    "?c lh:table ?t ; lh:sensitivity lh:Restricted }")
 
+
+# --- product health: freshness, coverage, alerts ---------------------------------------------------------------
+
+PROMETHEUS = os.environ.get("PROMETHEUS_URL", "http://prometheus:9090/prometheus")
+
+
+def prom(promql):
+    """Run an instant PromQL query; returns {product label: value}."""
+    r = requests.get(f"{PROMETHEUS}/api/v1/query", params={"query": promql}, timeout=30)
+    r.raise_for_status()
+    return {x["metric"].get("product"): float(x["value"][1]) for x in r.json()["data"]["result"]}
+
+
+def test_each_product_reports_its_freshness_against_its_own_promise():
+    """The daily run pushes when each product was refreshed and its max age, read from its descriptor."""
+    limits = prom("lakehouse_product_max_age_seconds")
+    assert limits == {stem: p["max_age_hours"] * 3600.0 for stem, p in PRODUCTS.items()}
+    ages = prom("time() - lakehouse_product_refreshed_timestamp_seconds")
+    assert set(ages) == set(PRODUCTS) and all(0 <= age < limits[stem] for stem, age in ages.items()), ages
+
+
+def test_each_product_reports_its_coverage():
+    """Records the snapshot can't place in time are reported, per product: 5,860 of 100,000 today."""
+    assert prom("lakehouse_product_records_without_dates") == {stem: 5_860.0 for stem in PRODUCTS}
+    assert prom("lakehouse_product_records_total") == {stem: 100_000.0 for stem in PRODUCTS}
+
+
+def test_population_headline_matches_cube():
+    """The pushed headline for the latest month-end is Cube's: 81,409 people in 84,106 open records."""
+    assert prom('lakehouse_product_people_in_custody{product="custody-population"}') == {"custody-population": 81_409.0}
+    assert prom('lakehouse_product_records_in_custody{product="custody-population"}') == {"custody-population": 84_106.0}
+
+
+def test_product_alert_rules_load():
+    """DataProductStale compares each product's age with its own limit; DataProductCoverageLow guards the gap."""
+    groups = requests.get(f"{PROMETHEUS}/api/v1/rules", timeout=30).json()["data"]["groups"]
+    rules = {r["name"]: r for g in groups for r in g["rules"]}
+    for name in ("DataProductStale", "DataProductCoverageLow"):
+        assert name in rules and rules[name]["health"] == "ok", name
+    assert "lakehouse_product_max_age_seconds" in rules["DataProductStale"]["query"]
