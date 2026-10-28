@@ -580,11 +580,13 @@ set_env()       { sed -i "/^$1=/d" "$ENV"; [ $# = 1 ] || echo "$1=$2" >> "$ENV";
   not_called "restart dagster-webserver"
 }
 
-@test "makes Prometheus and Alertmanager reread their config on every run" {
+@test "makes Prometheus and Alertmanager reread their config on every run, from inside, so they still restart at boot" {
   run_bootstrap
   [ "$status" -eq 0 ]
   called "exec -T prometheus sh /etc/prometheus/fill-targets.sh"
-  called "kill -s SIGHUP prometheus alertmanager"
+  called "exec -T prometheus kill -HUP 1"
+  called "exec -T alertmanager kill -HUP 1"
+  not_called "compose --profile core kill"   # docker kill, even a SIGHUP, marks a container stopped: no restart at boot
 }
 
 @test "makes Home Lakehouse Grafana's home page, and only checks with --check" {

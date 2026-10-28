@@ -233,9 +233,10 @@ if [ $CHECK = 0 ]; then
   did "running: ${SERVICES[*]}"
   dc exec -T caddy caddy reload --config /etc/caddy/Caddyfile >/dev/null 2>&1 && did "caddy reloaded its Caddyfile" || warn "caddy reload failed"
   # Prometheus and Alertmanager read their config only at start. Refill the probe targets, then SIGHUP makes both
-  # reread it without restarting, so the metrics have no gap.
+  # reread it without restarting, so the metrics have no gap. The signal is sent from inside each container: a
+  # `docker kill`, even of a SIGHUP, marks the container as stopped by hand, and Docker then skips it at boot.
   dc exec -T prometheus sh /etc/prometheus/fill-targets.sh >/dev/null 2>&1 \
-    && dc kill -s SIGHUP prometheus alertmanager >/dev/null 2>&1 \
+    && dc exec -T prometheus kill -HUP 1 >/dev/null 2>&1 && dc exec -T alertmanager kill -HUP 1 >/dev/null 2>&1 \
     && did "Prometheus and Alertmanager reread their config" || warn "Prometheus or Alertmanager didn't reread its config"
   # A recreated catalog-pg leaves Dagster holding dead pooled connections: its API answers 500 until they cycle.
   if grep -q 'catalog-pg.*Recreated' <<< "$pg_up"; then
