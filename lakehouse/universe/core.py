@@ -69,6 +69,11 @@ EXTRACT = {
         WHERE sid_number IS NOT NULL AND stg_group IS NOT NULL AND stg_group <> 'None'
         QUALIFY row_number() OVER (PARTITION BY sid_number, stg_group ORDER BY sentence_date DESC, offender_number DESC) = 1
         ORDER BY sid_number, stg_group""",
+    # Today's offender records that a fight can lead to: those with a SID and a sentence date. Incident i is the
+    # fight behind the i-th of them.
+    "records": """
+        SELECT offender_number, sid_number, sentence_date FROM lake.silver.hero_offenders
+        WHERE sid_number IS NOT NULL AND sentence_date IS NOT NULL ORDER BY offender_number""",
     # The custody units.
     "units": """
         SELECT DISTINCT unit_code, unit_name FROM lake.silver.hero_offenders WHERE unit_code IS NOT NULL ORDER BY unit_code""",
@@ -76,7 +81,7 @@ EXTRACT = {
 
 
 def extract_core(con, out_dir: Path) -> dict:
-    """Write today's people, powers, STG memberships and custody units from the lake to <out_dir>/_core/ as Parquet,
+    """Write today's people, powers, STG memberships, linkable offender records and custody units from the lake to <out_dir>/_core/ as Parquet,
     check their counts against the pinned ones, and return {name: path}."""
     import pyarrow.compute as pc
     import pyarrow.parquet as pq
@@ -91,7 +96,8 @@ def extract_core(con, out_dir: Path) -> dict:
             table = table.filter(pc.not_equal(table["power"], ""))
         paths[name] = folder / f"{name}.parquet"
         pq.write_table(table, paths[name], compression="zstd")
-    expected = {"people": scale.CORE_PEOPLE, "powers": scale.CORE_PERSON_POWERS, "memberships": scale.CORE_TEAM_MEMBERS}
+    expected = {"people": scale.CORE_PEOPLE, "powers": scale.CORE_PERSON_POWERS, "memberships": scale.CORE_TEAM_MEMBERS,
+                "records": scale.CORE_RECORDS}
     for name, want in expected.items():
         got = pq.read_metadata(paths[name]).num_rows
         if got != want:

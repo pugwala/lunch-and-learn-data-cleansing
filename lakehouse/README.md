@@ -38,7 +38,7 @@ every number matches the Facilitator Guide. dbt builds gold, and Dagster runs it
 | `fuseki/` | Apache Jena Fuseki 6.2.0, built from Apache's verified release: `Dockerfile`, `config.ttl` (one dataset; writes need the writer user), `shiro.ini` (no users; admin only inside the container), `start.sh` |
 | `cube/sync_masks.py` | Makes Cube mask exactly the columns OpenMetadata tags `Sensitivity.Restricted` |
 | `glossary/glossary.yml` | The glossary: 15 terms with definitions, synonyms, columns, metrics and typed relations; `om_sync.py` loads it into OpenMetadata |
-| `universe/` | The expanded world's generator (dataset expansion, in progress): one random stream per table chunk, Parquet chunks written in parallel, the S/M/L knob, a fingerprinted manifest, and the check that the course's 100,000 records never change. See [The expanded world](#the-expanded-world-in-progress) |
+| `universe/` | The expanded world's generator (dataset expansion, in progress; people, places and fights so far): one random stream per table chunk, Parquet chunks written in parallel, the S/M/L knob, a fingerprinted manifest, and the check that the course's 100,000 records never change. See [The expanded world](#the-expanded-world-in-progress) |
 | `08_from_lake.ipynb` | Session 8 for the lakehouse: the Trust Test answered in SQL over silver, checked against `gold.trust_test` |
 
 ## Tables
@@ -602,6 +602,22 @@ then builds:
 
 Where the lake doesn't know (2,355 of today's people have no sentence date on any record), the dependent dates are
 null rather than made up. Tests: `pytest lakehouse/tests/test_universe_people.py` (12, against the lake).
+
+**Chunk 4, fights (`universe/fights.py`).** The same build command now goes on to the fights (about 8 s for the
+whole world at M):
+
+| Table | Rows at M | What a row is |
+| --- | --- | --- |
+| `incident` | 1,200,000 | A fight: when it started, how long it lasted, where (an ordinary site), what kind, how it ended (`captured`, `partial`, `escaped`), and bystanders hurt or killed who aren't named as participants. Incidents 0 to 94,119 are the fights behind today's offender records that have a SID and a sentence date, in offender-number order: dated within two years before the sentence, with that villain captured. The rest run from 1996 to today, more of them in recent years |
+| `participant` | 6,000,000 | Who fought in a fight, on which side, in what role, and what became of them. Every fight has a villain; nobody appears twice in one fight; a villain or hero is only picked once they held a power, a civilian from age 16 |
+| `power_use` | 4,000,000 | A participant using a power they held on the day of the fight, and how well it worked (0 to 1; stronger tiers work better) |
+| `damage` | 1,800,000 | What was damaged in a fight (more in bigger fights): asset type, cost in whole USD, insured or not, what the insurer paid (null while the claim is open), repair status and date |
+
+Each process first works out the same **fight plan** from its own random stream: every fight's day, size, and
+counts of villains, heroes and civilians, plus its outcome. A fight's participants and damages have consecutive ids,
+so any chunk finds the fight behind its rows without reading the others, and a chunk rebuilt alone has the same
+bytes. Power uses come from one DuckDB join of participants with the powers their person held that day. Tests:
+`pytest lakehouse/tests/test_universe_fights.py` (11, against the lake; 8 mutations all caught).
 
 ## Test status
 

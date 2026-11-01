@@ -7,6 +7,7 @@ heroes, civilians and new villains, so every scale keeps today's people. Catalog
 CORE_PEOPLE = 86_879          # distinct SIDs in the course's 100,000 records
 CORE_PERSON_POWERS = 140_795  # distinct (SID, power) pairs they hold today
 CORE_TEAM_MEMBERS = 9_065     # distinct (SID, STG group) affiliations today
+CORE_RECORDS = 94_120         # offender records with a SID and a sentence date: each gets its own fight
 
 FACTORS = {"S": 0.1, "M": 1.0, "L": 4.0}
 
