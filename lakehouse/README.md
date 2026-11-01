@@ -631,8 +631,10 @@ goes on to these (about 9 s for the whole world at M, about 16.6M rows):
 | `mission_incident` | 200,000 | A fight that happened while a mission ran, shared out in proportion to the fights in each mission's window |
 
 Today's people are only ever convicted through their records (a conviction anywhere else would need a record the
-course doesn't have), so their other charges end acquitted or dismissed. Because about 85% of villains are today's
-people, dismissals lead overall (462k of 900k at M). Charges and dispositions keep one row per linkable record at
+course doesn't have), so their other charges end acquitted or dismissed. So that they don't swamp the courts, each
+random villain slot in a fight goes to a new villain with chance 0.6 (`fights.NEW_VILLAIN_SHARE`; chunk 5b): about
+63% of the charges after the records fall on new people, and at M convictions (391k convicted or pleaded guilty)
+outnumber dismissals (303k). New villains fight often for it, about 135 fights each against 14 for today's. Charges and dispositions keep one row per linkable record at
 every scale. Tests: `pytest lakehouse/tests/test_universe_cases.py` (11, against the lake; 10 mutations all caught).
 
 ## Test status

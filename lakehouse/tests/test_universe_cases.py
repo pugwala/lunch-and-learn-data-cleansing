@@ -126,6 +126,15 @@ def test_todays_people_are_convicted_only_through_their_records(world):
     assert one(con, f"SELECT count(*) FROM charged WHERE NOT is_core AND outcome IN {CONVICTED}") > 0
 
 
+def test_convictions_outnumber_dismissals(world):
+    """New villains fight often enough (fights.NEW_VILLAIN_SHARE) that at least half the charges after today's
+    records are on new people, so convictions (convicted or pleaded guilty) outnumber dismissals (chunk 5b, Ian's
+    option B: today's people, who are only convicted through their records, no longer swamp the courts)."""
+    _, con = world
+    assert one(con, f"SELECT avg((NOT is_core)::INT) FROM charged WHERE charge_id >= {scale.CORE_RECORDS}") >= 0.5
+    assert one(con, f"SELECT count(*) FILTER (outcome IN {CONVICTED}) - count(*) FILTER (outcome = 'dismissed') FROM charged") > 0
+
+
 def test_court_time_only_moves_forward(world):
     """Filed on or after the fight; decided after filing and by today; pending exactly when undecided."""
     _, con = world

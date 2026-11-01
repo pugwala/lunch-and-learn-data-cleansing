@@ -9,7 +9,9 @@ ids, so a chunk finds the fight behind each of its rows with a binary search ove
   incident     incidents 0..94,119 are the fights behind today's offender records (by offender number, those with a
                SID and a sentence date): dated before the sentence, the record's villain captured. The rest fall
                between 1996 and today, more of them in recent years.
-  participant  per fight: villains first (at least one), then heroes, then civilians. A person is picked only once
+  participant  per fight: villains first (at least one), then heroes, then civilians. Each random villain slot goes
+               to a new villain with chance NEW_VILLAIN_SHARE (while enough are about), else to one of today's, so
+               new villains fight far more often each and fewer charges fall on today's people. A person is picked only once
                they could be there on the day: villains and heroes from when they gained their first power,
                civilians from 16. Within a fight, slot j of a side takes position (b + j * stride) mod c of the
                people active that day, with stride a prime bigger than any pool, so nobody is picked twice.
@@ -32,6 +34,7 @@ CORE_RECORDS = scale.CORE_RECORDS
 FIRST_DAY = days(date(1996, 1, 1))
 NEVER = np.iinfo(np.int32).max            # "no first power day" in the pools
 SIDES = ("villain", "hero", "civilian")
+NEW_VILLAIN_SHARE = 0.6   # chance a fight's random villain slot goes to a new villain (chunk 5b, Ian's option B)
 OUTCOMES = np.asarray(["captured", "partial", "escaped"], dtype=object)
 INCIDENT_TYPES = {"street fight": 0.28, "robbery": 0.2, "heist": 0.12, "rampage": 0.1, "standoff": 0.1,
                   "sabotage": 0.08, "abduction": 0.07, "breakout": 0.05}
@@ -68,12 +71,15 @@ def first_power_day(person_dir: str, person_power_dir: str) -> np.ndarray:
 
 @lru_cache(maxsize=None)
 def pools(person_dir: str, person_power_dir: str) -> dict:
-    """{side: (person ids, the day each could first fight)}, sorted by that day, so the people who could be in a
-    fight on day t are the first searchsorted(days, t, "right") of them."""
+    """{pool: (person ids, the day each could first fight)}, sorted by that day, so the people who could be in a
+    fight on day t are the first searchsorted(days, t, "right") of them. Villains come in two pools, today's and
+    new ones, so a fight can take some from each without picking anyone twice."""
     people = read(person_dir)
     role, birth = column(people, "role"), column(people, "birth_date", fill=0).astype(np.int64)
     start = first_power_day(person_dir, person_power_dir)
-    ready = {"villain": (role == "villain") & (start < NEVER),
+    todays = np.arange(len(role)) < scale.CORE_PEOPLE
+    ready = {"core_villain": (role == "villain") & todays & (start < NEVER),
+             "new_villain": (role == "villain") & ~todays & (start < NEVER),
              "hero": np.isin(role, ["hero", "secondary_hero"]) & (start < NEVER),
              "civilian": role == "civilian"}
     out = {}
@@ -130,11 +136,17 @@ def plan(seed: int, scale_name: str, records_path: str, people_path: str, person
     outcome = np.where(nv == 1, np.where(rs.random(n_inc) < 0.55, 0, 2), rs.choice(3, n_inc, p=[0.35, 0.35, 0.3]))
     outcome[:CORE_RECORDS] = np.where(nv[:CORE_RECORDS] == 1, 0, np.where(rs.random(CORE_RECORDS) < 0.5, 0, 1))
 
-    return {"day": day, "weight": weight, "nv": nv, "nh": nh, "nc": nc, "outcome": outcome,
-            "b": rs.integers(0, 2 ** 40, (n_inc, 3)), "s": STRIDES[rs.integers(0, len(STRIDES), (n_inc, 3))],
-            "record_person": record_person,
-            "part_off": np.concatenate([[0], np.cumsum(nv + nh + nc)]),
-            "dmg_off": np.concatenate([[0], np.cumsum(rs.multinomial(n_dmg, weight / weight.sum()))])}
+    out = {"day": day, "weight": weight, "nv": nv, "nh": nh, "nc": nc, "outcome": outcome,
+           "b": rs.integers(0, 2 ** 40, (n_inc, 3)), "s": STRIDES[rs.integers(0, len(STRIDES), (n_inc, 3))],
+           "record_person": record_person,
+           "part_off": np.concatenate([[0], np.cumsum(nv + nh + nc)]),
+           "dmg_off": np.concatenate([[0], np.cumsum(rs.multinomial(n_dmg, weight / weight.sum()))])}
+    # Drawn last, so every draw above (and so every fight's day, size and outcome) stays as it was before chunk 5b:
+    # how many of each fight's random villain slots go to new villains, at most as many as are about that day.
+    records = (np.arange(n_inc) < CORE_RECORDS).astype(np.int64)
+    new_about = np.searchsorted(pools(person_dir, person_power_dir)["new_villain"][1], day, side="right")
+    out["n_new"] = np.minimum(rs.binomial(nv - records, NEW_VILLAIN_SHARE), new_about)
+    return out
 
 
 def owner(offsets: np.ndarray, ids: np.ndarray) -> np.ndarray:
@@ -183,28 +195,39 @@ def participant(stream, start, n, ctx):
     day = p["day"][inc]
     people = pools(ctx["person_dir"], ctx["person_power_dir"])
 
-    def drawn(rows, k):
-        """Person at stride position k for the given rows (of one side)."""
+    def drawn(rows, k, pool, need):
+        """Person at stride position k of a pool, for the given rows (all of one side); need is how many each
+        row's fight takes from that pool."""
         sc = side[rows][0]
-        who, when = people[SIDES[sc]]
+        who, when = people[pool]
         active = np.searchsorted(when, day[rows], side="right")
-        if (active < size[rows]).any():
-            raise ValueError(f"too few {SIDES[sc]}s about on some day for the fights planned")
+        if (active < need).any():
+            raise ValueError(f"too few people in the {pool} pool about on some day for the fights planned")
         return who[(p["b"][inc[rows], sc] + k * p["s"][inc[rows], sc]) % active]
 
     person = np.empty(n, dtype=np.int64)
-    for sc in range(3):
+    for sc, pool in ((1, "hero"), (2, "civilian")):
         rows = np.flatnonzero(side == sc)
         if len(rows):
-            person[rows] = drawn(rows, j[rows])
-    # Today's records: villain 0 is the record's villain. Another villain who drew them takes position 0 instead,
-    # which no other slot uses and which holds someone else.
+            person[rows] = drawn(rows, j[rows], pool, size[rows])
+    # Villains: in a record's fight, slot 0 is the record's villain; the next n_new slots are new villains, the
+    # rest today's (their stride positions start at 1 in a record's fight, keeping position 0 free).
+    rec = (inc < CORE_RECORDS).astype(np.int64)
+    n_new = p["n_new"][inc]
+    from_new = (side == 0) & (j >= rec) & (j < rec + n_new)
+    from_core = (side == 0) & (j >= rec + n_new)
+    for mask, pool, k, need in ((from_new, "new_villain", j - rec, n_new), (from_core, "core_villain", j - n_new, nv - n_new)):
+        rows = np.flatnonzero(mask)
+        if len(rows):
+            person[rows] = drawn(rows, k[rows], pool, need[rows])
+    # Today's records: villain 0 is the record's villain. Another of today's villains who drew them takes position
+    # 0 instead, which no other slot uses and which holds someone else.
     core = (inc < CORE_RECORDS) & (side == 0)
     record = p["record_person"][np.minimum(inc, CORE_RECORDS - 1)]
     person[core & (j == 0)] = record[core & (j == 0)]
     clash = np.flatnonzero(core & (j > 0) & (person == record))
     if len(clash):
-        person[clash] = drawn(clash, 0)
+        person[clash] = drawn(clash, 0, "core_villain", (nv - n_new)[clash])
 
     outcome = p["outcome"][inc]
     caught = np.where(outcome == 0, True, np.where(outcome == 2, False,
