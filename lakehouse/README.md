@@ -38,6 +38,7 @@ every number matches the Facilitator Guide. dbt builds gold, and Dagster runs it
 | `fuseki/` | Apache Jena Fuseki 6.2.0, built from Apache's verified release: `Dockerfile`, `config.ttl` (one dataset; writes need the writer user), `shiro.ini` (no users; admin only inside the container), `start.sh` |
 | `cube/sync_masks.py` | Makes Cube mask exactly the columns OpenMetadata tags `Sensitivity.Restricted` |
 | `glossary/glossary.yml` | The glossary: 15 terms with definitions, synonyms, columns, metrics and typed relations; `om_sync.py` loads it into OpenMetadata |
+| `universe/` | The expanded world's generator (dataset expansion, in progress): one random stream per table chunk, Parquet chunks written in parallel, the S/M/L knob, a fingerprinted manifest, and the check that the course's 100,000 records never change. See [The expanded world](#the-expanded-world-in-progress) |
 | `08_from_lake.ipynb` | Session 8 for the lakehouse: the Trust Test answered in SQL over silver, checked against `gold.trust_test` |
 
 ## Tables
@@ -561,6 +562,30 @@ docker compose --profile core exec -T jupyter python lakehouse/readiness/closes.
 add its name to a product's `depends_on:`; run `scripts/bootstrap.sh` (or wait for 05:00). `test_readiness.py`,
 the SHACL shapes and dbt's tests pick it up on their own.
 
+## The expanded world (in progress)
+
+The course's 100,000 records are a flat list. The expansion builds the world around them, lakehouse-only, about
+16.6M rows at scale M: people (today's 86,879 villains plus heroes, secondary heroes with weak, temporary or borrowed
+powers, and civilians), powers, teams, places, fights with their participants, power uses and damages, charges and
+court outcomes linked back to today's offender records, missions, and free-text incident reports. It comes in
+chunks, each stopping for a go-ahead.
+
+**Chunk 2, the foundation (`universe/`)**, makes no world tables yet; every later table is built on it:
+
+- **The core never changes.** The course generator still makes the 100,000 records, untouched. `core.CORE_SHA256`
+  pins its file's fingerprint, and a test regenerates it to prove nothing moved.
+- **One random stream per table chunk** (`rng.stream(seed, table, chunk)`), separate from the course generator's,
+  so the same seed gives the same bytes, a chunk rebuilds alone, and parallel builds match serial ones. The first
+  draws are pinned, so a numpy upgrade that changed them fails a test instead of quietly changing the world.
+- **Chunked, vectorized Parquet** (`writer.build_table`): a table is written 1M rows per file from whole numpy
+  arrays, across worker processes. A 6M-row stand-in table took 0.8 s on one worker.
+- **The S/M/L knob** (`scale.rows(table, "M")`): the approved row counts at M, a tenth at S, four times at L. Every
+  scale keeps today's people; the catalogs (powers, teams, places) don't grow.
+- **A manifest** (`manifest.json`): seed, scale, core fingerprint and every file's fingerprint; `manifest.verify()`
+  names any file that is missing or changed.
+
+Tests: `pytest lakehouse/tests/test_universe.py` (12, no lake needed).
+
 ## Test status
 
 **Before a push, or in CI:** `bash lakehouse/ci/checks.sh` runs every check that needs no secrets and no running stack,
@@ -618,6 +643,8 @@ only says there's nothing to check. Its first run passed all 14 checks on a GitH
 | Product descriptors, OpenMetadata domain, data products and contracts, DCAT in Fuseki, product freshness and coverage alerts: 14 acceptance tests (`test_products.py`), each seen failing first; a made-up view in a descriptor failed its test, and a 30-hour-old refresh fired `DataProductStale` | On the VM |
 
 ## Next phases
+
+**Dataset expansion:** chunk 2 (the generator foundation) is done; next is chunk 3, people, powers and places.
 
 Phases 0 to 6 are done: OpenMetadata holds the glossary and the sensitivity tags, the tags drive Cube's masks,
 Fuseki serves the same meaning as SPARQL, and Prometheus, Grafana and Alertmanager watch the platform, the pipeline
