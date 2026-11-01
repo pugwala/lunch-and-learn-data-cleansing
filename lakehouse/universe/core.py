@@ -72,7 +72,7 @@ EXTRACT = {
     # Today's offender records that a fight can lead to: those with a SID and a sentence date. Incident i is the
     # fight behind the i-th of them.
     "records": """
-        SELECT offender_number, sid_number, sentence_date FROM lake.silver.hero_offenders
+        SELECT offender_number, sid_number, sentence_date, offense_code_std AS offense_code FROM lake.silver.hero_offenders
         WHERE sid_number IS NOT NULL AND sentence_date IS NOT NULL ORDER BY offender_number""",
     # The custody units.
     "units": """

@@ -1,7 +1,7 @@
 """The S/M/L knob: how many rows each table of the expanded world has, from the approved data model.
 
 Each table has a fixed part, which doesn't change with scale, and a scaled part, the approved count at M times the
-scale's factor. People are fixed at today's 86,879 (every SID in the course data) plus scaled heroes, secondary
+scale's factor. Charges and dispositions are fixed at one per linkable offender record plus scaled ones. People are fixed at today's 86,879 (every SID in the course data) plus scaled heroes, secondary
 heroes, civilians and new villains, so every scale keeps today's people. Catalogs (powers, teams, places) are fixed.
 """
 CORE_PEOPLE = 86_879          # distinct SIDs in the course's 100,000 records
@@ -23,8 +23,8 @@ MODEL = {
     "participant":      (0, 6_000_000),
     "power_use":        (0, 4_000_000),
     "damage":           (0, 1_800_000),
-    "charge":           (0, 900_000),
-    "disposition":      (0, 900_000),
+    "charge":           (CORE_RECORDS, 900_000 - CORE_RECORDS),      # today's records first, at every scale
+    "disposition":      (CORE_RECORDS, 900_000 - CORE_RECORDS),
     "mission":          (0, 150_000),
     "mission_member":   (0, 600_000),
     "mission_incident": (0, 200_000),

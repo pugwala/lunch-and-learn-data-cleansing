@@ -38,7 +38,7 @@ every number matches the Facilitator Guide. dbt builds gold, and Dagster runs it
 | `fuseki/` | Apache Jena Fuseki 6.2.0, built from Apache's verified release: `Dockerfile`, `config.ttl` (one dataset; writes need the writer user), `shiro.ini` (no users; admin only inside the container), `start.sh` |
 | `cube/sync_masks.py` | Makes Cube mask exactly the columns OpenMetadata tags `Sensitivity.Restricted` |
 | `glossary/glossary.yml` | The glossary: 15 terms with definitions, synonyms, columns, metrics and typed relations; `om_sync.py` loads it into OpenMetadata |
-| `universe/` | The expanded world's generator (dataset expansion, in progress; people, places and fights so far): one random stream per table chunk, Parquet chunks written in parallel, the S/M/L knob, a fingerprinted manifest, and the check that the course's 100,000 records never change. See [The expanded world](#the-expanded-world-in-progress) |
+| `universe/` | The expanded world's generator (dataset expansion, in progress; people, places, fights, charges and missions so far): one random stream per table chunk, Parquet chunks written in parallel, the S/M/L knob, a fingerprinted manifest, and the check that the course's 100,000 records never change. See [The expanded world](#the-expanded-world-in-progress) |
 | `08_from_lake.ipynb` | Session 8 for the lakehouse: the Trust Test answered in SQL over silver, checked against `gold.trust_test` |
 
 ## Tables
@@ -618,6 +618,22 @@ counts of villains, heroes and civilians, plus its outcome. A fight's participan
 so any chunk finds the fight behind its rows without reading the others, and a chunk rebuilt alone has the same
 bytes. Power uses come from one DuckDB join of participants with the powers their person held that day. Tests:
 `pytest lakehouse/tests/test_universe_fights.py` (11, against the lake; 8 mutations all caught).
+
+**Chunk 5, charges, court outcomes and missions (`universe/courts.py`, `universe/missions.py`).** The same build
+goes on to these (about 9 s for the whole world at M, about 16.6M rows):
+
+| Table | Rows at M | What a row is |
+| --- | --- | --- |
+| `charge` | 900,000 | A charge on a captured villain: which fight, the NIBRS offense code (`lake.ref.nibrs_offenses`), when filed. Charges 0 to 94,119 are today's offender records with a SID and a sentence date: charge i is on fight i's villain, with the record's offense code (null where the lake couldn't standardize it). The rest are shared out over other captured villains, with codes that fit the fight |
+| `disposition` | 900,000 | How charge i ended: `convicted`, `pleaded guilty`, `acquitted`, `dismissed` or `pending` (decision after today), and when. A record's charge is a conviction on the sentence date carrying its `offender_number`, the link back to the course's data |
+| `mission` | 150,000 | A hero team's operation (possibly against a villain team): codename, kind, place, start, end (null while ongoing), status |
+| `mission_member` | 600,000 | Heroes and secondary heroes on a mission, who held a power on its start day; one lead each, nobody twice |
+| `mission_incident` | 200,000 | A fight that happened while a mission ran, shared out in proportion to the fights in each mission's window |
+
+Today's people are only ever convicted through their records (a conviction anywhere else would need a record the
+course doesn't have), so their other charges end acquitted or dismissed. Because about 85% of villains are today's
+people, dismissals lead overall (462k of 900k at M). Charges and dispositions keep one row per linkable record at
+every scale. Tests: `pytest lakehouse/tests/test_universe_cases.py` (11, against the lake; 10 mutations all caught).
 
 ## Test status
 

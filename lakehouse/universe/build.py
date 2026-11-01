@@ -13,14 +13,17 @@ import time
 from functools import partial
 from pathlib import Path
 
-from . import core, fights, manifest, scale, world, writer
+from . import core, courts, fights, manifest, missions, scale, world, writer
 
 ORDER = ["location", "power", "team", "person", "person_power", "team_member",
-         "incident", "participant", "power_use", "damage"]
+         "incident", "participant", "power_use", "damage",
+         "charge", "disposition", "mission", "mission_member", "mission_incident"]
 FACTORIES = {"location": world.location, "power": world.power, "team": world.team, "person": world.person,
              "person_power": world.person_power, "team_member": world.team_member,
              "incident": fights.incident, "participant": fights.participant, "power_use": fights.power_use,
-             "damage": fights.damage}
+             "damage": fights.damage, "charge": courts.charge, "disposition": courts.disposition,
+             "mission": missions.mission, "mission_member": missions.mission_member,
+             "mission_incident": missions.mission_incident}
 DEFAULT_ROOT = Path("/lake/landing/universe")
 
 
