@@ -586,6 +586,23 @@ chunks, each stopping for a go-ahead.
 
 Tests: `pytest lakehouse/tests/test_universe.py` (12, no lake needed).
 
+**Chunk 3, people, powers and places (`universe/world.py`, `universe/build.py`).** Build a scale with
+`docker compose --profile core exec -T jupyter python -m lakehouse.universe.build --scale M` (default folder
+`/lake/landing/universe/<scale>`; about 1 s at M). It reads today's people from silver (read-only) into `_core/`,
+then builds:
+
+| Table | Rows at M | What a row is |
+| --- | --- | --- |
+| `location` | 20,000 | A city (the course's 55, then every other custody-unit place), one of its 10 districts, or a site; the 106 custody units are sites carrying their `unit_code` |
+| `power` | 400 | A power with its tier and permanence; the 88 held in the course data come first, with the course's tiers |
+| `team` | 300 | The 12 STG groups (as villain teams), 88 more villain teams, 200 hero teams |
+| `person` | 440,000 | Today's 86,879 people (the only ones with a SID, with the lake's names, birth dates and genders), then 13,121 new villains, 30,000 heroes, 50,000 secondary heroes and 260,000 civilians |
+| `person_power` | 263,916 | Who holds which power from when to when: today's 140,795 pairs (held before the first sentence), then 1 per new villain, 1-3 per hero, 1 per secondary hero (a weak power, or a temporary, borrowed or artifact one) |
+| `team_member` | 60,000 | Today's 9,065 STG affiliations with the lake's status, then new villains in villain teams and heroes in hero teams |
+
+Where the lake doesn't know (2,355 of today's people have no sentence date on any record), the dependent dates are
+null rather than made up. Tests: `pytest lakehouse/tests/test_universe_people.py` (12, against the lake).
+
 ## Test status
 
 **Before a push, or in CI:** `bash lakehouse/ci/checks.sh` runs every check that needs no secrets and no running stack,
@@ -644,7 +661,7 @@ only says there's nothing to check. Its first run passed all 14 checks on a GitH
 
 ## Next phases
 
-**Dataset expansion:** chunk 2 (the generator foundation) is done; next is chunk 3, people, powers and places.
+**Dataset expansion:** chunks 2 (the generator foundation) and 3 (people, powers and places) are done; next is chunk 4, fights: participants, power uses and damages.
 
 Phases 0 to 6 are done: OpenMetadata holds the glossary and the sensitivity tags, the tags drive Cube's masks,
 Fuseki serves the same meaning as SPARQL, and Prometheus, Grafana and Alertmanager watch the platform, the pipeline
