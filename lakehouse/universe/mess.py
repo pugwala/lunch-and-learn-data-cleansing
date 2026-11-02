@@ -7,7 +7,8 @@ The clean Parquet tables are the truth. Each one also gets what a source system 
 
 The key is exact. A messy cell that isn't in the key is the clean value written the standard way (canonical():
 ISO dates, YYYY-MM-DD HH:MM:SS times, true/false, plain numbers, blank for null), and every cell in the key differs
-from it. The kinds, the course's own (gen_hero_offenders.py) carried over to the new tables:
+from it. The kinds are modelled on course 1's mess (its generator, gen_hero_offenders.py) and are course 2's own spec
+now, documented here; nothing reads the course's code:
 
   unknown           a token (UNK, N/A, ?) hides a real value: cleans to null, the truth is lost
   null_token        a token (NULL, NONE, blanks) where the truth is null: cleans to null

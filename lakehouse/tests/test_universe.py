@@ -3,13 +3,13 @@
     pytest lakehouse/tests/test_universe.py      # inside the jupyter container; no lake needed
 
 The foundation makes no world tables yet. It promises four things the later chunks build on:
-  - today's 100,000 course records stay byte-for-byte what the course generator makes (the course is untouched);
+  - today's 100,000 records come from course 1's pinned handoff (lakehouse/handoff), checked against its lock, and
+    nothing here runs course 1's generator or reads its live tables;
   - every table chunk comes from its own random stream, so the same seed gives the same bytes, a chunk rebuilt on
     its own matches the full build, and parallel builds match serial ones;
   - the S/M/L knob sizes every table from the approved data model, always keeping today's people;
   - a manifest fingerprints every file, so a changed file is caught.
 """
-import hashlib
 import sys
 from pathlib import Path
 
@@ -19,10 +19,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from lakehouse.handoff import receive  # noqa: E402
 from lakehouse.universe import core, manifest, rng, scale, writer  # noqa: E402
-
-LANDING_CORE = Path("/lake/landing/hero_offender_data_v6_s2026_r100000.csv")
-
 
 def toy(stream, start, n):
     """A small stand-in table for the tests: ids, an integer and a float column, all from the chunk's stream."""
@@ -41,18 +39,72 @@ def digests(entry):
     return {f["name"]: f["sha256"] for f in entry["files"]}
 
 
-# --- the core stays the course's ---------------------------------------------------------------------------------
+# --- the core comes from course 1's pinned handoff, never from course 1 itself ---------------------------------
 
-def test_course_generator_still_makes_the_pinned_core(tmp_path):
-    """Run the course generator as the course does (100,000 rows, seed 2026): its file matches the pinned
-    fingerprint, so nothing in the expansion has changed today's records."""
-    assert core.course_core_sha256(tmp_path) == core.CORE_SHA256
+UNIVERSE = Path(__file__).resolve().parents[1] / "universe"
+# What reaching into course 1 looks like in code: running or importing its generator, or reading its live tables.
+COURSE_1_REACH = ["importlib", '"generator"', "generator/", "gen_hero_offenders import", "lake.silver", "lake.gold",
+                  "lake_connect", "lake_ro_connect", "from lakehouse import lake"]
 
 
-@pytest.mark.skipif(not LANDING_CORE.exists(), reason="no landing file outside the lakehouse VM")
-def test_the_lakes_landing_file_is_the_pinned_core():
-    """The file the lake loads today is the same core."""
-    assert hashlib.sha256(LANDING_CORE.read_bytes()).hexdigest() == core.CORE_SHA256
+def code_lines(path: Path) -> dict:
+    """A module's code, {line number: its tokens}, with docstrings and comments left out: saying where something
+    came from is fine; reaching for it isn't."""
+    import ast
+    import io
+    import tokenize
+    source = path.read_text()
+    docs = [n.body[0].value for n in ast.walk(ast.parse(source))
+            if isinstance(n, (ast.Module, ast.FunctionDef, ast.ClassDef)) and n.body
+            and isinstance(n.body[0], ast.Expr) and isinstance(n.body[0].value, ast.Constant)]
+    skip = {line for d in docs for line in range(d.lineno, d.end_lineno + 1)}
+    out = {}
+    for tok in tokenize.generate_tokens(io.StringIO(source).readline):
+        if tok.type != tokenize.COMMENT and tok.start[0] not in skip:
+            out.setdefault(tok.start[0], []).append(tok.string)
+    return {n: " ".join(parts) for n, parts in out.items()}
+
+
+def test_universe_never_reaches_into_course_1():
+    """No universe module runs or imports course 1's generator or reads its live tables: the core arrives as the
+    pinned handoff (lakehouse/handoff), and the word lists are course 2's own copy (course_words.json)."""
+    found = [f"{path.name}:{n}: {needle}" for path in sorted(UNIVERSE.glob("*.py"))
+             for n, line in code_lines(path).items() for needle in COURSE_1_REACH if needle in line]
+    assert found == []
+
+
+def test_the_word_lists_are_course_2s_own_copy():
+    """course_constants() reads universe/course_words.json: the names, cities, powers, STG groups and alias parts
+    the world draws from, and the course's "today" as a date."""
+    import datetime
+    c = core.course_constants()
+    assert core.WORDS == UNIVERSE / "course_words.json" and core.WORDS.exists()
+    assert {k: len(v) for k, v in c.items() if k != "TODAY"} == {
+        "CITIES": 55, "POWERS": 4, "TIER_ORDER": 4, "STG_GROUPS": 12, "LAST_NAMES": 232, "MALE_FIRST": 116,
+        "FEMALE_FIRST": 82, "ADJ": 75, "NOUN": 115, "PREFIX": 40, "SUFFIX": 32}
+    assert c["TODAY"] == datetime.date(2026, 9, 24)
+
+
+@pytest.mark.skipif(not receive.pinned_dir().exists(), reason="no published handoff outside the lakehouse VM")
+def test_the_core_is_read_from_the_pinned_handoff(tmp_path):
+    """extract_core() checks the pinned handoff against the lock, then writes today's people, powers, memberships,
+    records and units from it."""
+    paths = core.extract_core(tmp_path)
+    assert set(paths) == set(core.EXTRACT) and all(p.exists() for p in paths.values())
+
+
+@pytest.mark.skipif(not receive.pinned_dir().exists(), reason="no published handoff outside the lakehouse VM")
+def test_a_changed_handoff_file_is_refused(tmp_path):
+    """Change one byte of a copy of the handoff: extract_core() refuses to build on it and names the table."""
+    import shutil
+    copy = tmp_path / "handoff"
+    shutil.copytree(receive.pinned_dir(), copy)
+    target = copy / receive.read_lock()["tables"]["silver.hero_offenders"]["file"]
+    data = bytearray(target.read_bytes())
+    data[200] ^= 0xFF
+    target.write_bytes(bytes(data))
+    with pytest.raises(RuntimeError, match="silver.hero_offenders"):
+        core.extract_core(tmp_path / "out", handoff_dir=copy)
 
 
 # --- deterministic, chunked, parallel ----------------------------------------------------------------------------
@@ -120,11 +172,14 @@ def test_scale_grows_with_the_knob_but_always_keeps_todays_people():
 # --- the manifest ------------------------------------------------------------------------------------------------
 
 def test_manifest_round_trip_is_clean(tmp_path):
-    """A freshly written manifest verifies with no problems, and records the seed, scale and core fingerprint."""
+    """A freshly written manifest verifies with no problems, and records the seed, scale and the handoff the core
+    came from (its version and the raw file course 1 made it from)."""
     entry = build(tmp_path, "run")
     manifest.write(tmp_path / "run", seed=2026, scale_name="S", tables={"toy": entry})
     data = manifest.read(tmp_path / "run")
-    assert (data["seed"], data["scale"], data["core_sha256"]) == (2026, "S", core.CORE_SHA256)
+    lock = receive.read_lock()
+    assert (data["seed"], data["scale"]) == (2026, "S")
+    assert data["core"] == {"handoff_version": lock["version"], "source_sha256": lock["source"]["sha256"]}
     assert manifest.verify(tmp_path / "run") == []
 
 

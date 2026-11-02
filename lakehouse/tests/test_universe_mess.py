@@ -45,7 +45,7 @@ def world(tmp_path_factory):
     """A scale-S build of every table with its mess, and the folder it's in."""
     out = tmp_path_factory.mktemp("universe") / "S"
     con = lake.lake_connect(read_only=True)
-    build.build(out, scale_name="S", seed=2026, workers=4, con=con, chunk_rows=CHUNK_ROWS)
+    build.build(out, scale_name="S", seed=2026, workers=4, chunk_rows=CHUNK_ROWS)
     OUT["dir"] = out
     return out
 

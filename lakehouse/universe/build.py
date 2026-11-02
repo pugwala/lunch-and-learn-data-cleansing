@@ -1,6 +1,6 @@
 """Build the expanded world: python -m lakehouse.universe.build --scale M [--seed 2026] [--out DIR] [--workers N]
 
-Extracts today's people from the lake (read-only), builds every table in dependency order with world.py's factories,
+Extracts today's people from course 1's pinned handoff (lakehouse/handoff, checked against its lock), builds every table in dependency order with world.py's factories,
 then (for a whole build) each table's messy CSV copy and answer key (mess.py), and writes the manifest. Fights come after people, and power uses after participants, because each reads
 the tables before it. The default folder is /lake/landing/universe/<scale>. A build replaces the folder's tables;
 manifest.verify() then checks every file.
@@ -40,15 +40,12 @@ def factory(name: str, ctx: dict):
 
 
 def build(out_dir: Path, scale_name: str = "M", seed: int = core.CORE_SEED, workers: int = 1, tables=None,
-          con=None, log=print, chunk_rows: int = writer.CHUNK_ROWS, with_mess: bool = True) -> dict:
-    """Build the tables (all, or the named ones in dependency order) into out_dir and write its manifest. A whole
-    build also makes the mess (unless with_mess is False); the mess needs every table, so a partial build skips it."""
+          handoff_dir: Path = None, log=print, chunk_rows: int = writer.CHUNK_ROWS, with_mess: bool = True) -> dict:
+    """Build the tables (all, or the named ones in dependency order) into out_dir and write its manifest, from the
+    pinned handoff (or handoff_dir). A whole build also makes the mess (unless with_mess is False); the mess needs
+    every table, so a partial build skips it."""
     out_dir = Path(out_dir)
-    if con is None:
-        sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-        from lakehouse import lake
-        con = lake.lake_connect(read_only=True)
-    core.extract_core(con, out_dir)
+    core.extract_core(out_dir, handoff_dir)
     ctx = context(out_dir, scale_name, seed)
     built = {}
     for name in [t for t in ORDER if tables is None or t in tables]:

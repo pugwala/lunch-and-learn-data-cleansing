@@ -34,7 +34,7 @@ def world(tmp_path_factory):
     built table."""
     out = tmp_path_factory.mktemp("universe") / "S"
     con = lake.lake_connect(read_only=True)
-    build.build(out, scale_name="S", seed=2026, workers=4, con=con, chunk_rows=CHUNK_ROWS, with_mess=False)
+    build.build(out, scale_name="S", seed=2026, workers=4, chunk_rows=CHUNK_ROWS, with_mess=False)
     for t in build.ORDER:
         con.execute(f"CREATE OR REPLACE TEMP VIEW u_{t} AS SELECT * FROM read_parquet('{out}/{t}/*.parquet')")
     con.execute("""CREATE OR REPLACE TEMP VIEW charged AS

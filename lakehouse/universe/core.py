@@ -1,92 +1,85 @@
-"""The core: the course's 100,000 records, which the expanded world is built around and must never change.
+"""The core: course 1's cleansed 100,000 records, which the expanded world is built around and must never change.
 
-CORE_SHA256 is the fingerprint of the file the course generator makes with its defaults (100,000 rows, seed 2026),
-the same file the lake loads (/lake/landing/hero_offender_data_v6_s2026_r100000.csv). course_core_sha256() runs
-the course generator itself, unchanged, so a test can prove the core still comes out byte-for-byte the same.
+Course 2 starts where course 1 ends, so nothing here runs course 1's generator or reads its live tables. Course 1
+publishes its cleansed output as pinned files (lakehouse/handoff: the version in course1.lock.json); extract_core()
+checks every file against the lock, then reads today's people, powers, STG memberships, records and units from them.
+
+The word lists the world draws names, cities, powers and groups from (course_words.json) are course 2's own copy,
+taken from course 1's generator on 2026-11-02 (with its "today", 2026-09-24). Course 2 owns them now: they may grow
+apart from the course's on purpose, and a build never looks at the course's lists.
 """
-import hashlib
-import importlib.util
+import datetime
+import json
 from pathlib import Path
 
-CORE_SHA256 = "649dc8398937e22f2fddf3203bb14023d91a3d0789839b41c072465b1cc1fde8"
+from ..handoff import receive
+
 CORE_ROWS, CORE_SEED = 100_000, 2026
-GENERATOR = Path(__file__).resolve().parents[2] / "generator" / "gen_hero_offenders.py"
+WORDS = Path(__file__).with_name("course_words.json")
+sha256 = receive.sha256
 
-
-def sha256(path: Path) -> str:
-    """A file's SHA-256, read in 1 MB blocks."""
-    h = hashlib.sha256()
-    with open(path, "rb") as fh:
-        for block in iter(lambda: fh.read(1 << 20), b""):
-            h.update(block)
-    return h.hexdigest()
-
-
-def course_core_sha256(work_dir: Path) -> str:
-    """Run the course generator (100,000 rows, seed 2026) into work_dir and return the data file's SHA-256."""
-    spec = importlib.util.spec_from_file_location("gen_hero_offenders_for_core_check", GENERATOR)
-    gen = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(gen)
-    work_dir = Path(work_dir)
-    work_dir.mkdir(parents=True, exist_ok=True)
-    out = work_dir / "core.csv"
-    gen.generate(rows=CORE_ROWS, out=str(out), seed=CORE_SEED, answer_key=str(work_dir / "core_answer_key.csv"))
-    return sha256(out)
-
-
-_COURSE = {}
+_WORDS = {}
 
 
 def course_constants() -> dict:
-    """The course generator's word lists (names, cities, powers, STG groups, alias parts), read from its module
-    without running it. Nothing here changes the course."""
-    if not _COURSE:
-        spec = importlib.util.spec_from_file_location("gen_hero_offenders_constants", GENERATOR)
-        gen = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(gen)
-        for name in ("CITIES", "POWERS", "TIER_ORDER", "STG_GROUPS", "LAST_NAMES", "MALE_FIRST", "FEMALE_FIRST",
-                     "ADJ", "NOUN", "PREFIX", "SUFFIX", "TODAY"):
-            _COURSE[name] = getattr(gen, name)
-    return _COURSE
+    """Course 2's word lists (course_words.json): names, cities, powers, STG groups, alias parts, and the course's
+    "today" as a date. Read once per process."""
+    if not _WORDS:
+        data = json.loads(WORDS.read_text())
+        data["TODAY"] = datetime.date.fromisoformat(data["TODAY"])
+        _WORDS.update(data)
+    return _WORDS
+
+
+def handoff_info() -> dict:
+    """What a build records about its core: the pinned handoff version and the raw file course 1 made it from."""
+    lock = receive.read_lock()
+    return {"handoff_version": lock["version"], "source_sha256": lock["source"]["sha256"]}
 
 
 EXTRACT = {
-    # One row per SID: the lake's latest record for that person, plus their first and latest sentence dates.
+    # One row per SID: the person's latest record, plus their first and latest sentence dates over all their records
+    # (the same min and max course 2's gold.dim_person takes).
     "people": """
-        WITH latest AS (SELECT * FROM lake.silver.hero_offenders WHERE sid_number IS NOT NULL
+        WITH latest AS (SELECT * FROM silver.hero_offenders WHERE sid_number IS NOT NULL
                         QUALIFY row_number() OVER (PARTITION BY sid_number
-                                                   ORDER BY sentence_date DESC, offender_number DESC) = 1)
+                                                   ORDER BY sentence_date DESC, offender_number DESC) = 1),
+             sentences AS (SELECT sid_number, min(sentence_date) AS first_sentence_date,
+                                  max(sentence_date) AS latest_sentence_date
+                           FROM silver.hero_offenders WHERE sid_number IS NOT NULL GROUP BY sid_number)
         SELECT l.sid_number, l.last_name_std AS last_name, l.first_name_std AS first_name, l.alias_std AS alias,
                l.date_of_birth AS birth_date, l.gender, l.unit_name, d.first_sentence_date, d.latest_sentence_date
-        FROM latest l JOIN lake.gold.dim_person d USING (sid_number) ORDER BY l.sid_number""",
+        FROM latest l JOIN sentences d USING (sid_number) ORDER BY l.sid_number""",
     # Every power each person holds today.
     "powers": """
         SELECT DISTINCT sid_number, trim(upper(unnest(string_split(superpower, ';')))) AS power
-        FROM lake.silver.hero_offenders WHERE sid_number IS NOT NULL ORDER BY ALL""",
+        FROM silver.hero_offenders WHERE sid_number IS NOT NULL ORDER BY ALL""",
     # Every STG affiliation, with the status on the person's latest record in that group.
     "memberships": """
-        SELECT sid_number, stg_group, stg_status AS status FROM lake.silver.hero_offenders
+        SELECT sid_number, stg_group, stg_status AS status FROM silver.hero_offenders
         WHERE sid_number IS NOT NULL AND stg_group IS NOT NULL AND stg_group <> 'None'
         QUALIFY row_number() OVER (PARTITION BY sid_number, stg_group ORDER BY sentence_date DESC, offender_number DESC) = 1
         ORDER BY sid_number, stg_group""",
     # Today's offender records that a fight can lead to: those with a SID and a sentence date. Incident i is the
     # fight behind the i-th of them.
     "records": """
-        SELECT offender_number, sid_number, sentence_date, offense_code_std AS offense_code FROM lake.silver.hero_offenders
+        SELECT offender_number, sid_number, sentence_date, offense_code_std AS offense_code FROM silver.hero_offenders
         WHERE sid_number IS NOT NULL AND sentence_date IS NOT NULL ORDER BY offender_number""",
     # The custody units.
     "units": """
-        SELECT DISTINCT unit_code, unit_name FROM lake.silver.hero_offenders WHERE unit_code IS NOT NULL ORDER BY unit_code""",
+        SELECT DISTINCT unit_code, unit_name FROM silver.hero_offenders WHERE unit_code IS NOT NULL ORDER BY unit_code""",
 }
 
 
-def extract_core(con, out_dir: Path) -> dict:
-    """Write today's people, powers, STG memberships, linkable offender records and custody units from the lake to <out_dir>/_core/ as Parquet,
-    check their counts against the pinned ones, and return {name: path}."""
+def extract_core(out_dir: Path, handoff_dir: Path = None) -> dict:
+    """Write today's people, powers, STG memberships, linkable offender records and custody units to
+    <out_dir>/_core/ as Parquet, read from course 1's handoff (the pinned one unless handoff_dir is given) after
+    checking it against the lock; check their counts against the pinned ones, and return {name: path}."""
     import pyarrow.compute as pc
     import pyarrow.parquet as pq
 
     from . import scale
+    con = receive.connect(receive.require(handoff_dir), receive.read_lock())
     folder = Path(out_dir) / "_core"
     folder.mkdir(parents=True, exist_ok=True)
     paths = {}
@@ -101,5 +94,5 @@ def extract_core(con, out_dir: Path) -> dict:
     for name, want in expected.items():
         got = pq.read_metadata(paths[name]).num_rows
         if got != want:
-            raise RuntimeError(f"The lake's core changed: {name} has {got:,} rows; the world is built for {want:,}")
+            raise RuntimeError(f"The handoff's core changed: {name} has {got:,} rows; the world is built for {want:,}")
     return paths

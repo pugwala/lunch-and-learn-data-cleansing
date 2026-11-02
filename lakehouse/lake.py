@@ -244,22 +244,34 @@ def domains_reference_dir() -> Path:
     return domains.REFERENCE_DIR
 
 
-def run(regenerate: bool = False) -> dict:
-    """Generate (if needed) and land reference, bronze and silver in one transaction = one snapshot.
-    Comments and the ops.load_runs row follow as two small transactions, so a load is three snapshots."""
+def course1_output(regenerate: bool = False) -> tuple:
+    """Course 1's cleansed output, made by its own code: generate the raw file (if needed), then sessions 2-4.
+    Returns (the generator's file paths, {table: frame}) for the four silver tables. The lake loads these; the
+    handoff (lakehouse/handoff/publish.py) publishes them for course 2."""
     from lnl import cleaning, conversions, dates, pipeline
-    started = time.time()
-    run_id = uuid.uuid4().hex[:12]
     paths = env.generate(force=regenerate)
-
     raw = pipeline.load_raw()
     s2 = cleaning.session2(raw)
     s3 = dates.session3(s2)
     silver = conversions.session4(s3)
-    exc = exceptions_table(s2, s3, silver)
-    trust = trust_test_table(pipeline.load_naive(), silver)
-    silver_frame = to_lake_frame(silver)
-    key = to_lake_frame(pipeline.answer_key())
+    return paths, {
+        "silver.hero_offenders": to_lake_frame(silver),
+        "silver.hero_offenders_exceptions": exceptions_table(s2, s3, silver),
+        "silver.conduct_notes_answer_key": to_lake_frame(pipeline.answer_key()),
+        "silver.trust_test": trust_test_table(pipeline.load_naive(), silver),
+    }
+
+
+def run(regenerate: bool = False) -> dict:
+    """Generate (if needed) and land reference, bronze and silver in one transaction = one snapshot.
+    Comments and the ops.load_runs row follow as two small transactions, so a load is three snapshots."""
+    started = time.time()
+    run_id = uuid.uuid4().hex[:12]
+    paths, frames = course1_output(regenerate)
+    silver_frame = frames["silver.hero_offenders"]
+    exc = frames["silver.hero_offenders_exceptions"]
+    key = frames["silver.conduct_notes_answer_key"]
+    trust = frames["silver.trust_test"]
 
     con = lake_connect()
     con.execute("BEGIN TRANSACTION")

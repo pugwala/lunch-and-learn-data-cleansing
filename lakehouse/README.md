@@ -15,10 +15,11 @@ every number matches the Facilitator Guide. dbt builds gold, and Dagster runs it
 | `.env.example` | Every setting and secret; copy to `.env` |
 | `postgres/init/` | `01-roles.sh`: `ducklake`, `superset`, `dagster` databases and the `lake_rw` / `lake_ro` roles. `02-dagster.sh`, `03-superset.sh` and `04-openmetadata.sh`: the Dagster, Superset and OpenMetadata roles and databases (safe to re-run) |
 | `jupyter/Dockerfile` | `pyspark-notebook` + course requirements + DuckDB 1.5.6, dbt-duckdb, Dagster; extensions pre-installed. One image for every Python process, so DuckDB versions never drift |
-| `lake.py` | Helpers: `lake_connect()`, `lake_ro_connect()`, `run()`, `to_lake_frame()`, `exceptions_table()`, `trust_test_table()` |
+| `lake.py` | Helpers: `lake_connect()`, `lake_ro_connect()`, `run()`, `course1_output()` (course 1's own code, sessions 2-4), `to_lake_frame()`, `exceptions_table()`, `trust_test_table()` |
+| `handoff/` | The handoff from course 1 to course 2: `publish.py` and `parity.py` (course 1's side: publish its cleansed output once the 19 numbers match), `receive.py` and `course1.lock.json` (course 2's side: the pinned version, checked before anything is built on it) |
 | `sql_magic.py` | `%load_ext lakehouse.sql_magic`: jupysql's `%sql` on the lake, read-only as `lake_ro` |
 | `load_lake.py` | Generates the data if needed and lands reference, bronze and silver as one DuckLake snapshot |
-| `tests/test_parity.py` | 19 checks that the lake matches the Facilitator Guide's numbers |
+| `tests/test_parity.py` | 19 checks that the lake matches the Facilitator Guide's numbers (`handoff/parity.py`), plus bronze's row count |
 | `dbt/` | Gold models and tests (dbt-duckdb, attaches DuckLake), and the expanded world's bronze, silver and gold (`models/world`, tag `world`) |
 | `orchestration/` | Dagster definitions and instance config |
 | `scripts/set-dagster-ui-password.sh` | Puts a login in front of the Dagster UI (it has none of its own) |
@@ -605,6 +606,35 @@ docker compose --profile core exec -T jupyter python lakehouse/readiness/closes.
 add its name to a product's `depends_on:`; run `scripts/bootstrap.sh` (or wait for 05:00). `test_readiness.py`,
 the SHACL shapes and dbt's tests pick it up on their own.
 
+## Course 1's handoff
+
+Course 1 is the cleansing course: sessions 1 to 7, ending with "Meaning Over Words". Course 2 is this
+architecture, and it starts from course 1's **cleansed output** (the boundary document, 2026-11-02). The two meet
+through files, never shared code or live tables:
+
+1. **Course 1 publishes** (`python -m lakehouse.handoff.publish --version v1`). It runs its own code (the generator,
+   then sessions 2 to 4) and writes one Parquet file per table: the four silver tables (the cleansed records, every
+   flagged value, the conduct-notes answer key, the Trust Test) and the reference data (seven tables). It checks the
+   19 Facilitator Guide numbers on those files, read the way course 2 will read them. Only when all 19 match does the
+   folder appear, with a manifest of every file's row count and SHA-256; a miss publishes nothing. It takes 6 s.
+2. **Course 2 pins a version** in `handoff/course1.lock.json` (today `v1`, made from the raw file
+   `649dc839...`). The files live in `/lake/landing/handoff/course1/v1/`, landed like any upstream delivery.
+3. **Course 2 checks before it builds.** `receive.require()` compares every file with the lock and refuses a missing
+   or changed one by name; `receive.connect()` reads them as DuckDB views named like the lake's tables.
+
+The expanded world (`universe/`) is the first consumer: it reads its core from the pinned handoff, and its word lists
+(names, cities, powers, groups) are course 2's own copy, `universe/course_words.json`, taken from the generator on
+2026-11-02. Nothing in `universe/` runs course 1's generator or reads its live tables, and a test scans the code to
+keep it that way. The move changed no data: the world built from the handoff is byte-identical to the one built
+from the lake, at scale S (45 files) and scale M (75 files, 16.5M rows).
+
+Still to come: the lake's own silver from the handoff instead of running course 1's pandas pipeline in the daily run,
+with a written contract (Priority 3), and course 1's material as an optional add-on (Priority 4).
+
+Tests: `pytest lakehouse/tests/test_handoff.py` (5: every table and fingerprint, the 19 numbers on the published
+files, a miss publishes nothing, a fresh publish matches the lock byte for byte, the generator still makes the pinned
+source).
+
 ## The expanded world (in progress)
 
 The course's 100,000 records are a flat list. The expansion builds the world around them, lakehouse-only, about
@@ -615,8 +645,8 @@ chunks, each stopping for a go-ahead.
 
 **Chunk 2, the foundation (`universe/`)**, makes no world tables yet; every later table is built on it:
 
-- **The core never changes.** The course generator still makes the 100,000 records, untouched. `core.CORE_SHA256`
-  pins its file's fingerprint, and a test regenerates it to prove nothing moved.
+- **The core never changes.** It is course 1's cleansed output, read from the pinned handoff (see Course 1's
+  handoff); the generator check moved there, to course 1's side.
 - **One random stream per table chunk** (`rng.stream(seed, table, chunk)`), separate from the course generator's,
   so the same seed gives the same bytes, a chunk rebuilds alone, and parallel builds match serial ones. The first
   draws are pinned, so a numpy upgrade that changed them fails a test instead of quietly changing the world.
@@ -624,10 +654,10 @@ chunks, each stopping for a go-ahead.
   arrays, across worker processes. A 6M-row stand-in table took 0.8 s on one worker.
 - **The S/M/L knob** (`scale.rows(table, "M")`): the approved row counts at M, a tenth at S, four times at L. Every
   scale keeps today's people; the catalogs (powers, teams, places) don't grow.
-- **A manifest** (`manifest.json`): seed, scale, core fingerprint and every file's fingerprint; `manifest.verify()`
+- **A manifest** (`manifest.json`): seed, scale, the handoff version and source the core came from, and every file's fingerprint; `manifest.verify()`
   names any file that is missing or changed.
 
-Tests: `pytest lakehouse/tests/test_universe.py` (12, no lake needed).
+Tests: `pytest lakehouse/tests/test_universe.py` (14; the handoff tests need the published handoff, the rest no lake).
 
 **Chunk 3, people, powers and places (`universe/world.py`, `universe/build.py`).** Build a scale with
 `docker compose --profile core exec -T jupyter python -m lakehouse.universe.build --scale M` (default folder
@@ -863,6 +893,7 @@ only says there's nothing to check. Its first run passed all 14 checks on a GitH
 | Custody mart (`mart_custody`, enforced contracts): 7 acceptance tests (`test_custody_marts.py`) and 3 dbt tests, each seen failing first; a deliberate type change was refused by dbt | On the VM |
 | Custody products on Cube (three views; the MCP server picks the view that has the dimension): 10 acceptance tests (`test_custody_cube.py`), each seen failing first | On the VM |
 | Product descriptors, OpenMetadata domain, data products and contracts, DCAT in Fuseki, product freshness and coverage alerts: 17 acceptance tests (`test_products.py`, one per product where a test checks each), each seen failing first; a made-up view in a descriptor failed its test, and a 30-hour-old refresh fired `DataProductStale` | On the VM |
+| Course 1's handoff (`handoff/`: publish, the 19 numbers on the files, the lock, `universe` reading from it): 5 tests in `test_handoff.py` and 4 in `test_universe.py`, seen failing first (the code scan named 14 places `universe` reached into course 1); 6 mutations all caught. The world built from the handoff is byte-identical to the lake-built one at S and M | On the VM |
 | The world's data products (three descriptors, two domains, two inputs, four Cube views, monthly contracts, the Fights, Damage and Courts dashboard, freshness from Dagster materializations): 19 acceptance tests (`test_world_products.py`), all seen failing first; 7 mutations all caught | On the VM |
 
 ## Next phases

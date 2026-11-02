@@ -1,0 +1,70 @@
+{
+  "parity": {
+    "checks": 19,
+    "passed": 19
+  },
+  "source": {
+    "file": "hero_offender_data_v6_s2026_r100000.csv",
+    "rows": 100000,
+    "seed": 2026,
+    "sha256": "649dc8398937e22f2fddf3203bb14023d91a3d0789839b41c072465b1cc1fde8"
+  },
+  "tables": {
+    "ref.nibrs_offenses": {
+      "file": "ref.nibrs_offenses.parquet",
+      "rows": 26,
+      "sha256": "e75e855240548a64630e6d5a9bd1a9fc344fa2e4bfaf166c2a4832d616040107"
+    },
+    "ref.null_tokens": {
+      "file": "ref.null_tokens.parquet",
+      "rows": 5,
+      "sha256": "799bd49014fd7fd17368b6243ea90177f8567b12cfd2e5d81a1f5455357a53f3"
+    },
+    "ref.race_crosswalk": {
+      "file": "ref.race_crosswalk.parquet",
+      "rows": 54,
+      "sha256": "dde05218d6d51dfdfdd64cf19f3e2fa4450b2ae3f706d7f2fb62e34f4ff2b2f3"
+    },
+    "ref.religion_crosswalk": {
+      "file": "ref.religion_crosswalk.parquet",
+      "rows": 67,
+      "sha256": "8aba7b98091d8637eba2ee2a1bff1808d0aec11197b8d93ddcdb66cbd96d8507"
+    },
+    "ref.stg_groups": {
+      "file": "ref.stg_groups.parquet",
+      "rows": 30,
+      "sha256": "f50509971cf966bd82a3da11ab6b773d22ea2253b651d253448462cb164146d8"
+    },
+    "ref.unit_crosswalk": {
+      "file": "ref.unit_crosswalk.parquet",
+      "rows": 354,
+      "sha256": "875d5994a0c1d6ceb5b5059e06c4213fc644c57177660c0a632f2a0cb0b4085b"
+    },
+    "ref.violence_codes": {
+      "file": "ref.violence_codes.parquet",
+      "rows": 18,
+      "sha256": "e471379d7cb0d68dbe8100b17ebe4ddd084717090e816ab9c2109213b17be1d4"
+    },
+    "silver.conduct_notes_answer_key": {
+      "file": "silver.conduct_notes_answer_key.parquet",
+      "rows": 100000,
+      "sha256": "043aeb8c9480c1d3a1246fe83482be9a69a34417a7ca4c839851c41a39e88fdf"
+    },
+    "silver.hero_offenders": {
+      "file": "silver.hero_offenders.parquet",
+      "rows": 100000,
+      "sha256": "acb4a4955b18d0a2c7e7cee95e8611cc1bf1febe580d2f75a758a848492ae19b"
+    },
+    "silver.hero_offenders_exceptions": {
+      "file": "silver.hero_offenders_exceptions.parquet",
+      "rows": 3288,
+      "sha256": "888aa434977397facb87bcc3a0c8ec1b67004cdd3aefc74b4b517296bd5d6a57"
+    },
+    "silver.trust_test": {
+      "file": "silver.trust_test.parquet",
+      "rows": 8,
+      "sha256": "5ceb415965575bed9a7b2e4325304afc0dbc33404233dac686626f23294cfb49"
+    }
+  },
+  "version": "v1"
+}

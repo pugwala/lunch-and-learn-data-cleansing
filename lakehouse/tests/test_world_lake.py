@@ -48,7 +48,7 @@ def world(tmp_path_factory):
     tmp = tmp_path_factory.mktemp("world")
     root = tmp / "universe" / "S"
     src = lake.lake_connect(read_only=True)
-    build.build(root, scale_name="S", seed=2026, workers=4, con=src, chunk_rows=100_000)
+    build.build(root, scale_name="S", seed=2026, workers=4, chunk_rows=100_000)
     nibrs = src.execute("SELECT * FROM ref.nibrs_offenses").arrow().read_all()
     records = src.execute("SELECT offender_number, sid_number, sentence_date FROM silver.hero_offenders").arrow().read_all()
     db = tmp / "world.duckdb"
