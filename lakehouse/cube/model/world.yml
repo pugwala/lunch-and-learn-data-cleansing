@@ -201,6 +201,37 @@ cubes:
         type: count_distinct
         description: Distinct people (person keys) charged; never add these up across months or groups.
 
+  # The world's data quality: one row per value silver flagged (world_silver.exceptions). Counts only: no member
+  # carries a flagged value or a row id, because a flagged value can be a name. The MCP server's data_quality reads it.
+  - name: world_exceptions
+    sql_table: lake.world_silver.exceptions
+    description: Values the expanded world's silver layer flagged, by silver table, column and rule (counts only).
+    dimensions:
+      - name: flag_key
+        sql: "{CUBE}.table_name || ':' || CAST({CUBE}.id AS VARCHAR) || ':' || {CUBE}.column_name || ':' || {CUBE}.rule"
+        type: string
+        primary_key: true
+        public: false
+      - name: table_name
+        sql: table_name
+        type: string
+        description: The world_silver table the flagged value is in.
+      - name: column_name
+        sql: column_name
+        type: string
+      - name: rule
+        sql: rule
+        type: string
+        description: Why it was flagged (missing_token, two_digit_year, orphan, ...).
+    measures:
+      - name: flagged_values
+        type: count
+        description: Values flagged (a row can have several).
+      - name: rows_flagged
+        sql: "{CUBE}.table_name || ':' || CAST({CUBE}.id AS VARCHAR)"
+        type: count_distinct
+        description: Distinct rows with at least one flagged value; never add these up across groups.
+
   # Readiness for each world product: mart_readiness.period_readiness, one row per month-end (see custody.yml).
   - name: field_incidents_readiness
     sql: "SELECT * FROM lake.mart_readiness.period_readiness WHERE product = 'field-incidents'"

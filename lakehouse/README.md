@@ -270,7 +270,7 @@ single-file bind mount keeps showing the old one, which is how a Caddyfile chang
 
 ### MCP: governed metrics, definitions and rules for an AI agent
 
-An MCP server at `https://<LAKE_TS_HOST>/mcp` gives an agent four tools instead of SQL access:
+An MCP server at `https://<LAKE_TS_HOST>/mcp` gives an agent six tools instead of SQL access:
 
 - `list_metrics()`: every metric `query_metric` offers, one entry per Cube view that has it, with its title,
   description, data product, dimensions and aggregation. `countDistinct` marks a count of distinct people, whose
@@ -289,6 +289,19 @@ An MCP server at `https://<LAKE_TS_HOST>/mcp` gives an agent four tools instead 
   finds Incident's). Each rule has its statement, its terms and its enforcers. A SHACL shape says whether it holds
   today (the daily rule check's violations in Prometheus), and so does a Prometheus alert (firing or not). A dbt
   test, an acceptance test, a deduction or a Cube measure says it's checked elsewhere.
+- `data_product_info(product=None)`: every data product, or one by name (any case, hyphens or spaces). It answers
+  "what is this, and can I trust this month's number?" in one call: the domain and question, the tables it
+  delivers, the Cube views and metrics that serve it (to ask `query_metric`), its glossary terms, the business inputs
+  it waits on (unit, system, days to close), the data contracts OpenMetadata holds for its tables (refresh promise,
+  columns) and any table without one, whether its latest month-end is final (and every provisional month, with who
+  it waits on), and its freshness against its promise (refreshed when, hours old, the most it promises; fresh or
+  stale). The custody products add the records their snapshot can't place in time. It reads the catalog from Fuseki
+  (DCAT and readiness graphs), contracts from OpenMetadata, readiness and views from Cube, freshness from Prometheus.
+- `data_quality(area=None, table=None)`: how clean the data is. `course`: each quality dimension's pass rate on the
+  latest load, how many rules check it, and every rule under the 95% floor, worst first (Cube's `dq_scorecard`).
+  `world`: the expanded world's flagged values per silver table and rule, and the rows they touch; `table` narrows
+  it to one (Cube's `world_exceptions`, which holds counts only: a flagged value can be a name, so none is ever
+  returned). Both by default, with the data-quality alerts firing now.
 
 Every request needs `Authorization: Bearer <MCP_TOKEN>` (from `.env`). The container holds no lake credentials and
 no OpenMetadata admin: it reads as `mcp-reader` (role DataConsumer only), and its Cube token has no groups, so
@@ -826,6 +839,7 @@ only says there's nothing to check. Its first run passed all 14 checks on a GitH
 | `%load_ext lakehouse.sql_magic` (jupysql, read-only as `lake_ro`): 6 acceptance tests (`pytest lakehouse/acceptance/test_sql.py`), plus a real notebook kernel run from outside the repo; the password and read-only checks were shown to fail on deliberate breaks | On the VM |
 | Phase 3 notebooks: model staged offline, `08_from_lake.ipynb`, the `notebook_smoke` job: 7 acceptance tests (`pytest lakehouse/acceptance/test_notebooks.py`) and 3 bats tests, each seen failing first; the first smoke run (all 8 notebooks, 110 s) passed with session 5's 22 of 22 reconciliation and session 6's F1 0.898 | On the VM |
 | MCP server (`list_metrics`, `query_metric` with filters and time ranges, `define_term`, `business_rules`): 28 acceptance tests (`pytest lakehouse/acceptance/test_mcp.py`) and 4 bats tests, each seen failing first; the token check and synonym matching were shown to fail on deliberate breaks, and 8 mutations of the filters, time ranges and rulebook were all caught; checked end to end through Caddy (total restitution 1,333,587,950.77) | On the VM |
+| MCP `data_product_info` and `data_quality` (and Cube's counts-only `world_exceptions`): 14 acceptance tests (`pytest lakehouse/acceptance/test_mcp_products.py`), all seen failing first; 8 mutations caught. A ninth (matching a product by title) survived because every title is its name in words, so title matching was removed as untestable | On the VM |
 | OpenMetadata 2.0.5 with OpenSearch 2.19.6 under `/openmetadata`, no default credentials left: 8 acceptance tests (`pytest lakehouse/acceptance/test_openmetadata.py`) and 5 bats tests, each seen failing first; restarting with `--check` kept the same signing keys | On the VM |
 | `om_sync.py` (glossary with typed relations, Sensitivity tags, every lake table) and `define_term` reading OpenMetadata: 9 acceptance tests (`pytest lakehouse/acceptance/test_om_sync.py`); an edit in OpenMetadata reached `define_term`, and `om_sync.py` put it back with the relations intact | On the VM |
 | Tags-to-masks loop (`cube/sync_masks.py`): 4 acceptance tests (`pytest lakehouse/acceptance/test_masks.py`) and 3 bats tests, each seen failing first; live, tagging `gender` Restricted in OpenMetadata masked it in Cube (`***` for all 100,000), and removing the tag restored the real values and a byte-identical model | On the VM |

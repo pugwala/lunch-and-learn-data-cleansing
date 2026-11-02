@@ -14,6 +14,14 @@ Tools
     business_rules(about=None)                        the rulebook from Fuseki (all of it, or the rules about one
                                                       term or synonym): each rule's statement, terms and enforcers,
                                                       and whether a shape or alert holds today (from Prometheus)
+    data_product_info(product=None)                   every data product, or one by name: its domain,
+                                                      question, tables, views and metrics, glossary terms, the
+                                                      business inputs it waits on, its data contracts, which months
+                                                      are final, and how fresh it is against its promise
+    data_quality(area=None, table=None)               the course data's quality scorecard (pass rate per
+                                                      dimension, rules under the floor), the expanded world's
+                                                      flagged values by silver table and rule (counts only), and
+                                                      the data-quality alerts firing now
 
 Served over streamable HTTP at /mcp (stateless, JSON responses) and through Caddy at https://<LAKE_TS_HOST>/mcp.
 Every request needs `Authorization: Bearer <MCP_TOKEN>`. The server holds no lake credentials: list_metrics and
@@ -21,6 +29,8 @@ query_metric go
 through Cube's REST API, so an agent sees only Cube's governed model, never the lake. define_term reads the
 Lakehouse glossary in OpenMetadata (loaded there by om_sync.py) as mcp-reader, a read-only account.
 business_rules reads Fuseki's public SPARQL endpoint and Prometheus, both read-only and without credentials.
+data_product_info combines Fuseki (the catalog's DCAT and readiness graphs), OpenMetadata (contracts, as
+mcp-reader), Cube (views, readiness) and Prometheus (freshness); data_quality reads Cube and Prometheus.
 """
 import base64
 import hmac
@@ -32,7 +42,7 @@ import re
 import urllib.error
 import urllib.parse
 import urllib.request
-from datetime import date
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Any
 
@@ -58,6 +68,11 @@ CHECKED_ELSEWHERE = {"dbt": "a dbt test, run with the lake's dbt builds (lakehou
                      "test": "an acceptance test (lakehouse/acceptance)",
                      "sparql": "a deduction rule Fuseki applies on every load (lakehouse/ontology/rules)",
                      "cube": "a Cube measure that computes it the governed way"}
+PRODUCT_IRI = "https://lakehouse.invalid/product/"
+INPUT_IRI = "https://lakehouse.invalid/input/"
+DQ_FLOOR = 95   # the daily run's quality floor (dbt/tests/dq_score_floor.sql, DataQualityBelowFloor)
+DQ_ALERTS = ["DataQualityBelowFloor", "MoreRulesBelowFloor", "FlaggedShareHigh", "SilverDroppedRows"]
+AREAS = ["course", "world"]
 _om_token = {"value": None}
 
 server = MCPServer(
@@ -66,7 +81,8 @@ server = MCPServer(
                  "data. Ask list_metrics for what can be asked, query_metric for a metric by name (grouped, "
                  "filtered or over a time range; an unknown name lists the real ones), define_term for what a term "
                  "means, and business_rules for the rules about a term and whether they hold today. There is no raw "
-                 "SQL access, by design.")
+                 "SQL access, by design. data_product_info says what a data product promises and whether this "
+                 "month's number is final and fresh; data_quality says how clean the data is.")
 
 
 # ---- Results (typed, so clients get structured content with a schema) -----------------------------------------
@@ -156,6 +172,112 @@ class RuleBook(BaseModel):
     """The rules asked for: all of them, or those about one glossary term."""
     about: str | None
     rules: list[BusinessRule]
+
+
+class BusinessInputInfo(BaseModel):
+    """A business input a data product waits on: who closes it, in which system, and within how many days."""
+    name: str
+    title: str
+    unit: str
+    system: str
+    closes_within_days: int
+
+
+class ContractInfo(BaseModel):
+    """A data contract OpenMetadata holds for one of the product's tables: its refresh promise and its columns."""
+    table: str
+    refresh_every: int
+    refresh_unit: str
+    available_by: str
+    timezone: str
+    max_latency_hours: int
+    columns: int
+
+
+class Freshness(BaseModel):
+    """How fresh a product is against its promise: fresh, stale, or unknown when Prometheus has no figure."""
+    status: str
+    refreshed_at: str | None = None
+    refreshed_epoch: float | None = None
+    age_hours: float | None = None
+    max_age_hours: float | None = None
+
+
+class Coverage(BaseModel):
+    """Records a custody snapshot draws on, and how many of them it can't place in time."""
+    records_total: int
+    records_without_dates: int
+
+
+class ProductInfo(BaseModel):
+    """One data product: what it promises (catalog), what it serves (views, metrics), what it waits on (inputs),
+    what holds its shape (contracts), and whether today's numbers can be trusted (readiness, freshness)."""
+    name: str
+    title: str
+    domain: str
+    question: str
+    description: str
+    tables: list[str]
+    views: list[str]
+    metrics: list[str]
+    terms: list[str]
+    inputs: list[BusinessInputInfo]
+    contracts: list[ContractInfo]
+    uncontracted_tables: list[str]
+    readiness: Readiness | None
+    freshness: Freshness
+    coverage: Coverage | None
+
+
+class DataProducts(BaseModel):
+    """Every data product asked about."""
+    products: list[ProductInfo]
+
+
+class DimensionScore(BaseModel):
+    """One quality dimension of the course data: its pass rate, how many rules check it, how many are under the floor."""
+    dimension: str
+    pass_rate: float
+    rules: int
+    rules_below_floor: int
+
+
+class RuleScore(BaseModel):
+    """One quality rule's score on one column."""
+    dimension: str
+    column: str
+    rule: str
+    score_pct: float
+
+
+class Scorecard(BaseModel):
+    """The course data's quality scorecard (gold.dq_scorecard, through Cube) for the latest load."""
+    built_at: str | None
+    floor: int
+    dimensions: list[DimensionScore]
+    below_floor: list[RuleScore]
+
+
+class TableIssues(BaseModel):
+    """One world_silver table's flagged values, by rule, and the rows they touch (counts only)."""
+    table: str
+    flagged_values: int
+    rows_flagged: int
+    by_rule: dict[str, int]
+
+
+class WorldIssues(BaseModel):
+    """The expanded world's flagged values (world_silver.exceptions, through Cube), most-flagged table first."""
+    flagged_values: int
+    tables: list[TableIssues]
+
+
+class DataQuality(BaseModel):
+    """How clean the data is: the course scorecard, the world's flags, and the data-quality alerts firing now."""
+    course: Scorecard | None = None
+    world: WorldIssues | None = None
+    alerts_firing: list[str]
+    note: str
 
 
 class TermDefinition(BaseModel):
@@ -500,6 +622,181 @@ def business_rules(about: str | None = None) -> RuleBook:
         BusinessRule(name=title, statement=r["statement"], about=sorted(r["about"]),
                      enforced_by=[enforcer(ref) for ref in sorted(r["by"])])
         for title, r in sorted(rules.items()) if wanted is None or wanted in r["about"]])
+
+
+# ---- Data products (Fuseki, OpenMetadata, Cube, Prometheus) -------------------------------------------------
+def product_catalog():
+    """{product name: its catalog entry} from Fuseki: the DCAT dataset (title, description, domain, question,
+    tables, Cube views, glossary terms) and the readiness graph's inputs (title, unit, system, days to close)."""
+    rows = sparql("""PREFIX lh: <https://lakehouse.invalid/ontology#>
+        PREFIX dct: <http://purl.org/dc/terms/>
+        PREFIX dcat: <http://www.w3.org/ns/dcat#>
+        PREFIX skos: <http://www.w3.org/2004/02/skos/core#>
+        SELECT ?p ?title ?description ?domain ?question ?table ?view ?term WHERE {
+          ?p a dcat:Dataset ; dct:title ?title .
+          OPTIONAL { ?p dct:description ?description } OPTIONAL { ?p lh:domain ?domain }
+          OPTIONAL { ?p lh:question ?question } OPTIONAL { ?p lh:usesTable ?table }
+          OPTIONAL { ?p dcat:accessService/dct:title ?view } OPTIONAL { ?p lh:usesTerm/skos:prefLabel ?term } }""")
+    out = {}
+    for r in rows:
+        p = out.setdefault(r["p"].removeprefix(PRODUCT_IRI), {
+            "title": r["title"], "description": r.get("description", ""), "domain": r.get("domain", ""),
+            "question": r.get("question", ""), "tables": set(), "views": set(), "terms": set(), "inputs": {}})
+        for key, var in (("tables", "table"), ("views", "view"), ("terms", "term")):
+            if r.get(var):
+                p[key].add(r[var])
+    for r in sparql("""PREFIX lh: <https://lakehouse.invalid/ontology#>
+        PREFIX dct: <http://purl.org/dc/terms/>
+        SELECT ?p ?i ?title ?unit ?system ?days WHERE {
+          ?p lh:dependsOn ?i . ?i dct:title ?title ; lh:unit ?unit ; lh:system ?system ; lh:closesWithinDays ?days }"""):
+        name = r["p"].removeprefix(PRODUCT_IRI)
+        if name in out:
+            i = r["i"].removeprefix(INPUT_IRI)
+            out[name]["inputs"][i] = BusinessInputInfo(name=i, title=r["title"], unit=r["unit"], system=r["system"],
+                                                       closes_within_days=int(r["days"]))
+    return out
+
+
+def contracts_by_table():
+    """{"schema.table": ContractInfo} for every data contract OpenMetadata holds (its name sits under its table's
+    FQN: lakehouse.lake.<schema>.<table>.dataContract_<name>)."""
+    out = {}
+    for c in om("dataContracts?limit=500&fields=sla").get("data", []):
+        table = c["fullyQualifiedName"].removeprefix("lakehouse.lake.").split(".dataContract_")[0]
+        sla = c.get("sla") or {}
+        every, latency = sla.get("refreshFrequency") or {}, sla.get("maxLatency") or {}
+        out[table] = ContractInfo(table=table, refresh_every=int(every.get("interval", 0)),
+                                  refresh_unit=every.get("unit", ""), available_by=sla.get("availabilityTime", ""),
+                                  timezone=sla.get("timezone", ""), columns=len(c.get("schema") or []),
+                                  max_latency_hours=int(latency.get("value", 0)) * (24 if latency.get("unit") == "day" else 1))
+    return out
+
+
+def by_product(query):
+    """{product: value} of a per-product metric in Prometheus ({} when it can't be reached)."""
+    return {x["metric"].get("product"): float(x["value"][1]) for x in prometheus(query) or []}
+
+
+def central(epoch):
+    """An epoch time as ISO 8601 in Central time (UTC if the zone data is missing)."""
+    try:
+        from zoneinfo import ZoneInfo
+        zone = ZoneInfo("America/Chicago")
+    except Exception:
+        zone = timezone.utc
+    return datetime.fromtimestamp(epoch, zone).isoformat(timespec="seconds")
+
+
+def find_product(product, names):
+    """The product name asked for, in any case, hyphens or spaces alike ("Court Outcomes" is court-outcomes, which
+    is also how every title reads); None if there is no such product."""
+    key = lambda s: " ".join(s.replace("-", " ").casefold().split())   # noqa: E731
+    return next((name for name in names if key(product) == key(name)), None)
+
+
+@server.tool()
+def data_product_info(product: str | None = None) -> DataProducts:
+    """What a data product is and whether its numbers can be trusted today: every product, or one by name (in any
+    case, with hyphens or spaces: "court outcomes" is court-outcomes). Each says its domain and the question it answers, the tables it delivers and the Cube views and
+    metrics that serve it (ask query_metric for those), the glossary terms it speaks in, the business inputs it waits
+    on (which unit closes each month, within how many days), the data contracts OpenMetadata holds for its tables
+    (and which tables have none), whether its latest month-end is final or still provisional (and every provisional
+    month, with who it waits on), and how fresh it is against its promise (refreshed when, how many hours old, and
+    the most it promises). The custody products also say how many records their snapshot can't place in time."""
+    entries = product_catalog()
+    if product is not None:
+        name = find_product(product, entries)
+        if name is None:
+            raise ToolError(f"No data product {product!r}. Products: " +
+                            ", ".join(f"{n} ({p['title']})" for n, p in sorted(entries.items())))
+        entries = {name: entries[name]}
+    contracts = contracts_by_table()
+    meta = cube("meta")["cubes"]
+    refreshed, max_age = by_product("lakehouse_product_refreshed_timestamp_seconds"), \
+        by_product("lakehouse_product_max_age_seconds")
+    totals, undated = by_product("lakehouse_product_records_total"), by_product("lakehouse_product_records_without_dates")
+    now, out = time.time(), []
+    for name, p in sorted(entries.items()):
+        views = sorted(p["views"])
+        metrics = sorted(m["name"] for c in meta if c["name"] in views for m in c.get("measures", [])
+                         if m.get("public", True))
+        if name in refreshed:
+            age, limit = (now - refreshed[name]) / 3600, max_age.get(name, 0) / 3600 or None
+            freshness = Freshness(status="unknown" if limit is None else "fresh" if age <= limit else "stale",
+                                  refreshed_at=central(refreshed[name]), refreshed_epoch=refreshed[name],
+                                  age_hours=round(age, 2), max_age_hours=limit)
+        else:
+            freshness = Freshness(status="unknown")
+        tables = sorted(p["tables"])
+        out.append(ProductInfo(
+            name=name, title=p["title"], domain=p["domain"], question=p["question"], description=p["description"],
+            tables=tables, views=views, metrics=metrics, terms=sorted(p["terms"]),
+            inputs=[p["inputs"][i] for i in sorted(p["inputs"])],
+            contracts=[contracts[t] for t in tables if t in contracts],
+            uncontracted_tables=[t for t in tables if t not in contracts],
+            readiness=readiness(name), freshness=freshness,
+            coverage=Coverage(records_total=int(totals[name]), records_without_dates=int(undated[name]))
+            if name in totals and name in undated else None))
+    return DataProducts(products=out)
+
+
+# ---- Data quality (Cube, Prometheus) -------------------------------------------------------------------------
+def scorecard():
+    """The course data's scorecard through Cube's dq_scorecard: pass rate per dimension, every rule's score."""
+    rates = cube("load", {"query": {"measures": ["dq_scorecard.pass_rate"], "dimensions": ["dq_scorecard.dimension"]}})
+    dims = ["dq_scorecard.dimension", "dq_scorecard.column_name", "dq_scorecard.rule", "dq_scorecard.score_pct",
+            "dq_scorecard.built_at"]
+    rules = cube("load", {"query": {"dimensions": dims, "limit": 5000}}).get("data", [])
+    below = sorted((RuleScore(dimension=r[dims[0]], column=r[dims[1]], rule=r[dims[2]], score_pct=float(r[dims[3]]))
+                    for r in rules if float(r[dims[3]]) < DQ_FLOOR),
+                   key=lambda r: (r.score_pct, r.dimension, r.column, r.rule))
+    dimensions = [DimensionScore(dimension=r["dq_scorecard.dimension"], pass_rate=float(r["dq_scorecard.pass_rate"]),
+                                 rules=sum(1 for x in rules if x[dims[0]] == r["dq_scorecard.dimension"]),
+                                 rules_below_floor=sum(1 for x in below if x.dimension == r["dq_scorecard.dimension"]))
+                  for r in rates.get("data", [])]
+    built = max((str(r[dims[4]]) for r in rules if r.get(dims[4])), default=None)
+    return Scorecard(built_at=built, floor=DQ_FLOOR, dimensions=sorted(dimensions, key=lambda d: d.dimension),
+                     below_floor=below)
+
+
+def world_issues(table=None):
+    """The world's flagged values through Cube's world_exceptions, counts only: per table and rule, and the rows
+    each table has flagged (counted per table, since distinct rows can't be added up). table narrows it to one."""
+    m, d = "world_exceptions.", ["world_exceptions.table_name", "world_exceptions.rule"]
+    per_table = cube("load", {"query": {"measures": [m + "flagged_values", m + "rows_flagged"], "dimensions": d[:1],
+                                        "limit": 5000}}).get("data", [])
+    known = sorted(r[d[0]] for r in per_table)
+    if table is not None and table not in known:
+        raise ToolError(f"No world_silver table {table!r} has flags. Tables: {', '.join(known)}")
+    per_rule = cube("load", {"query": {"measures": [m + "flagged_values"], "dimensions": d, "limit": 5000}}).get("data", [])
+    tables = [TableIssues(table=r[d[0]], flagged_values=int(r[m + "flagged_values"]),
+                          rows_flagged=int(r[m + "rows_flagged"]),
+                          by_rule={x[d[1]]: int(x[m + "flagged_values"]) for x in per_rule if x[d[0]] == r[d[0]]})
+              for r in per_table if table is None or r[d[0]] == table]
+    tables.sort(key=lambda t: (-t.flagged_values, t.table))
+    return WorldIssues(flagged_values=sum(t.flagged_values for t in tables), tables=tables)
+
+
+@server.tool()
+def data_quality(area: str | None = None, table: str | None = None) -> DataQuality:
+    """How clean the lakehouse's data is. area "course" is the course's 100,000 offender records: the pass rate of
+    each quality dimension (completeness, conformity, consistency, validity, uniqueness, timeliness) on the latest
+    load, how many rules check it, and every rule scoring under the 95% floor, worst first. area "world" is the
+    expanded world: how many values its silver layer flagged (kept as written, never dropped), per silver table and
+    rule (missing_token, two_digit_year, orphan, ...), and how many rows they touch; table narrows it to one silver
+    table. Counts only: no flagged value is ever returned, since one can be a name. With no area, both. Either way,
+    the data-quality alerts firing now (from Prometheus)."""
+    if area is not None and area not in AREAS:
+        raise ToolError(f"No area {area!r}. Areas: {', '.join(AREAS)} (or none, for both)")
+    if table is not None and area == "course":
+        raise ToolError("table narrows the world's flags (area world); the course scorecard is by column instead")
+    alerts = prometheus('ALERTS{alertstate="firing"}')
+    firing = sorted({x["metric"]["alertname"] for x in alerts or []} & set(DQ_ALERTS))
+    note = ("Prometheus is unavailable, so firing alerts are unknown" if alerts is None
+            else f"data-quality alerts checked: {', '.join(DQ_ALERTS)}")
+    return DataQuality(course=scorecard() if area in (None, "course") else None,
+                       world=world_issues(table) if area in (None, "world") else None,
+                       alerts_firing=firing, note=note)
 
 
 # ---- HTTP ----------------------------------------------------------------------------------------------------
