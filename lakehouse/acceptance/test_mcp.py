@@ -49,13 +49,14 @@ def test_refuses_requests_without_the_right_token(token):
     assert rpc("tools/list", token=token).status_code == 401
 
 
-def test_offers_exactly_its_six_tools():
-    """The server lists list_metrics, query_metric, define_term, business_rules, data_product_info and data_quality
-    (those two are tested in test_mcp_products.py), and nothing else."""
+def test_offers_exactly_its_seven_tools():
+    """The server lists list_metrics, query_metric, define_term, business_rules, data_product_info, data_quality
+    (those two are tested in test_mcp_products.py) and find_by_tags (test_mcp_tags.py), and nothing else."""
     r = rpc("tools/list")
     r.raise_for_status()
     assert {t["name"] for t in r.json()["result"]["tools"]} == {"list_metrics", "query_metric", "define_term",
-                                                                "business_rules", "data_product_info", "data_quality"}
+                                                                "business_rules", "data_product_info", "data_quality",
+                                                                "find_by_tags"}
 
 
 def test_server_holds_no_lake_or_admin_credentials():

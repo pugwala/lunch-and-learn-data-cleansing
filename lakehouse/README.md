@@ -274,7 +274,7 @@ single-file bind mount keeps showing the old one, which is how a Caddyfile chang
 
 ### MCP: governed metrics, definitions and rules for an AI agent
 
-An MCP server at `https://<LAKE_TS_HOST>/mcp` gives an agent six tools instead of SQL access:
+An MCP server at `https://<LAKE_TS_HOST>/mcp` gives an agent seven tools instead of SQL access:
 
 - `list_metrics()`: every metric `query_metric` offers, one entry per Cube view that has it, with its title,
   description, data product, dimensions and aggregation. `countDistinct` marks a count of distinct people, whose
@@ -306,6 +306,18 @@ An MCP server at `https://<LAKE_TS_HOST>/mcp` gives an agent six tools instead o
   `world`: the expanded world's flagged values per silver table and rule, and the rows they touch; `table` narrows
   it to one (Cube's `world_exceptions`, which holds counts only: a flagged value can be a name, so none is ever
   returned). Both by default, with the data-quality alerts firing now.
+- `find_by_tags(tags=None, match="any", level="both")`: lake tables and columns by the tags OpenMetadata holds for
+  them, any of the 48 in use: the tagger's (`Governance.CJIS`, `PIIType.BirthDate`, `Source.WorldGenerator`,
+  `Layer.Gold`, `Refresh.Monthly`, ...), the hand-set `Sensitivity.*`, OpenMetadata's `PII.Sensitive`, and the
+  glossary terms (`Lakehouse.SID Number`). A tag is a full name, a bare name when one family has it (`CJIS`), or a
+  whole family (`PIIType.*`); case, spaces and hyphens don't matter, and a wrong one names close matches.
+  - one tag: `["Governance.CJIS"]` finds the 54 CJIS tables;
+  - several: `["PIIType.BirthDate", "PIIType.FreeText"]` finds tables with either, each saying which it has;
+  - all of them: `match="all"` keeps only tables with every tag, on the table or any column (CJIS with a birth date
+    and free text: the raw and cleansed course records). Every one of the 48 at once answers too (none).
+  - `level`: `"table"` looks only at tags on tables; `"column"` only at columns, and with `match="all"` one column
+    must carry every tag (a birth date that is also hand-tagged Personal).
+  With no tags it lists every tag in use, what it means, and how many tables and columns carry it.
 
 Every request needs `Authorization: Bearer <MCP_TOKEN>` (from `.env`). The container holds no lake credentials and
 no OpenMetadata admin: it reads as `mcp-reader` (role DataConsumer only), and its Cube token has no groups, so
@@ -947,6 +959,7 @@ only says there's nothing to check. Its first run passed all 14 checks on a GitH
 | `%load_ext lakehouse.sql_magic` (jupysql, read-only as `lake_ro`): 6 acceptance tests (`pytest lakehouse/acceptance/test_sql.py`), plus a real notebook kernel run from outside the repo; the password and read-only checks were shown to fail on deliberate breaks | On the VM |
 | Phase 3 notebooks: model staged offline, `08_from_lake.ipynb`, the `notebook_smoke` job: 7 acceptance tests (`pytest lakehouse/acceptance/test_notebooks.py`) and 3 bats tests, each seen failing first; the first smoke run (all 8 notebooks, 110 s) passed with session 5's 22 of 22 reconciliation and session 6's F1 0.898 | On the VM |
 | MCP server (`list_metrics`, `query_metric` with filters and time ranges, `define_term`, `business_rules`): 28 acceptance tests (`pytest lakehouse/acceptance/test_mcp.py`) and 4 bats tests, each seen failing first; the token check and synonym matching were shown to fail on deliberate breaks, and 8 mutations of the filters, time ranges and rulebook were all caught; checked end to end through Caddy (total restitution 1,333,587,950.77) | On the VM |
+| MCP `find_by_tags` (one tag, any or all of many, on tables, columns or both, forgiving names, the tag list): 10 acceptance tests (`pytest lakehouse/acceptance/test_mcp_tags.py`), all seen failing first and checked against the lake's own tag tables; 6 mutations caught, paging among them | On the VM |
 | MCP `data_product_info` and `data_quality` (and Cube's counts-only `world_exceptions`): 14 acceptance tests (`pytest lakehouse/acceptance/test_mcp_products.py`), all seen failing first; 8 mutations caught. A ninth (matching a product by title) survived because every title is its name in words, so title matching was removed as untestable | On the VM |
 | OpenMetadata 2.0.5 with OpenSearch 2.19.6 under `/openmetadata`, no default credentials left: 8 acceptance tests (`pytest lakehouse/acceptance/test_openmetadata.py`) and 5 bats tests, each seen failing first; restarting with `--check` kept the same signing keys | On the VM |
 | `om_sync.py` (glossary with typed relations, Sensitivity tags, every lake table) and `define_term` reading OpenMetadata: 9 acceptance tests (`pytest lakehouse/acceptance/test_om_sync.py`); an edit in OpenMetadata reached `define_term`, and `om_sync.py` put it back with the relations intact | On the VM |

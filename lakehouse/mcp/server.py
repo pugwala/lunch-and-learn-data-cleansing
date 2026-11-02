@@ -22,6 +22,11 @@ Tools
                                                       dimension, rules under the floor), the expanded world's
                                                       flagged values by silver table and rule (counts only), and
                                                       the data-quality alerts firing now
+    find_by_tags(tags=None, match="any", level="both")
+                                                      lake tables and columns by the tags OpenMetadata holds for
+                                                      them (governance, personal data, source, layer, refresh,
+                                                      sensitivity, glossary terms): one tag, any of several, or all
+                                                      of them; with no tags, every tag in use and how often
 
 Served over streamable HTTP at /mcp (stateless, JSON responses) and through Caddy at https://<LAKE_TS_HOST>/mcp.
 Every request needs `Authorization: Bearer <MCP_TOKEN>`. The server holds no lake credentials: list_metrics and
@@ -30,9 +35,11 @@ through Cube's REST API, so an agent sees only Cube's governed model, never the 
 Lakehouse glossary in OpenMetadata (loaded there by om_sync.py) as mcp-reader, a read-only account.
 business_rules reads Fuseki's public SPARQL endpoint and Prometheus, both read-only and without credentials.
 data_product_info combines Fuseki (the catalog's DCAT and readiness graphs), OpenMetadata (contracts, as
-mcp-reader), Cube (views, readiness) and Prometheus (freshness); data_quality reads Cube and Prometheus.
+mcp-reader), Cube (views, readiness) and Prometheus (freshness); data_quality reads Cube and Prometheus;
+find_by_tags reads OpenMetadata's tables, tags and glossary as mcp-reader.
 """
 import base64
+import difflib
 import hmac
 import html
 import json
@@ -82,7 +89,9 @@ server = MCPServer(
                  "filtered or over a time range; an unknown name lists the real ones), define_term for what a term "
                  "means, and business_rules for the rules about a term and whether they hold today. There is no raw "
                  "SQL access, by design. data_product_info says what a data product promises and whether this "
-                 "month's number is final and fresh; data_quality says how clean the data is.")
+                 "month's number is final and fresh; data_quality says how clean the data is; find_by_tags finds tables "
+                 "and columns by their tags (CJIS, personal data, source, layer, glossary terms), and lists the tags "
+                 "when asked with none.")
 
 
 # ---- Results (typed, so clients get structured content with a schema) -----------------------------------------
@@ -289,6 +298,43 @@ class TermDefinition(BaseModel):
     metrics: list[str]
     sensitivity: str
     relations: list[Relation]
+
+
+class TaggedColumn(BaseModel):
+    """A column carrying asked-for tags."""
+    column: str
+    tags: list[str]
+
+
+class TaggedTable(BaseModel):
+    """A lake table that matched: the asked-for tags on the table itself, its columns carrying any, and which of the
+    asked-for tags (or families) it has."""
+    table: str
+    table_tags: list[str]
+    columns: list[TaggedColumn]
+    matched: list[str]
+
+
+class TagInfo(BaseModel):
+    """A tag in use on lakehouse tables or columns: its family, what it means, and how many carry it."""
+    tag: str
+    family: str
+    description: str
+    tables: int
+    columns: int
+
+
+class TagSearch(BaseModel):
+    """find_by_tags' answer: what was asked and searched for, and the tables that matched; with no tags asked, every
+    tag in use instead."""
+    asked: list[str]
+    searched: list[str]
+    match: str
+    level: str
+    tables: list[TaggedTable]
+    table_count: int
+    column_count: int
+    tags: list[TagInfo]
 
 
 # ---- Cube ----------------------------------------------------------------------------------------------------
@@ -797,6 +843,115 @@ def data_quality(area: str | None = None, table: str | None = None) -> DataQuali
     return DataQuality(course=scorecard() if area in (None, "course") else None,
                        world=world_issues(table) if area in (None, "world") else None,
                        alerts_firing=firing, note=note)
+
+
+# ---- Finding data by tag --------------------------------------------------------------------------------------
+MATCHES = ["any", "all"]
+LEVELS = ["both", "table", "column"]
+LAKE_FQN = "lakehouse.lake."
+
+
+def lake_entities():
+    """Every lakehouse table in OpenMetadata, page by page: [(schema.table, {table tags}, {column: {tags}})]."""
+    out, after = [], None
+    while True:
+        page = om("tables?database=lakehouse.lake&fields=columns,tags&limit=50"
+                  + (f"&after={urllib.parse.quote(after)}" if after else ""))
+        for e in page.get("data", []):
+            out.append((e["fullyQualifiedName"].removeprefix(LAKE_FQN), {x["tagFQN"] for x in e.get("tags") or []},
+                        {c["name"]: {x["tagFQN"] for x in c.get("tags") or []} for c in e.get("columns") or []}))
+        after = (page.get("paging") or {}).get("after")
+        if not after:
+            return out
+
+
+def squash(name):
+    """A tag name as matched: lower case, letters, digits and dots only, so case, spaces and hyphens don't matter."""
+    return re.sub(r"[^a-z0-9.]", "", name.casefold())
+
+
+def resolve_tag(asked, in_use):
+    """What one asked-for name stands for, as (label, {tags}): an exact tag; a whole family (Family.*, or Family
+    when no tag has that name); or a bare tag name only one family has. ToolError names close matches and the
+    families in use when nothing fits, or the candidates when a bare name is ambiguous."""
+    key, families = squash(asked), sorted({t.split(".", 1)[0] for t in in_use})
+    exact = sorted(t for t in in_use if squash(t) == key)
+    if exact:
+        return exact[0], set(exact)
+    family = [f for f in families if squash(f) == key.rstrip(".")]
+    if asked.strip().endswith("*") and family:
+        return f"{family[0]}.*", {t for t in in_use if t.split(".", 1)[0] == family[0]}
+    bare = sorted(t for t in in_use if "." in t and squash(t.split(".", 1)[1]) == key)
+    if len(bare) == 1:
+        return bare[0], set(bare)
+    if len(bare) > 1:
+        raise ToolError(f"{asked!r} is a tag in several families; name one: {', '.join(bare)}")
+    if family:
+        return f"{family[0]}.*", {t for t in in_use if t.split(".", 1)[0] == family[0]}
+    close = difflib.get_close_matches(asked.strip(), sorted(in_use), n=5, cutoff=0.6)
+    raise ToolError(f"No tag {asked!r} on any lakehouse table or column."
+                    + (f" Did you mean: {', '.join(close)}?" if close else "")
+                    + f" Families in use: {', '.join(families)} (call find_by_tags with no tags to list every tag).")
+
+
+def tag_vocabulary(entities):
+    """[TagInfo] for every tag in use, with its description (OpenMetadata's classification tags, or the glossary
+    term a Lakehouse.* tag stands for) and how many tables and columns carry it."""
+    tables, columns = {}, {}
+    for _, ttags, cols in entities:
+        for t in ttags:
+            tables[t] = tables.get(t, 0) + 1
+        for tags in cols.values():
+            for t in tags:
+                columns[t] = columns.get(t, 0) + 1
+    about = {t["fullyQualifiedName"]: text(t.get("description")) for t in om("tags?limit=1000").get("data", [])}
+    glossary = om(f"glossaries/name/{GLOSSARY}")
+    about |= {f"{GLOSSARY}.{t['name']}": text(t.get("description"))
+              for t in om(f"glossaryTerms?glossary={glossary['id']}&limit=500").get("data", [])}
+    return [TagInfo(tag=t, family=t.split(".", 1)[0], description=about.get(t, ""), tables=tables.get(t, 0),
+                    columns=columns.get(t, 0)) for t in sorted(set(tables) | set(columns))]
+
+
+@server.tool()
+def find_by_tags(tags: list[str] | None = None, match: str = "any", level: str = "both") -> TagSearch:
+    """Find lake tables and columns by the tags OpenMetadata holds for them: governance (Governance.CJIS,
+    Governance.PII), the kind of personal data in a column (PIIType.BirthDate, PIIType.FreeText, ...), where a table
+    came from (Source.*), its layer (Layer.Bronze ... Layer.Gold), how often it lands (Refresh.*), hand-set
+    sensitivity (Sensitivity.Restricted, Sensitivity.Personal), OpenMetadata's PII.Sensitive, and glossary terms
+    (Lakehouse.SID Number, ...).
+
+    tags: one or many. Each is a full name (Governance.CJIS), a bare name when only one family has it (CJIS,
+    BirthDate), or a whole family (PIIType.* or PIIType: any tag in it). Case, spaces and hyphens don't matter.
+    With no tags, the answer lists every tag in use, what it means and how many tables and columns carry it.
+    match: "any" (default) finds tables with at least one of the tags; "all" only tables with every one (a family
+    counts once, met by any of its tags).
+    level: "both" (default) looks at tags on tables and on their columns; "table" only tags on the table itself;
+    "column" only tags on columns, and with match "all" one column must carry every tag."""
+    if match not in MATCHES:
+        raise ToolError(f"No match {match!r}. Match: {', '.join(MATCHES)}")
+    if level not in LEVELS:
+        raise ToolError(f"No level {level!r}. Levels: {', '.join(LEVELS)}")
+    entities = lake_entities()
+    if not tags:
+        return TagSearch(asked=[], searched=[], match=match, level=level, tables=[], table_count=0, column_count=0,
+                         tags=tag_vocabulary(entities))
+    in_use = {t for _, ttags, cols in entities for t in ttags | set().union(*cols.values(), set())}
+    wanted = [resolve_tag(a, in_use) for a in tags]
+    searching = set().union(*(s for _, s in wanted))
+    found = []
+    for table, ttags, cols in entities:
+        on_table = ttags & searching if level in ("both", "table") else set()
+        on_columns = {c: t & searching for c, t in cols.items() if level in ("both", "column") and t & searching}
+        if match == "all" and level == "column":
+            on_columns = {c: t for c, t in on_columns.items() if all(t & s for _, s in wanted)}
+        present = on_table | set().union(*on_columns.values(), set())
+        matched = [label for label, s in wanted if present & s]
+        if matched and (match == "any" or len(matched) == len(wanted)):
+            found.append(TaggedTable(table=table, table_tags=sorted(on_table), matched=matched,
+                                     columns=[TaggedColumn(column=c, tags=sorted(t)) for c, t in sorted(on_columns.items())]))
+    found.sort(key=lambda t: t.table)
+    return TagSearch(asked=list(tags), searched=sorted(searching), match=match, level=level, tables=found,
+                     table_count=len(found), column_count=sum(len(t.columns) for t in found), tags=[])
 
 
 # ---- HTTP ----------------------------------------------------------------------------------------------------
