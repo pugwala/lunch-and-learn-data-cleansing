@@ -26,7 +26,8 @@ from lakehouse import lake  # noqa: E402
 OM = os.environ.get("OM_URL", "http://openmetadata-server:8585/openmetadata") + "/api/v1"
 LAKEHOUSE = Path(__file__).resolve().parents[1]
 SERVICE, DATABASE, GLOSSARY, CLASSIFICATION = "lakehouse", "lake", "Lakehouse", "Sensitivity"
-SCHEMAS = ("ref", "bronze", "silver", "gold", "ops", "mart_custody", "mart_readiness")
+SCHEMAS = ("ref", "bronze", "silver", "gold", "ops", "mart_custody", "mart_readiness",
+           "world_bronze", "world_silver", "world_gold")
 SENSITIVITY_TAGS = {"restricted": "Restricted", "personal": "Personal"}
 TYPES = {"VARCHAR": "STRING", "BIGINT": "BIGINT", "INTEGER": "INT", "SMALLINT": "SMALLINT", "DOUBLE": "DOUBLE",
          "FLOAT": "FLOAT", "DATE": "DATE", "TIME": "TIME", "BOOLEAN": "BOOLEAN", "TIMESTAMP": "TIMESTAMP",
@@ -47,6 +48,10 @@ CUSTOM_RELATIONS = [   # relation types glossary.yml uses that OpenMetadata does
      "description": "Each instance of this term describes one instance of the other (a record is about a person)."},
     {"name": "subjectOf", "displayName": "Subject of", "inverseRelation": "isAbout",
      "description": "Instances of this term are described by instances of the other."},
+    {"name": "occursAt", "displayName": "Occurs at", "inverseRelation": "locationOf",
+     "description": "Each instance of this term happens at one instance of the other (a fight occurs at a place)."},
+    {"name": "locationOf", "displayName": "Location of", "inverseRelation": "occursAt",
+     "description": "Instances of the other term happen at instances of this one."},
 ]
 
 
@@ -131,7 +136,8 @@ def dbt_model_schemas():
 
 def dbt_docs():
     """{(schema, table): {"description": str, "columns": {name: {"description": str, "sensitivity": str}}}} from dbt.
-    A model's schema is its folder's +schema in dbt_project.yml (the deepest folder that sets one)."""
+    A model's schema is its folder's +schema in dbt_project.yml (the deepest folder that sets one); its table is its
+    config alias when it has one (world models: wb_person is world_bronze.person)."""
     docs, schemas = {}, dbt_model_schemas()
     models_dir = LAKEHOUSE / "dbt" / "models"
     for path in models_dir.rglob("*.yml"):
@@ -144,8 +150,9 @@ def dbt_docs():
             cols = {c["name"]: {"description": " ".join((c.get("description") or "").split()),
                                 "sensitivity": (c.get("meta") or {}).get("sensitivity")}
                     for c in entry.get("columns", [])}
-            docs[(schema, entry["name"])] = {"description": " ".join((entry.get("description") or "").split()),
-                                             "columns": cols}
+            table = (entry.get("config") or {}).get("alias") or entry["name"]   # a model's alias is its table
+            docs[(schema, table)] = {"description": " ".join((entry.get("description") or "").split()),
+                                     "columns": cols}
     return docs
 
 
@@ -177,6 +184,16 @@ def column_entity(name, dtype, doc, glossary_links):
              for term in sorted(glossary_links.get(name, []))]
     col["tags"] = tags
     return col
+
+
+def term_links():
+    """{column: [glossary terms]} from each term's columns: in glossary.yml. A bare name (incident_id) links in
+    every table that has the column; a qualified one (world_gold.fct_charge.outcome) only in that table."""
+    links = {}
+    for t in glossary_terms():
+        for col in t.get("columns", []):
+            links.setdefault(col, []).append(t["name"])
+    return links
 
 
 # ---- Steps ---------------------------------------------------------------------------------------------------
@@ -267,14 +284,12 @@ def tables(s):
     for schema in SCHEMAS:
         s.ensure("databaseSchemas", f"{SERVICE}.{DATABASE}.{schema}",
                  {"name": schema, "database": f"{SERVICE}.{DATABASE}"}, lambda e: e["name"])
-    docs, links = dbt_docs(), {}
-    for t in glossary_terms():
-        for col in t.get("columns", []):
-            links.setdefault(col, []).append(t["name"])
+    docs, links = dbt_docs(), term_links()
     for (schema, table), columns in sorted(lake_tables().items()):
         doc = docs.get((schema, table), {})
         description = doc.get("description") or lake.TABLE_COMMENTS.get(f"{schema}.{table}", "")
-        cols = [column_entity(n, d, doc.get("columns", {}).get(n, {}), links) for n, d in columns]
+        here = {n: links.get(n, []) + links.get(f"{schema}.{table}.{n}", []) for n, _ in columns}
+        cols = [column_entity(n, d, doc.get("columns", {}).get(n, {}), here) for n, d in columns]
         body = {"name": table, "databaseSchema": f"{SERVICE}.{DATABASE}.{schema}", "tableType": "Regular",
                 "description": description, "columns": cols}
         wanted = {c["name"]: {x["tagFQN"] for x in c["tags"]} for c in cols}

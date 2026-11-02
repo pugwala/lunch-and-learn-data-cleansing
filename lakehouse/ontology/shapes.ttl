@@ -82,3 +82,18 @@ lh:RuleShape-terms a sh:PropertyShape ;
     sh:path lh:about ;
     sh:class skos:Concept ;
     sh:message "A business rule can only be about glossary terms" .
+
+# Personal data never reaches gold: a column tagged Personal (names, birth dates, notes) lives in bronze or silver
+# only. A SPARQL-based constraint, because the rule depends on which layer the column's table is in.
+lh:PersonalStaysOutOfGoldShape a sh:NodeShape ;
+    sh:targetClass lh:Column ;
+    sh:sparql [
+        a sh:SPARQLConstraint ;
+        sh:message "A personal column may not be in gold or world_gold: names and birth dates stay in silver" ;
+        sh:select """
+            PREFIX lh: <https://lakehouse.invalid/ontology#>
+            SELECT $this WHERE {
+                $this lh:sensitivity lh:Personal ; lh:table ?table .
+                FILTER (STRSTARTS(?table, "gold.") || STRSTARTS(?table, "world_gold."))
+            }"""
+    ] .

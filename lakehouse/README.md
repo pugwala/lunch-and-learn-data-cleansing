@@ -37,7 +37,7 @@ every number matches the Facilitator Guide. dbt builds gold, and Dagster runs it
 | `backup/backup.sh` | The nightly catalog backup: `pg_dump` of every app database, checked, 14 days kept |
 | `fuseki/` | Apache Jena Fuseki 6.2.0, built from Apache's verified release: `Dockerfile`, `config.ttl` (one dataset; writes need the writer user), `shiro.ini` (no users; admin only inside the container), `start.sh` |
 | `cube/sync_masks.py` | Makes Cube mask exactly the columns OpenMetadata tags `Sensitivity.Restricted` |
-| `glossary/glossary.yml` | The glossary: 15 terms with definitions, synonyms, columns, metrics and typed relations; `om_sync.py` loads it into OpenMetadata |
+| `glossary/glossary.yml` | The glossary: 27 terms (15 for the course's data, 12 for the expanded world) with definitions, synonyms, columns, metrics and typed relations, and the rulebook (12 rules); `om_sync.py` loads it into OpenMetadata |
 | `universe/` | The expanded world's generator (dataset expansion, in progress; people, places, fights, charges and missions, their mess with answer keys, and their lake layers in `dbt/models/world`, so far): one random stream per table chunk, Parquet chunks written in parallel, the S/M/L knob, a fingerprinted manifest, and the check that the course's 100,000 records never change. See [The expanded world](#the-expanded-world-in-progress) |
 | `08_from_lake.ipynb` | Session 8 for the lakehouse: the Trust Test answered in SQL over silver, checked against `gold.trust_test` |
 
@@ -354,9 +354,11 @@ it by hand is gone the next morning. Three kinds, each with its own graph or che
 | Constraints | `ontology/shapes.ttl`, SHACL | What must be true. Fuseki validates them (`/fuseki/lakehouse/shacl`); `check_rules.py` names each violation, `bootstrap.sh` fails on one, and `BusinessRuleViolated` alerts. |
 
 Today's deduction: **a person's identifier is a pseudonymous key.** Any column that means a term which
-`identifies` Person (today every `sid_number`, six tables) is `lh:Pseudonymous`: fine in tables, for joining and
-counting people, never shown to a consumer, and a test holds Cube to that. Today's shapes: every glossary term has
-one name and a definition of 40 characters or more, and every rule states itself and names its enforcer.
+`identifies` Person (every `sid_number`, and the expanded world's `person_key`) is `lh:Pseudonymous`: fine in
+tables, for joining and counting people, never shown to a consumer, and a test holds Cube to that. Today's shapes:
+every glossary term has one name and a definition of 40 characters or more, every rule states itself and names its
+enforcer, data products name their inputs, and no column in `gold` or `world_gold` is tagged personal
+(`PersonalStaysOutOfGoldShape`, a SPARQL-based shape, since the rule depends on the column's layer).
 
 Which rules involve Person, and where is each enforced:
 
@@ -710,6 +712,37 @@ The monthly tables say which partition run last wrote each row (`_partition`). C
 (`--exclude tag:world`); `pytest lakehouse/tests/test_world_lake.py` builds an S world and runs `dbt build
 --select tag:world` on a temporary lake instead (5 tests; 11 mutations all caught). At M the world adds about 1 GB
 to `/lake/data`.
+
+**Chunk 8, the world's meaning (`glossary/glossary.yml`, `ontology/shapes.ttl`, `dbt/tests/world/`).** OpenMetadata
+and Fuseki now know the world:
+
+- **12 glossary terms:** Incident, Location, Participant, Power, Power Use, Damage Assessment, Charge, Court
+  Outcome, Team, Mission, Person Key, Person Role. They have typed relations, among them a new one, `occursAt`
+  (Incident occurs at Location; its inverse is `locationOf`). Charge is about Incident, Participant is part of
+  Incident, and Person Key identifies Person, so the pseudonymous-key deduction covers `person_key` with no change
+  to the rule.
+- **Table-qualified column links:** a term's `columns:` may name `schema.table.column` where a name means different
+  things in different tables. `world_gold.fct_charge.outcome` is a Court Outcome; `fct_incident.outcome`, a
+  fight's outcome, is not. A bare name links in every table that has it, so `charge_id` means Charge in bronze,
+  silver and gold, and `offender_number` in the world means the course's Offender Number.
+- **The world's schemas in OpenMetadata:** `om_sync.py` pushes `world_bronze`, `world_silver` and `world_gold`.
+  Names and birth dates are tagged Personal in bronze and silver, and a team's `stg_group` Restricted, from the
+  world models' `schema.yml` (`meta.sensitivity`; `config.alias` tells om_sync which table a model builds).
+
+**The world's business rules** are in the rulebook. Each dbt rule holds for every row silver didn't flag; flagged
+rows are kept as written, so they may break it:
+
+| Rule | Enforced by |
+| --- | --- |
+| A charge follows its fight, and its outcome follows the charge | `dbt/tests/world/world_charges_follow_their_fights.sql` |
+| Only a captured villain is charged | `world_only_captured_villains_are_charged.sql` |
+| A power is used only while its holder holds it | `world_powers_are_used_while_held.sql`. About 0.4% of uses can't be checked (the holding they need was orphaned, or entered under a duplicate silver didn't resolve; the answer key explains every one), so the test fails above 1% |
+| A record's conviction is decided on its sentence date | `world_record_convictions_match_their_sentences.sql` (against the course's `silver.hero_offenders`) |
+| People in the expanded world are counted by Person Key | `world_one_gold_person_per_key.sql` |
+| Personal data never reaches gold | `PersonalStaysOutOfGoldShape` in `ontology/shapes.ttl` |
+
+Tests: `pytest lakehouse/acceptance/test_world_meaning.py` (10, on the stack), plus the rule tests in the world's
+dbt build. 6 mutations all caught, each by its own rule.
 
 ## Test status
 

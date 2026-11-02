@@ -100,13 +100,14 @@ def test_one_query_finds_every_rule_about_person_and_its_enforcement():
 # --- deductions ------------------------------------------------------------------------------------------------
 
 def test_every_sid_column_is_deduced_pseudonymous():
-    """The rule finds every column that means a term identifying Person (today, sid_number in every table that has
-    it) and marks it lh:Pseudonymous, in its own graph."""
-    meaning = {r["table"] for r in select("""SELECT ?table WHERE { ?c lh:means ?t ; lh:table ?table .
-        ?t lh:identifies term:person }""")}
-    deduced = {r["table"] for r in select(f"""SELECT ?table WHERE {{ GRAPH <{INFERRED}{PSEUDONYMOUS_RULE}> {{
-        ?c lh:sensitivity lh:Pseudonymous }} ?c lh:table ?table ; lh:name "sid_number" }}""")}
+    """The rule finds every column that means a term identifying Person (sid_number in every table that has it,
+    and the expanded world's person_key) and marks it lh:Pseudonymous, in its own graph."""
+    meaning = {(r["table"], r["name"]) for r in select("""SELECT ?table ?name WHERE { ?c lh:means ?t ;
+        lh:table ?table ; lh:name ?name . ?t lh:identifies term:person }""")}
+    deduced = {(r["table"], r["name"]) for r in select(f"""SELECT ?table ?name WHERE {{
+        GRAPH <{INFERRED}{PSEUDONYMOUS_RULE}> {{ ?c lh:sensitivity lh:Pseudonymous }} ?c lh:table ?table ; lh:name ?name }}""")}
     assert len(meaning) >= 6 and deduced == meaning
+    assert {name for _, name in meaning} == {"sid_number", "person_key"}
 
 
 def test_deduced_facts_stay_out_of_the_stated_graph():
@@ -118,7 +119,7 @@ def test_no_cube_member_exposes_a_pseudonymous_column():
     """A pseudonymous key is never shown to a consumer: no public Cube member is a column the rule deduced."""
     keys = {r["name"] for r in select(f"""SELECT DISTINCT ?name WHERE {{ GRAPH <{INFERRED}{PSEUDONYMOUS_RULE}> {{
         ?c lh:sensitivity lh:Pseudonymous }} ?c lh:name ?name }}""")}
-    assert keys == {"sid_number"}
+    assert keys == {"sid_number", "person_key"}
     exposed = {m["name"] for c in meta() for kind in ("dimensions", "measures") for m in c[kind]
                if m["name"].split(".", 1)[1] in keys}
     assert not exposed, exposed

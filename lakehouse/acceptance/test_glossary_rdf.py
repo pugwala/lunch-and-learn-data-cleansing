@@ -63,7 +63,8 @@ def test_relations_keep_their_type():
     assert ask("ASK { term:offense-code skos:broader term:offense-against-category }")
     assert ask("ASK { term:violence-code skos:related term:offense-code }")
     parts = select("SELECT ?t WHERE { ?t lh:partOf term:offender-record }")
-    assert len(parts) == sum(1 for t in GLOSSARY for r in t.get("relations", []) if r["type"] == "partOf")
+    assert len(parts) == sum(1 for t in GLOSSARY for r in t.get("relations", [])
+                             if r["type"] == "partOf" and r["term"] == "Offender Record")
 
 
 def test_synonyms_are_alternative_labels():

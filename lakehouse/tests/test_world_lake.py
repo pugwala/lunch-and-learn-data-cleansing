@@ -4,7 +4,7 @@
 
 One scale-S world (with its mess) is built in a temporary folder, then dbt builds only the world's models
 (tag:world: bronze, silver, gold, and the answer-key tests) into a temporary DuckDB lake that holds a copy of
-ref.nibrs_offenses. The tests check that:
+ref.nibrs_offenses and silver.hero_offenders' keys and sentence dates. The tests check that:
   - dbt builds every world model and every world test passes, the answer-key tests among them: silver equals the
     clean truth in every cell except where the key says the truth was lost (unknown) or kept as written and flagged
     (orphans, out-of-order dates, links to a duplicate), and silver's flags are the key's defects;
@@ -43,17 +43,21 @@ def dbt(tmp: Path, db: Path, root: Path, *args, extra_vars=None) -> subprocess.C
 
 @pytest.fixture(scope="module")
 def world(tmp_path_factory):
-    """A scale-S world, a temporary lake with ref.nibrs_offenses, and dbt's build of tag:world into it."""
+    """A scale-S world, a temporary lake with ref.nibrs_offenses and silver.hero_offenders' keys and sentence dates
+    (the world's rule tests check its convictions against them), and dbt's build of tag:world into it."""
     tmp = tmp_path_factory.mktemp("world")
     root = tmp / "universe" / "S"
     src = lake.lake_connect(read_only=True)
     build.build(root, scale_name="S", seed=2026, workers=4, con=src, chunk_rows=100_000)
     nibrs = src.execute("SELECT * FROM ref.nibrs_offenses").arrow().read_all()
+    records = src.execute("SELECT offender_number, sid_number, sentence_date FROM silver.hero_offenders").arrow().read_all()
     db = tmp / "world.duckdb"
     con = duckdb.connect(str(db))
-    con.execute("CREATE SCHEMA ref")
+    con.execute("CREATE SCHEMA ref; CREATE SCHEMA silver")
     con.register("nibrs", nibrs)
+    con.register("records", records)
     con.execute("CREATE TABLE ref.nibrs_offenses AS SELECT * FROM nibrs")
+    con.execute("CREATE TABLE silver.hero_offenders AS SELECT * FROM records")
     con.close()
     result = dbt(tmp, db, root, "build", "--select", "tag:world")
     return tmp, db, root, result

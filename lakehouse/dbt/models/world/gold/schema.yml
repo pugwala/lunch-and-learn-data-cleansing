@@ -7,6 +7,7 @@ models:
 - name: wg_dim_location
   description: 'One row per place: a city, a district or a site (custody units are sites with their unit_code).'
   config:
+    alias: dim_location
     contract:
       enforced: true
   columns:
@@ -35,6 +36,7 @@ models:
   description: One row per person, duplicates resolved (person_key, the lowest person_id among a person's entries). No names
     or birth dates, which stay in world_silver.person.
   config:
+    alias: dim_person
     contract:
       enforced: true
   columns:
@@ -59,6 +61,7 @@ models:
 - name: wg_dim_power
   description: One row per power in the catalog.
   config:
+    alias: dim_power
     contract:
       enforced: true
   columns:
@@ -78,6 +81,7 @@ models:
 - name: wg_dim_team
   description: 'One row per team: hero leagues and villain groups (the STG groups among them).'
   config:
+    alias: dim_team
     contract:
       enforced: true
   columns:
@@ -92,6 +96,8 @@ models:
     data_type: varchar
   - name: stg_group
     data_type: varchar
+    meta:
+      sensitivity: restricted
   - name: founded_on
     data_type: date
   - name: base_location_id
@@ -100,6 +106,7 @@ models:
   description: One row per fight. incident_month is the Dagster partition its participants, power uses, damages and charges
     are built in (null when the date was an unknown token).
   config:
+    alias: fct_incident
     contract:
       enforced: true
   columns:
@@ -147,6 +154,7 @@ models:
 - name: wg_fct_participation
   description: One row per person in a fight, built one month at a time.
   config:
+    alias: fct_participation
     contract:
       enforced: true
   columns:
@@ -196,6 +204,7 @@ models:
 - name: wg_fct_power_use
   description: One row per power used in a fight, built one month at a time.
   config:
+    alias: fct_power_use
     contract:
       enforced: true
   columns:
@@ -237,6 +246,7 @@ models:
 - name: wg_fct_damage
   description: One row per damage assessment, built one month at a time.
   config:
+    alias: fct_damage
     contract:
       enforced: true
   columns:
@@ -278,6 +288,7 @@ models:
   description: One row per charge with its court outcome, built one month at a time. offender_number links a record's conviction
     to today's offender records.
   config:
+    alias: fct_charge
     contract:
       enforced: true
   columns:
@@ -337,6 +348,7 @@ models:
 - name: wg_fct_mission
   description: One row per hero mission, with how many went.
   config:
+    alias: fct_mission
     contract:
       enforced: true
   columns:

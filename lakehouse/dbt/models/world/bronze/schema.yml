@@ -1,0 +1,83 @@
+version: 2
+
+# The expanded world's bronze (dataset expansion, chunks 7-8). config.alias names each model's table, so om_sync.py
+# finds it; meta.sensitivity tags the personal and restricted columns in OpenMetadata, as for the course's bronze.
+models:
+- name: wb_location
+  description: Places as the source wrote them.
+  config:
+    alias: location
+- name: wb_power
+  description: The powers catalog as written.
+  config:
+    alias: power
+- name: wb_team
+  description: Teams as written.
+  config:
+    alias: team
+  columns:
+  - name: stg_group
+    meta:
+      sensitivity: restricted
+- name: wb_person
+  description: 'People as written: today''s villains (with their SID), new villains, heroes, secondary heroes and civilians,
+    plus duplicate entries.'
+  config:
+    alias: person
+  columns:
+  - name: last_name
+    meta:
+      sensitivity: personal
+  - name: first_name
+    meta:
+      sensitivity: personal
+  - name: alias
+    meta:
+      sensitivity: personal
+  - name: birth_date
+    meta:
+      sensitivity: personal
+- name: wb_person_power
+  description: Who held which power from when to when, as written.
+  config:
+    alias: person_power
+- name: wb_team_member
+  description: Team memberships as written.
+  config:
+    alias: team_member
+- name: wb_incident
+  description: Fights as written.
+  config:
+    alias: incident
+- name: wb_participant
+  description: Who fought in each fight, as written.
+  config:
+    alias: participant
+- name: wb_power_use
+  description: Powers used in fights, as written.
+  config:
+    alias: power_use
+- name: wb_damage
+  description: Damage assessments as written; money as text.
+  config:
+    alias: damage
+- name: wb_charge
+  description: Charges as written.
+  config:
+    alias: charge
+- name: wb_disposition
+  description: Court outcomes as written.
+  config:
+    alias: disposition
+- name: wb_mission
+  description: Hero missions as written.
+  config:
+    alias: mission
+- name: wb_mission_member
+  description: Who went on each mission, as written.
+  config:
+    alias: mission_member
+- name: wb_mission_incident
+  description: Fights each mission ran into, as written.
+  config:
+    alias: mission_incident

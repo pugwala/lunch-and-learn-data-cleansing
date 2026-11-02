@@ -1,0 +1,83 @@
+version: 2
+
+# The expanded world's silver (dataset expansion, chunks 7-8). config.alias names each model's table, so om_sync.py
+# finds it; meta.sensitivity tags the personal and restricted columns in OpenMetadata, as for the course's silver.
+models:
+- name: ws_location
+  description: Places typed and cleaned, problems flagged in issues.
+  config:
+    alias: location
+- name: ws_power
+  description: The powers catalog typed and cleaned, problems flagged in issues.
+  config:
+    alias: power
+- name: ws_team
+  description: Teams typed and cleaned, problems flagged in issues.
+  config:
+    alias: team
+  columns:
+  - name: stg_group
+    meta:
+      sensitivity: restricted
+- name: ws_person
+  description: 'People typed and cleaned, problems flagged in issues: today''s villains (with their SID), new villains,
+    heroes, secondary heroes and civilians, plus duplicate entries.'
+  config:
+    alias: person
+  columns:
+  - name: last_name
+    meta:
+      sensitivity: personal
+  - name: first_name
+    meta:
+      sensitivity: personal
+  - name: alias
+    meta:
+      sensitivity: personal
+  - name: birth_date
+    meta:
+      sensitivity: personal
+- name: ws_person_power
+  description: Who held which power from when to when, typed and cleaned, problems flagged in issues.
+  config:
+    alias: person_power
+- name: ws_team_member
+  description: Team memberships typed and cleaned, problems flagged in issues.
+  config:
+    alias: team_member
+- name: ws_incident
+  description: Fights typed and cleaned, problems flagged in issues.
+  config:
+    alias: incident
+- name: ws_participant
+  description: Who fought in each fight, typed and cleaned, problems flagged in issues.
+  config:
+    alias: participant
+- name: ws_power_use
+  description: Powers used in fights, typed and cleaned, problems flagged in issues.
+  config:
+    alias: power_use
+- name: ws_damage
+  description: Damage assessments typed and cleaned, problems flagged in issues; money as text.
+  config:
+    alias: damage
+- name: ws_charge
+  description: Charges typed and cleaned, problems flagged in issues.
+  config:
+    alias: charge
+- name: ws_disposition
+  description: Court outcomes typed and cleaned, problems flagged in issues.
+  config:
+    alias: disposition
+- name: ws_mission
+  description: Hero missions typed and cleaned, problems flagged in issues.
+  config:
+    alias: mission
+- name: ws_mission_member
+  description: Who went on each mission, typed and cleaned, problems flagged in issues.
+  config:
+    alias: mission_member
+- name: ws_mission_incident
+  description: Fights each mission ran into, typed and cleaned, problems flagged in issues.
+  config:
+    alias: mission_incident

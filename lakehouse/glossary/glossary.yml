@@ -1,7 +1,10 @@
 # The lakehouse glossary: what the mock data's terms mean and how they relate. The MCP tool define_term serves it
 # now; Phase 5 loads the same file into OpenMetadata's glossary. Everything here describes the fictional course
-# data. Relation types: identifies, isAbout, partOf, broader (a wider category), relatedTo.
-# columns: names in gold.fct_offender_record and Cube (dimensions); metrics: Cube measures to ask query_metric for.
+# data. Relation types: identifies, isAbout, partOf, occursAt (where it happens), broader (a wider category),
+# relatedTo.
+# columns: lake column names the term means, linked in every table that has them; a name that means different things
+# in different tables is qualified, schema.table.column (world_gold.fct_charge.outcome is a court's outcome,
+# world_gold.fct_incident.outcome a fight's). metrics: Cube measures to ask query_metric for.
 # rules: (at the end) the business rules about these terms, each with what enforces it; om_to_rdf.py publishes them
 # to Fuseki as the rulebook. enforced_by entries are kind:name, one of cube:<view.member>, dbt:<test in dbt/tests>,
 # prometheus:<alert>, shacl:<shape in ontology/shapes.ttl>, sparql:<rule in ontology/rules>,
@@ -24,7 +27,9 @@ terms:
       An individual in the mock dataset, identified for life by their SID Number. A person can have several
       Offender Records over time, sometimes two open at once (concurrent sentences). "Inmate" and "offender" are
       roles a person has while a record is open, not different things. Count people by distinct SID; records with
-      no SID belong to no known person. gold.dim_person has one row per known person, with no personal data.
+      no SID belong to no known person. gold.dim_person has one row per known person, with no personal data. In
+      the expanded world most people (heroes, civilians, new villains) have no SID; there a person is identified
+      by their Person Key.
     synonyms: [person, individual, inmate, offender]
 
   - name: Offender Number
@@ -148,6 +153,127 @@ terms:
     relations:
       - {type: partOf, term: Offender Record}
 
+  # --- The expanded world (lakehouse/universe; world_bronze, world_silver, world_gold) ------------------------------
+  - name: Incident
+    definition: >
+      One fight in the expanded world: villains against heroes, with civilians sometimes caught up in it, at one
+      place on one day between 1996 and today. It ends with the villains captured, some captured (partial) or all
+      escaped. Each of today's 94,120 offender records with a SID and a sentence date has the fight behind it.
+    synonyms: [fight, battle, incident]
+    columns: [incident_id]
+    relations:
+      - {type: occursAt, term: Location}
+
+  - name: Location
+    definition: >
+      A place in the fictional world: a city, one of its districts, or a site in a district (a bank, a pier, a
+      custody unit). Places nest: a site is part of a district, and a district part of a city.
+    synonyms: [place, site, city, district]
+    columns: [location_id, home_location_id, base_location_id, city_id]
+    relations:
+      - {type: relatedTo, term: Unit}
+
+  - name: Participant
+    definition: >
+      A person in one fight: their side (villain, hero or civilian), their role (leader, fighter, victim, ...) and
+      what became of them (captured, escaped, injured, rescued, unharmed). A person can be in many fights, but in
+      any one fight only once.
+    synonyms: [participation, combatant]
+    columns: [participant_id]
+    relations:
+      - {type: partOf, term: Incident}
+      - {type: isAbout, term: Person}
+
+  - name: Power
+    definition: >
+      An ability, skill or piece of gear in the powers catalog, with its tier (DELTA, BETA, ALPHA, OMEGA, strongest
+      last) and whether it is permanent, temporary or comes from an artifact. A person holds a power from the day
+      they acquire it until the day they lose it, if they ever do.
+    synonyms: [superpower, ability]
+    columns: [power_id]
+
+  - name: Power Use
+    definition: >
+      One use of a power by a participant in a fight, and how well it worked, from 0 to 1; stronger tiers work
+      better. A power can only be used while its holder holds it.
+    synonyms: [power used]
+    columns: [power_use_id, effectiveness]
+    relations:
+      - {type: partOf, term: Incident}
+      - {type: relatedTo, term: Power}
+
+  - name: Damage Assessment
+    definition: >
+      What a fight damaged: one asset (a vehicle, a building, ...), its cost to repair in whole US dollars, whether
+      it was insured and what the insurer paid (nothing yet while the claim is open), and how the repair stands.
+      Source files write the money many ways ($1,234.00, USD 1,234.00, - for zero).
+    synonyms: [damage, assessment]
+    columns: [damage_id, cost_usd, insurance_paid_usd]
+    relations:
+      - {type: isAbout, term: Incident}
+
+  - name: Charge
+    definition: >
+      An accusation against a villain captured in a fight: the NIBRS offense code and the day it was filed, on or
+      after the fight. Charges 0 to 94,119 are today's offender records; a villain can face several charges, or
+      none, for one fight.
+    synonyms: [charge, accusation]
+    columns: [charge_id, filed_on]
+    relations:
+      - {type: isAbout, term: Incident}
+      - {type: relatedTo, term: Offense Code}
+
+  - name: Court Outcome
+    definition: >
+      How a charge ended in court: convicted, pleaded guilty, acquitted, dismissed, or pending while undecided,
+      and the day it was decided. A conviction for one of today's offender records is decided on that record's
+      sentence date and carries its Offender Number, the link back to the course's data.
+    synonyms: [disposition, verdict]
+    columns: [disposition_id, decided_on, world_bronze.disposition.outcome, world_silver.disposition.outcome,
+              world_gold.fct_charge.outcome, world_gold.fct_charge.is_conviction]
+    relations:
+      - {type: isAbout, term: Charge}
+      - {type: relatedTo, term: Offender Record}
+
+  - name: Team
+    definition: >
+      A group that fights together: a hero league, or a villain group (the course's twelve STG groups among them).
+      People join and may leave; a hero team runs missions, sometimes against a villain team.
+    synonyms: [league, villain group, gang]
+    columns: [team_id, target_team_id]
+    relations:
+      - {type: relatedTo, term: STG Affiliation}
+
+  - name: Mission
+    definition: >
+      An operation a hero team plans, maybe against a villain team: where, when it started and ended (no end while
+      it runs) and how it ended. Heroes who held a power on its first day go on it, one of them leading, and it can
+      run into fights.
+    synonyms: [operation]
+    columns: [mission_id]
+    relations:
+      - {type: relatedTo, term: Team}
+      - {type: relatedTo, term: Incident}
+
+  - name: Person Key
+    definition: >
+      A person's ID in the expanded world once duplicates are resolved: the lowest person_id among the entries
+      that are the same person (the same SID, or the same names and birthday). Count people by person_key, never by
+      person_id. Like the SID, it is a pseudonymous key: fine in tables, never shown to a consumer.
+    synonyms: [resolved person ID]
+    columns: [person_key]
+    relations:
+      - {type: identifies, term: Person}
+
+  - name: Person Role
+    definition: >
+      What a person is in the expanded world: one of today's villains (the course's people, the only ones with a
+      SID), a new villain, a hero, a secondary hero (weak, temporary or borrowed powers) or a civilian.
+    synonyms: [role, hero, villain, secondary hero, civilian]
+    columns: [world_bronze.person.role, world_silver.person.role, world_gold.dim_person.role]
+    relations:
+      - {type: partOf, term: Person}
+
 rules:
   - name: People are counted by SID
     statement: >
@@ -161,9 +287,9 @@ rules:
 
   - name: A person's identifier is a pseudonymous key
     statement: >
-      A column that holds a person's identifier (today, the SID) may sit in tables, for joining and counting
-      people, but is never shown to a consumer: no Cube member exposes it.
-    about: [Person, SID Number]
+      A column that holds a person's identifier (the SID, and the expanded world's Person Key) may sit in tables,
+      for joining and counting people, but is never shown to a consumer: no Cube member exposes it.
+    about: [Person, SID Number, Person Key]
     enforced_by:
       - sparql:identifier-of-a-person-is-pseudonymous
       - test:test_business_rules.py::test_no_cube_member_exposes_a_pseudonymous_column
@@ -203,3 +329,54 @@ rules:
       - shacl:InputShape
       - prometheus:BusinessInputLate
       - test:test_readiness.py::test_readiness_follows_the_watermarks
+
+  # --- The expanded world: each holds for every row silver didn't flag; rows that break it are kept and flagged
+  # (flag, don't fix), so the dbt tests return only unflagged rows that break the rule.
+  - name: A charge follows its fight, and its outcome follows the charge
+    statement: >
+      A charge is filed on or after the day of the fight it is about, and decided on or after the day it was
+      filed. A source row that breaks this is kept and flagged out_of_order in silver.
+    about: [Charge, Court Outcome, Incident]
+    enforced_by:
+      - dbt:world/world_charges_follow_their_fights
+
+  - name: Only a captured villain is charged
+    statement: >
+      A charge is only ever against a participant who fought on the villains' side and was captured in that fight.
+    about: [Charge, Participant]
+    enforced_by:
+      - dbt:world/world_only_captured_villains_are_charged
+
+  - name: A power is used only while its holder holds it
+    statement: >
+      A power use falls on a day its user held that power: acquired on or before the fight (or on an unknown day),
+      and not lost by then. A temporary or borrowed power can't be used after it's gone. Where the holding a use
+      needs was orphaned or entered under an unresolved duplicate the rule can't be checked; that stays under 1%.
+    about: [Power Use, Power, Participant]
+    enforced_by:
+      - dbt:world/world_powers_are_used_while_held
+
+  - name: A record's conviction is decided on its sentence date
+    statement: >
+      A charge that carries an offender number is that record's conviction (convicted or pleaded guilty), decided
+      on the record's sentence date in silver.hero_offenders, so the expanded world agrees with the course's data.
+    about: [Court Outcome, Offender Record, Offender Number]
+    enforced_by:
+      - dbt:world/world_record_convictions_match_their_sentences
+
+  - name: People in the expanded world are counted by Person Key
+    statement: >
+      A person entered twice is still one person: count people by person_key, never by person_id. Silver flags
+      each extra entry duplicate_person, and world_gold.dim_person has exactly one row per person_key.
+    about: [Person, Person Key]
+    enforced_by:
+      - dbt:world/world_one_gold_person_per_key
+
+  - name: Personal data never reaches gold
+    statement: >
+      No column in gold or world_gold is tagged personal: names, birth dates and notes stay in bronze and silver,
+      and gold carries only keys, codes and measures.
+    about: [Person]
+    enforced_by:
+      - shacl:PersonalStaysOutOfGoldShape
+      - test:test_world_meaning.py::test_personal_data_in_gold_breaks_the_rule
