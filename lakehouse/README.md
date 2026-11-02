@@ -19,7 +19,7 @@ every number matches the Facilitator Guide. dbt builds gold, and Dagster runs it
 | `sql_magic.py` | `%load_ext lakehouse.sql_magic`: jupysql's `%sql` on the lake, read-only as `lake_ro` |
 | `load_lake.py` | Generates the data if needed and lands reference, bronze and silver as one DuckLake snapshot |
 | `tests/test_parity.py` | 19 checks that the lake matches the Facilitator Guide's numbers |
-| `dbt/` | Gold models and tests (dbt-duckdb, attaches DuckLake) |
+| `dbt/` | Gold models and tests (dbt-duckdb, attaches DuckLake), and the expanded world's bronze, silver and gold (`models/world`, tag `world`) |
 | `orchestration/` | Dagster definitions and instance config |
 | `scripts/set-dagster-ui-password.sh` | Puts a login in front of the Dagster UI (it has none of its own) |
 | `scripts/stage_model.py` | Stages session 7's embedding model on the lake disk at a pinned revision (bootstrap.sh runs it) |
@@ -38,7 +38,7 @@ every number matches the Facilitator Guide. dbt builds gold, and Dagster runs it
 | `fuseki/` | Apache Jena Fuseki 6.2.0, built from Apache's verified release: `Dockerfile`, `config.ttl` (one dataset; writes need the writer user), `shiro.ini` (no users; admin only inside the container), `start.sh` |
 | `cube/sync_masks.py` | Makes Cube mask exactly the columns OpenMetadata tags `Sensitivity.Restricted` |
 | `glossary/glossary.yml` | The glossary: 15 terms with definitions, synonyms, columns, metrics and typed relations; `om_sync.py` loads it into OpenMetadata |
-| `universe/` | The expanded world's generator (dataset expansion, in progress; people, places, fights, charges and missions, and their mess with answer keys, so far): one random stream per table chunk, Parquet chunks written in parallel, the S/M/L knob, a fingerprinted manifest, and the check that the course's 100,000 records never change. See [The expanded world](#the-expanded-world-in-progress) |
+| `universe/` | The expanded world's generator (dataset expansion, in progress; people, places, fights, charges and missions, their mess with answer keys, and their lake layers in `dbt/models/world`, so far): one random stream per table chunk, Parquet chunks written in parallel, the S/M/L knob, a fingerprinted manifest, and the check that the course's 100,000 records never change. See [The expanded world](#the-expanded-world-in-progress) |
 | `08_from_lake.ipynb` | Session 8 for the lakehouse: the Trust Test answered in SQL over silver, checked against `gold.trust_test` |
 
 ## Tables
@@ -668,6 +668,48 @@ What stays clean: every table's own ids, `sid_number`, and `disposition.offender
 course's records. The mess has its own random streams, so the clean tables keep their bytes (the manifest proves it),
 and the manifest fingerprints the messy files and keys too. Tests: `pytest lakehouse/tests/test_universe_mess.py`
 (27, against the lake; 9 mutations all caught).
+
+**Chunk 7, the world's lake layers (`dbt/models/world`, `dbt/macros/world.sql`, tag `world`).** dbt reads the messy
+CSVs under var `world_root` (default `/lake/landing/universe/M`) into three new schemas, so nothing the course's
+tables use changes:
+
+| Schema | What's in it |
+| --- | --- |
+| `world_bronze` | The 15 messy CSVs as written: every column VARCHAR (blank as null), plus `_source_file` |
+| `world_silver` | The 15 tables typed and cleaned: every date format read, code spellings mapped to the code list (`seeds/world_codes.csv`, through `code_spellings`), money and numbers read, tokens as null, links resolved (`person_key` for a duplicated person). Flag, don't fix: each row's `issues` lists `{column_name, rule}`, and the view `exceptions` has one row per flagged value: `missing_token`, `two_digit_year`, `orphan`, `out_of_order`, `duplicate_person`, `unparseable` |
+| `world_gold` | `dim_location`, `dim_power`, `dim_team`, `dim_person` (one row per resolved person; no names or birth dates), `fct_incident`, `fct_participation`, `fct_power_use`, `fct_damage`, `fct_charge` (with its court outcome and, on a record's conviction, `offender_number`), `fct_mission`. Every model's contract is enforced |
+
+`world_spec()` in the macros describes every column once; silver and the answer-key tests both use it. Duplicate
+people match on the SID, or on last name, first name, alias and birthday (month, day and two-digit year, so a year
+read into the wrong century still matches). A two-digit year is read with a pivot (00-26 is the 2000s) and flagged,
+since a 1925 birth date written `25` can't be told from 2025.
+
+**Tested against the answer key** (dbt tests in `dbt/tests/world/`): silver equals the clean truth in every cell
+except where the key says it can't (an unknown token lost the value; an orphan, an out-of-order date or a link to a
+duplicate is kept as written and flagged; a two-digit year outside 1927-2026), and silver's `missing_token` and
+`orphan` flags are exactly the key's, its other flags all real. At M: 95% of the 8,877 duplicate people found (99.5%
+of those flagged are right), 98.8% of the 13,808 out-of-order dates (the rest hide behind a token or a missing
+link). The ~200 record convictions whose disposition's `charge_id` was orphaned have no `offender_number` in
+`fct_charge`; silver flags them.
+
+**In Dagster** the world is separate from `daily_lake`:
+
+| What | Builds | When |
+| --- | --- | --- |
+| `world_refresh` job | `landing/world` (runs the generator), then `world_full`: bronze, silver's dimensions and incidents, gold's dimensions, `fct_incident`, `fct_mission` | On demand (about 45 s at M) |
+| `world_monthly_job` | `world_monthly`: the six big silver tables and four gold facts, one month per partition from 1996-01 (`incident_month`; fights with an unknown date, and links to a missing fight, are rebuilt on every run so none is dropped), then the answer-key tests | `world_monthly_job_schedule`, 05:30 Central on the 1st, for the month just closed |
+
+A backfill runs as one dbt call over its whole range (about 2 min for all 370 months at M). After a `world_refresh`:
+
+```bash
+docker compose --profile core exec -T dagster-daemon dagster job execute -f lakehouse/orchestration/definitions.py \
+  -j world_monthly_job --tags '{"dagster/asset_partition_range_start": "1996-01-01", "dagster/asset_partition_range_end": "2026-10-01"}'
+```
+
+The monthly tables say which partition run last wrote each row (`_partition`). CI's dbt check leaves the world out
+(`--exclude tag:world`); `pytest lakehouse/tests/test_world_lake.py` builds an S world and runs `dbt build
+--select tag:world` on a temporary lake instead (5 tests; 11 mutations all caught). At M the world adds about 1 GB
+to `/lake/data`.
 
 ## Test status
 

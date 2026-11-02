@@ -1,0 +1,119 @@
+table_name,column_name,code
+location,kind,city
+location,kind,district
+location,kind,site
+location,site_type,Airport
+location,site_type,Bank
+location,site_type,Bridge
+location,site_type,Casino
+location,site_type,Custody Unit
+location,site_type,Embassy
+location,site_type,Harbor Pier
+location,site_type,Lab
+location,site_type,Mall
+location,site_type,Museum
+location,site_type,Park
+location,site_type,Power Plant
+location,site_type,Rail Yard
+location,site_type,Reservoir
+location,site_type,Stadium
+location,site_type,Tower
+location,site_type,Warehouse
+power,tier,ALPHA
+power,tier,BETA
+power,tier,DELTA
+power,tier,OMEGA
+power,permanence,artifact
+power,permanence,permanent
+power,permanence,temporary
+power,category,ability
+power,category,gear
+power,category,skill
+team,side,hero
+team,side,villain
+team,stg_group,A.I.M.
+team,stg_group,Brotherhood of Mutants
+team,stg_group,HYDRA
+team,stg_group,Hellfire Club
+team,stg_group,Injustice League
+team,stg_group,Intergang
+team,stg_group,League of Assassins
+team,stg_group,Legion of Doom
+team,stg_group,Masters of Evil
+team,stg_group,Serpent Society
+team,stg_group,Sinister Six
+team,stg_group,The Hand
+person,role,civilian
+person,role,hero
+person,role,secondary_hero
+person,role,villain
+person,gender,F
+person,gender,M
+person_power,source,accident
+person_power,source,artifact
+person_power,source,borrowed
+person_power,source,innate
+person_power,source,serum
+person_power,source,temporary
+person_power,source,training
+team_member,status,Confirmed
+team_member,status,Former
+team_member,status,Suspected
+team_member,status,Unverified
+team_member,status,leader
+team_member,status,member
+incident,incident_type,abduction
+incident,incident_type,breakout
+incident,incident_type,heist
+incident,incident_type,rampage
+incident,incident_type,robbery
+incident,incident_type,sabotage
+incident,incident_type,standoff
+incident,incident_type,street fight
+incident,outcome,captured
+incident,outcome,escaped
+incident,outcome,partial
+participant,side,civilian
+participant,side,hero
+participant,side,villain
+participant,role,accomplice
+participant,role,bystander
+participant,role,fighter
+participant,role,leader
+participant,role,support
+participant,role,victim
+participant,role,witness
+participant,status,captured
+participant,status,escaped
+participant,status,injured
+participant,status,rescued
+participant,status,unharmed
+damage,asset_type,building
+damage,asset_type,infrastructure
+damage,asset_type,personal property
+damage,asset_type,public property
+damage,asset_type,utility
+damage,asset_type,vehicle
+damage,repair_status,assessed
+damage,repair_status,in repair
+damage,repair_status,repaired
+damage,repair_status,written off
+disposition,outcome,acquitted
+disposition,outcome,convicted
+disposition,outcome,dismissed
+disposition,outcome,pending
+disposition,outcome,pleaded guilty
+mission,mission_type,escort
+mission,mission_type,investigation
+mission,mission_type,patrol
+mission,mission_type,pursuit
+mission,mission_type,raid
+mission,mission_type,rescue
+mission,mission_type,stakeout
+mission,status,aborted
+mission,status,completed
+mission,status,failed
+mission,status,ongoing
+mission_member,role,lead
+mission_member,role,member
+mission_member,role,support

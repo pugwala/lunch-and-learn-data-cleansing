@@ -18,8 +18,9 @@
 #   compose     compose.yaml validates against a dummy .env made from .env.example (nothing printed: -q)
 #   load        the generator and the course's cleansing load a plain DuckDB file (the sandbox lake)
 #   readiness   closes.py syncs the declared inputs and plays the units' closes
-#   dbt         dbt build on the sandbox lake (--target local): every model and test
-#   parity      the 19 checks against the Facilitator Guide's numbers, on the sandbox lake
+#   dbt         dbt build on the sandbox lake (--target local): every model and test but the expanded world's
+#   parity      the 19 checks against the Facilitator Guide's numbers, and lakehouse/tests (the world's dbt build
+#               at scale S among them: test_world_lake.py), on the sandbox lake
 #   dagster     dagster definitions validate: the definitions load (what a compile can't catch)
 # Exits 1 if any check fails, after running them all.
 set -uo pipefail
@@ -120,7 +121,7 @@ check compose compose_validates
 check load sandbox python -c 'from lakehouse import lake; print(lake.run())'
 check readiness sandbox sh -c 'python lakehouse/readiness/closes.py sync && python lakehouse/readiness/closes.py simulate'
 check dbt sandbox dbt build --project-dir lakehouse/dbt --profiles-dir lakehouse/dbt --target local \
-  --target-path "$WORK/dbt-target" --log-path "$WORK/dbt-logs"
+  --target-path "$WORK/dbt-target" --log-path "$WORK/dbt-logs" --exclude tag:world
 check parity sandbox python -m pytest -q -p no:cacheprovider lakehouse/tests
 check dagster sandbox dagster definitions validate -f lakehouse/orchestration/definitions.py
 

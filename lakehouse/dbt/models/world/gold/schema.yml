@@ -1,0 +1,382 @@
+version: 2
+
+# The expanded world's gold (dataset expansion, chunk 7): enforced contracts (every column named and typed, so a
+# change to a model that breaks a reader fails the build), keys unique and not null, links checked as warnings
+# (an orphan in silver stays an orphan here, flagged has_issues), and the codes the products count by.
+models:
+- name: wg_dim_location
+  description: 'One row per place: a city, a district or a site (custody units are sites with their unit_code).'
+  config:
+    contract:
+      enforced: true
+  columns:
+  - name: location_id
+    data_type: bigint
+    data_tests:
+    - unique
+    - not_null
+  - name: kind
+    data_type: varchar
+  - name: name
+    data_type: varchar
+  - name: parent_id
+    data_type: bigint
+  - name: city_id
+    data_type: bigint
+  - name: site_type
+    data_type: varchar
+  - name: unit_code
+    data_type: varchar
+  - name: latitude
+    data_type: double
+  - name: longitude
+    data_type: double
+- name: wg_dim_person
+  description: One row per person, duplicates resolved (person_key, the lowest person_id among a person's entries). No names
+    or birth dates, which stay in world_silver.person.
+  config:
+    contract:
+      enforced: true
+  columns:
+  - name: person_key
+    data_type: bigint
+    description: The person, duplicates resolved (world_gold.dim_person).
+    data_tests:
+    - unique
+    - not_null
+  - name: sid_number
+    data_type: bigint
+  - name: role
+    data_type: varchar
+  - name: is_core
+    data_type: boolean
+  - name: gender
+    data_type: varchar
+  - name: home_location_id
+    data_type: bigint
+  - name: entries
+    data_type: integer
+- name: wg_dim_power
+  description: One row per power in the catalog.
+  config:
+    contract:
+      enforced: true
+  columns:
+  - name: power_id
+    data_type: bigint
+    data_tests:
+    - unique
+    - not_null
+  - name: name
+    data_type: varchar
+  - name: tier
+    data_type: varchar
+  - name: permanence
+    data_type: varchar
+  - name: category
+    data_type: varchar
+- name: wg_dim_team
+  description: 'One row per team: hero leagues and villain groups (the STG groups among them).'
+  config:
+    contract:
+      enforced: true
+  columns:
+  - name: team_id
+    data_type: bigint
+    data_tests:
+    - unique
+    - not_null
+  - name: name
+    data_type: varchar
+  - name: side
+    data_type: varchar
+  - name: stg_group
+    data_type: varchar
+  - name: founded_on
+    data_type: date
+  - name: base_location_id
+    data_type: bigint
+- name: wg_fct_incident
+  description: One row per fight. incident_month is the Dagster partition its participants, power uses, damages and charges
+    are built in (null when the date was an unknown token).
+  config:
+    contract:
+      enforced: true
+  columns:
+  - name: incident_id
+    data_type: bigint
+    data_tests:
+    - unique
+    - not_null
+  - name: incident_month
+    data_type: date
+    description: First day of the fight's month; the Dagster partition. Null when the fight's date is unknown.
+  - name: started_at
+    data_type: timestamp
+  - name: duration_min
+    data_type: bigint
+  - name: location_id
+    data_type: bigint
+    data_tests:
+    - relationships:
+        arguments:
+          to: ref('wg_dim_location')
+          field: location_id
+        config:
+          severity: warn
+  - name: city_id
+    data_type: bigint
+  - name: incident_type
+    data_type: varchar
+  - name: outcome
+    data_type: varchar
+    data_tests:
+    - accepted_values:
+        arguments:
+          values:
+          - captured
+          - partial
+          - escaped
+  - name: bystanders_injured
+    data_type: bigint
+  - name: bystanders_killed
+    data_type: bigint
+  - name: has_issues
+    data_type: boolean
+    description: Silver flagged something on this row (world_silver.exceptions says what).
+- name: wg_fct_participation
+  description: One row per person in a fight, built one month at a time.
+  config:
+    contract:
+      enforced: true
+  columns:
+  - name: participant_id
+    data_type: bigint
+    data_tests:
+    - unique
+    - not_null
+  - name: incident_id
+    data_type: bigint
+    data_tests:
+    - relationships:
+        arguments:
+          to: ref('wg_fct_incident')
+          field: incident_id
+        config:
+          severity: warn
+  - name: incident_month
+    data_type: date
+    description: First day of the fight's month; the Dagster partition. Null when the fight's date is unknown.
+  - name: person_key
+    data_type: bigint
+    description: The person, duplicates resolved (world_gold.dim_person).
+    data_tests:
+    - relationships:
+        arguments:
+          to: ref('wg_dim_person')
+          field: person_key
+        config:
+          severity: warn
+  - name: side
+    data_type: varchar
+    data_tests:
+    - accepted_values:
+        arguments:
+          values:
+          - villain
+          - hero
+          - civilian
+  - name: role
+    data_type: varchar
+  - name: status
+    data_type: varchar
+  - name: has_issues
+    data_type: boolean
+    description: Silver flagged something on this row (world_silver.exceptions says what).
+- name: wg_fct_power_use
+  description: One row per power used in a fight, built one month at a time.
+  config:
+    contract:
+      enforced: true
+  columns:
+  - name: power_use_id
+    data_type: bigint
+    data_tests:
+    - unique
+    - not_null
+  - name: incident_id
+    data_type: bigint
+    data_tests:
+    - relationships:
+        arguments:
+          to: ref('wg_fct_incident')
+          field: incident_id
+        config:
+          severity: warn
+  - name: incident_month
+    data_type: date
+    description: First day of the fight's month; the Dagster partition. Null when the fight's date is unknown.
+  - name: participant_id
+    data_type: bigint
+  - name: power_id
+    data_type: bigint
+    data_tests:
+    - relationships:
+        arguments:
+          to: ref('wg_dim_power')
+          field: power_id
+        config:
+          severity: warn
+  - name: tier
+    data_type: varchar
+  - name: effectiveness
+    data_type: float
+  - name: has_issues
+    data_type: boolean
+    description: Silver flagged something on this row (world_silver.exceptions says what).
+- name: wg_fct_damage
+  description: One row per damage assessment, built one month at a time.
+  config:
+    contract:
+      enforced: true
+  columns:
+  - name: damage_id
+    data_type: bigint
+    data_tests:
+    - unique
+    - not_null
+  - name: incident_id
+    data_type: bigint
+    data_tests:
+    - relationships:
+        arguments:
+          to: ref('wg_fct_incident')
+          field: incident_id
+        config:
+          severity: warn
+  - name: incident_month
+    data_type: date
+    description: First day of the fight's month; the Dagster partition. Null when the fight's date is unknown.
+  - name: asset_type
+    data_type: varchar
+  - name: cost_usd
+    data_type: bigint
+  - name: insured
+    data_type: boolean
+  - name: insurance_paid_usd
+    data_type: bigint
+  - name: repair_status
+    data_type: varchar
+  - name: repaired_on
+    data_type: date
+  - name: days_to_repair
+    data_type: integer
+  - name: has_issues
+    data_type: boolean
+    description: Silver flagged something on this row (world_silver.exceptions says what).
+- name: wg_fct_charge
+  description: One row per charge with its court outcome, built one month at a time. offender_number links a record's conviction
+    to today's offender records.
+  config:
+    contract:
+      enforced: true
+  columns:
+  - name: charge_id
+    data_type: bigint
+    data_tests:
+    - unique
+    - not_null
+  - name: incident_id
+    data_type: bigint
+    data_tests:
+    - relationships:
+        arguments:
+          to: ref('wg_fct_incident')
+          field: incident_id
+        config:
+          severity: warn
+  - name: incident_month
+    data_type: date
+    description: First day of the fight's month; the Dagster partition. Null when the fight's date is unknown.
+  - name: participant_id
+    data_type: bigint
+  - name: person_key
+    data_type: bigint
+    description: The person, duplicates resolved (world_gold.dim_person).
+    data_tests:
+    - relationships:
+        arguments:
+          to: ref('wg_dim_person')
+          field: person_key
+        config:
+          severity: warn
+  - name: offense_code
+    data_type: varchar
+  - name: filed_on
+    data_type: date
+  - name: outcome
+    data_type: varchar
+    data_tests:
+    - accepted_values:
+        arguments:
+          values:
+          - convicted
+          - pleaded guilty
+          - acquitted
+          - dismissed
+          - pending
+  - name: decided_on
+    data_type: date
+  - name: is_conviction
+    data_type: boolean
+  - name: offender_number
+    data_type: varchar
+  - name: has_issues
+    data_type: boolean
+    description: Silver flagged something on this row (world_silver.exceptions says what).
+- name: wg_fct_mission
+  description: One row per hero mission, with how many went.
+  config:
+    contract:
+      enforced: true
+  columns:
+  - name: mission_id
+    data_type: bigint
+    data_tests:
+    - unique
+    - not_null
+  - name: mission_type
+    data_type: varchar
+  - name: team_id
+    data_type: bigint
+    data_tests:
+    - relationships:
+        arguments:
+          to: ref('wg_dim_team')
+          field: team_id
+        config:
+          severity: warn
+  - name: target_team_id
+    data_type: bigint
+  - name: location_id
+    data_type: bigint
+    data_tests:
+    - relationships:
+        arguments:
+          to: ref('wg_dim_location')
+          field: location_id
+        config:
+          severity: warn
+  - name: started_on
+    data_type: date
+  - name: ended_on
+    data_type: date
+  - name: status
+    data_type: varchar
+  - name: days
+    data_type: integer
+  - name: members
+    data_type: integer
+  - name: has_issues
+    data_type: boolean
+    description: Silver flagged something on this row (world_silver.exceptions says what).

@@ -17,6 +17,13 @@
                            deletes the rest, and pushes the lake's snapshots and size
     notebook_smoke      -> runs the 7 course notebooks and lakehouse/08_from_lake.ipynb weekly (an op job, not
                            an asset, so daily_lake's all-asset selection never picks it up)
+    landing/world       -> the expanded world (lakehouse/universe): clean Parquet, messy CSVs, answer keys
+    world_full (dbt)    -> world_bronze.* (the messy CSVs as written), world_silver's dimensions and incidents,
+                           world_gold's dimensions, fct_incident and fct_mission: job world_refresh, on demand
+    world_monthly (dbt) -> the big facts (participants, power uses, damages, charges, court outcomes, mission
+                           fights) in silver and gold, one month per partition from 1996-01; the answer-key tests
+                           run here. A backfill is one dbt run (single_run); world_monthly_schedule builds each
+                           month once it closes. daily_lake leaves the world out
 
 The parity check is blocking: if the lake stops matching the course's numbers, gold is not rebuilt. That's the
 home-lab version of a Lakeflow expectation set to stop the pipeline. dbt tests carry the same idea down a level:
@@ -24,6 +31,7 @@ error-severity tests fail the run, warn-severity tests (reference lookups, the 9
 
 Runs one at a time (dagster.yaml sets max_concurrent_runs: 1) because DuckLake writers shouldn't race.
 """
+import json
 import os
 import subprocess
 import sys
@@ -142,10 +150,69 @@ class GoldTranslator(DagsterDbtTranslator):
         return dbt_resource_props["config"]["schema"] if dbt_resource_props["resource_type"] == "model" else None
 
 
-@dbt_assets(manifest=dbt_project.manifest_path, project=dbt_project, dagster_dbt_translator=GoldTranslator())
+@dbt_assets(manifest=dbt_project.manifest_path, project=dbt_project, dagster_dbt_translator=GoldTranslator(),
+            exclude="tag:world")
 def gold(context: dg.AssetExecutionContext, dbt: DbtCliResource):
-    """dbt build: every gold model and its tests, streamed to Dagster as materializations and checks."""
+    """dbt build: every gold model and its tests (not the expanded world's), streamed to Dagster as
+    materializations and checks."""
     yield from dbt.cli(["build"], context=context).stream()
+
+
+# ---- The expanded world (dataset expansion, chunk 7) --------------------------------------------------------
+WORLD_SCALE = os.environ.get("WORLD_SCALE", "M")
+WORLD_ROOT = Path(os.environ.get("WORLD_ROOT", f"/lake/landing/universe/{WORLD_SCALE}"))
+WORLD_VARS = {"world_root": str(WORLD_ROOT)}
+world_months = dg.MonthlyPartitionsDefinition(start_date="1996-01-01", timezone="America/Chicago")
+
+
+@dg.asset(key=["landing", "world"], group_name="world", kinds={"python", "parquet"},
+          description="The expanded world (lakehouse/universe): clean Parquet, messy CSVs and answer keys.")
+def world_landing(context: dg.AssetExecutionContext):
+    """Build the expanded world at WORLD_SCALE into WORLD_ROOT (the same seed gives the same bytes), then verify
+    its manifest."""
+    result = subprocess.run([sys.executable, "-m", "lakehouse.universe.build", "--scale", WORLD_SCALE,
+                             "--out", str(WORLD_ROOT)], capture_output=True, text=True, cwd=REPO)
+    context.log.info(result.stdout[-3000:])
+    if result.returncode != 0:
+        raise dg.Failure(description="The world build failed", metadata={"output": (result.stdout + result.stderr)[-3000:]})
+    from lakehouse.universe import manifest
+    built = manifest.read(WORLD_ROOT)
+    return dg.MaterializeResult(metadata={
+        "folder": str(WORLD_ROOT), "scale": WORLD_SCALE,
+        "rows": sum(t["rows"] for t in built["tables"].values()),
+        "defects": sum(e["rows"] for k, e in built["mess"].items() if k.startswith("answer_key/"))})
+
+
+@dbt_assets(manifest=dbt_project.manifest_path, project=dbt_project, dagster_dbt_translator=GoldTranslator(),
+            select="tag:world", exclude="tag:world_monthly+", name="world_full")
+def world_full(context: dg.AssetExecutionContext, dbt: DbtCliResource):
+    """dbt build of the world's full-refresh models: bronze, silver's dimensions and incidents, gold's dimensions,
+    fct_incident and fct_mission. Anything downstream of a monthly model (its tests, the answer-key tests) is left
+    to world_monthly, which runs once these exist."""
+    yield from dbt.cli(["build", "--vars", json.dumps(WORLD_VARS)], context=context).stream()
+
+
+@dbt_assets(manifest=dbt_project.manifest_path, project=dbt_project, dagster_dbt_translator=GoldTranslator(),
+            select="tag:world_monthly", name="world_monthly", partitions_def=world_months,
+            backfill_policy=dg.BackfillPolicy.single_run())
+def world_monthly(context: dg.AssetExecutionContext, dbt: DbtCliResource):
+    """dbt build of the world's big facts for the partition's months (vars world_from, world_to: a backfill is one
+    run over its whole range), with the answer-key tests."""
+    window = context.partition_time_window
+    month_vars = {**WORLD_VARS, "world_from": f"{window.start:%Y-%m-%d}", "world_to": f"{window.end:%Y-%m-%d}"}
+    yield from dbt.cli(["build", "--vars", json.dumps(month_vars)], context=context).stream()
+
+
+WORLD_ASSETS = dg.AssetSelection.assets(world_landing, world_full, world_monthly)
+world_refresh = dg.define_asset_job(
+    "world_refresh", selection=dg.AssetSelection.assets(world_landing, world_full),
+    description="Build the expanded world, then its bronze, dimensions and incidents. Then backfill world_monthly.")
+world_monthly_job = dg.define_asset_job(
+    "world_monthly_job", selection=dg.AssetSelection.assets(world_monthly), partitions_def=world_months,
+    description="The world's big facts for one month (or a backfill's range, in one run), and the answer-key tests.")
+world_monthly_schedule = dg.build_schedule_from_partitioned_job(
+    world_monthly_job, hour_of_day=5, minute_of_hour=30, default_status=dg.DefaultScheduleStatus.RUNNING,
+    description="05:30 Central on the 1st: the month that just closed.")
 
 
 OM_KEY = dg.AssetKey(["openmetadata", "lake"])
@@ -360,11 +427,11 @@ def monitoring_selftest():
     selftest_op()
 
 
-daily_lake = dg.define_asset_job("daily_lake", selection=dg.AssetSelection.all(),
+daily_lake = dg.define_asset_job("daily_lake", selection=dg.AssetSelection.all() - WORLD_ASSETS,
                                  description="Load reference, bronze and silver, check parity, build gold, "
                                              "sync OpenMetadata, refresh Fuseki.")
 regenerate_lake = dg.define_asset_job(
-    "regenerate_lake", selection=dg.AssetSelection.all(),
+    "regenerate_lake", selection=dg.AssetSelection.all() - WORLD_ASSETS,
     description="Same as daily_lake, but rebuild the CSV from the seed first.",
     config={"ops": {"load_lake": {"config": {"regenerate": True}}}})
 
@@ -462,9 +529,11 @@ notebook_smoke_schedule = dg.ScheduleDefinition(
     description="Sundays 06:00 Central, an hour after daily_lake, so the notebooks see a fresh lake.")
 
 defs = dg.Definitions(
-    assets=[load_lake, readiness_inputs, gold, openmetadata_lake, fuseki_glossary, data_quality, data_products],
-    jobs=[daily_lake, regenerate_lake, notebook_smoke, monitoring_selftest, lake_housekeeping],
-    schedules=[daily_schedule, notebook_smoke_schedule, lake_housekeeping_schedule],
+    assets=[load_lake, readiness_inputs, gold, openmetadata_lake, fuseki_glossary, data_quality, data_products,
+            world_landing, world_full, world_monthly],
+    jobs=[daily_lake, regenerate_lake, notebook_smoke, monitoring_selftest, lake_housekeeping, world_refresh,
+          world_monthly_job],
+    schedules=[daily_schedule, notebook_smoke_schedule, lake_housekeeping_schedule, world_monthly_schedule],
     sensors=[push_run_success, push_run_failure],
     resources={"dbt": DbtCliResource(project_dir=dbt_project)},
 )

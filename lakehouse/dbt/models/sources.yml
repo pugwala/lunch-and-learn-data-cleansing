@@ -106,3 +106,12 @@ sources:
         description: >
           Every close a business unit reported: complete through a month-end, by whom, when (closes.py report).
           Append-only; the latest report per input counts.
+
+  - name: landing
+    schema: landing
+    description: >
+      Files the lake reads in place. world is the expanded world's build (lakehouse/universe, Dagster asset
+      landing/world): clean Parquet, the messy CSVs bronze loads, and the answer keys the world tests check against,
+      under var world_root.
+    tables:
+      - name: world

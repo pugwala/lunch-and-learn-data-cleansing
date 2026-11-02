@@ -1,6 +1,9 @@
 # Gold layer for the home-lab lakehouse. Reads silver and ref (written by lakehouse/load_lake.py),
 # writes gold. Run inside the jupyter or dagster containers:
-#   dbt build --project-dir lakehouse/dbt --profiles-dir lakehouse/dbt
+#   dbt build --project-dir lakehouse/dbt --profiles-dir lakehouse/dbt --exclude tag:world
+# The expanded world (models/world, tag:world) has its own bronze, silver and gold, read from the generator's
+# messy CSVs under var world_root; Dagster builds it separately, its big facts one month at a time:
+#   dbt build --project-dir lakehouse/dbt --profiles-dir lakehouse/dbt --select tag:world
 name: lakehouse_gold
 version: "1.0.0"
 config-version: 2
@@ -9,6 +12,10 @@ profile: lakehouse
 model-paths: ["models"]
 test-paths: ["tests"]
 macro-paths: ["macros"]
+seed-paths: ["seeds"]
+
+vars:
+  world_root: /lake/landing/universe/M   # the expanded world's build (lakehouse/universe), messy CSVs and keys
 target-path: target
 clean-targets: ["target", "logs"]
 
@@ -24,6 +31,22 @@ models:
       readiness:
         +materialized: view      # live: a business unit's close shows on the next query, with no rebuild
         +schema: mart_readiness
+    world:
+      +tags: ["world"]
+      bronze:
+        +materialized: table
+        +schema: world_bronze
+      silver:
+        +materialized: table
+        +schema: world_silver
+      gold:
+        +materialized: table
+        +schema: world_gold
+
+seeds:
+  lakehouse_gold:
+    +schema: world_silver
+    +tags: ["world"]
 
 tests:
   lakehouse_gold:
