@@ -24,6 +24,10 @@
 #   parity      the 19 checks against the Facilitator Guide's numbers, and lakehouse/tests (the world's dbt build
 #               at scale S among them: test_world_lake.py), on the sandbox lake
 #   dagster     dagster definitions validate: the definitions load (what a compile can't catch)
+#   cube_addon  Cube's own image lists the model files cube.js loads: course1/ (the Trust Test) only while
+#               LAKEHOUSE_COURSE1 is on (course 1's add-on, lakehouse/course1_addon.py)
+#   standalone  course 2's platform without course 1's add-on: dbt build and dagster definitions validate with
+#               LAKEHOUSE_COURSE1=off
 # Exits 1 if any check fails, after running them all.
 set -uo pipefail
 
@@ -106,6 +110,22 @@ sandbox() {
      PYTHONPATH="$REPO" PATH="$WORK/venv/bin:$PATH" "$@")
 }
 
+# cube_models SWITCH: the model files cube.js hands Cube with LAKEHOUSE_COURSE1=SWITCH, asked of Cube's own image.
+cube_models() {
+  docker run --rm -e LAKEHOUSE_COURSE1="$1" -v "$REPO/lakehouse/cube:/cube/conf:ro" --entrypoint node \
+    "cubejs/cube:$(image_tag cubejs/cube)" -e "require('/cube/conf/cube.js').repositoryFactory().dataSchemaFiles()
+      .then((files) => console.log(files.map((f) => f.fileName).join(' ')))"
+}
+
+# cube_addon_follows_switch: with the add-on on, Cube gets course1/trust_test.yml and the core model; off, only the
+# core model.
+cube_addon_follows_switch() {
+  local on off
+  on=$(cube_models on) && off=$(cube_models off) || return 1
+  echo "on: $on"; echo "off: $off"
+  [[ $on == *course1/trust_test.yml* && $on == *model/custody.yml* && $off != *course1/* && $off == *model/custody.yml* ]]
+}
+
 echo "Lakehouse checks"
 copy_tree
 REPO=$WORK/repo
@@ -128,6 +148,10 @@ check dbt sandbox dbt build --project-dir lakehouse/dbt --profiles-dir lakehouse
   --target-path "$WORK/dbt-target" --log-path "$WORK/dbt-logs" --exclude tag:world
 check parity sandbox python -m pytest -q -p no:cacheprovider lakehouse/tests
 check dagster sandbox dagster definitions validate -f lakehouse/orchestration/definitions.py
+check cube_addon cube_addon_follows_switch
+check standalone sandbox env LAKEHOUSE_COURSE1=off sh -c 'dbt build --project-dir lakehouse/dbt \
+  --profiles-dir lakehouse/dbt --target local --target-path "$0/dbt-target-off" --log-path "$0/dbt-logs-off" \
+  --exclude tag:world && dagster definitions validate -f lakehouse/orchestration/definitions.py' "$WORK"
 
 echo
 if [ ${#FAILED[@]} = 0 ]; then echo "All lakehouse checks passed."; else echo "${#FAILED[@]} failed: ${FAILED[*]}"; exit 1; fi

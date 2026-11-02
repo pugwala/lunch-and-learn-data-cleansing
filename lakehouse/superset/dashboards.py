@@ -6,8 +6,9 @@
 bootstrap.sh runs it in the jupyter container, as Superset's admin, after the lake has data. Every chart reads a
 cube from the Cube database that superset/start.sh registers, so dashboards only ever see the governed model.
 Running it again changes nothing: each object is found by name first and only written when it differs.
-Three dashboards, each a spec in DASHBOARDS: the Trust Test; Custody (the custody data products' views); and
-Fights, Damage and Courts (the expanded world's products: Field Operations and Justice). Product charts use Cube's
+Three dashboards, each a spec in DASHBOARDS: the Trust Test (course 1's add-on, lakehouse/course1_addon.py: built
+only while LAKEHOUSE_COURSE1 is on); Custody (the custody data products' views); and Fights, Damage and Courts (the
+expanded world's products: Field Operations and Justice). Product charts use Cube's
 own MEASURE(...) as their metric, so people are still counted as distinct SIDs or person keys, by Cube. Each
 dashboard's status table lists its own products, read from their descriptors (lakehouse/products/) by domain.
 """
@@ -193,7 +194,7 @@ def latest_table(groupby, metric):
 
 PEOPLE = measure("people_in_custody", "People in custody")
 DASHBOARDS = [
-    {"title": TRUST_DASHBOARD, "slug": TRUST_SLUG, "intro": TRUST_INTRO,
+    {"title": TRUST_DASHBOARD, "slug": TRUST_SLUG, "intro": TRUST_INTRO, "addon": "course1",
      "charts": [{"name": TRUST_CHART, "cell": "scorecard", "table": TRUST_TABLE, "viz": "table", "spec": trust_table,
                  "height": 60,
                  "description": "The Trust Test, answered from a default load and from the cleansed, typed data."}],
@@ -256,6 +257,14 @@ DASHBOARDS = [
               "damage": ["Damage cost per month (USD)", "Uninsured damage by asset type (USD)"],
               "courts": ["Convictions per month", "Charges by court outcome"]}},
 ]
+
+
+def dashboards() -> list:
+    """The dashboards to build: every spec in DASHBOARDS, less course 1's add-on (the Trust Test) while
+    LAKEHOUSE_COURSE1 is off."""
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    from lakehouse import course1_addon
+    return [d for d in DASHBOARDS if d.get("addon") != "course1" or course1_addon.enabled()]
 
 
 def ensure_chart(api, chart, ds_id, check):
@@ -337,7 +346,7 @@ def main(argv):
     check = "--check" in argv
     api = login()
     db_id, bad, datasets = cube_database(api), [], {}
-    for spec in DASHBOARDS:
+    for spec in dashboards():
         states, ids = {}, {}
         for chart in spec["charts"]:
             if chart["table"] not in datasets:
@@ -351,7 +360,7 @@ def main(argv):
             print(f"  {name}: {state}")
         gaps = sum(state in ("missing", "out of date") for state in states.values())
         bad += [f"{spec['title']} ({gaps} of {len(states)} objects)"] if gaps else []
-    print(f"Superset dashboards ({', '.join(d['title'] for d in DASHBOARDS)}): "
+    print(f"Superset dashboards ({', '.join(d['title'] for d in dashboards())}): "
           f"{'needs ' + ', '.join(bad) if bad else 'in place'}")
     return 1 if bad else 0
 

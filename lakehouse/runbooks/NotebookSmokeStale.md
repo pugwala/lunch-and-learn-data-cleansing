@@ -7,6 +7,10 @@
 The Sunday run of the seven course notebooks and `08_from_lake.ipynb` hasn't passed in over a week, so nobody has
 proved lately that the notebooks still run in the lakehouse's Jupyter.
 
+The job is part of course 1's add-on (`lakehouse/course1_addon.py`). The alert only counts while the daily run
+reports the add-on on (`lakehouse_course1_addon_enabled` 1); with `LAKEHOUSE_COURSE1=off` there is no job and no
+alert.
+
 ## What to check
 
 1. Dagster, Runs, `notebook_smoke`: the last one, and its log naming the notebook that failed.

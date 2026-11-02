@@ -25,6 +25,10 @@ models:
     gold:
       +materialized: table
       +schema: gold
+    course1:   # course 1's add-on (lakehouse/course1_addon.py): the Trust Test, built only while LAKEHOUSE_COURSE1 is on
+      +enabled: "{{ env_var('LAKEHOUSE_COURSE1', 'on') | trim | lower != 'off' }}"
+      +materialized: table
+      +schema: gold
     marts:
       custody:
         +materialized: table

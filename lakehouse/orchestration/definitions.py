@@ -17,7 +17,8 @@
     lake_housekeeping   -> weekly (Sundays 03:30 Central): housekeeping.py keeps 30 days of DuckLake history and
                            deletes the rest, and pushes the lake's snapshots and size
     notebook_smoke      -> runs the 7 course notebooks and lakehouse/08_from_lake.ipynb weekly (an op job, not
-                           an asset, so daily_lake's all-asset selection never picks it up)
+                           an asset, so daily_lake's all-asset selection never picks it up); course 1's add-on
+                           (lakehouse/course1_addon.py), so only while LAKEHOUSE_COURSE1 is on
     landing/world       -> the expanded world (lakehouse/universe): clean Parquet, messy CSVs, answer keys
     world_full (dbt)    -> world_bronze.* (the messy CSVs as written), world_silver's dimensions and incidents,
                            world_gold's dimensions, fct_incident and fct_mission: job world_refresh, on demand
@@ -26,7 +27,9 @@
                            run here. A backfill is one dbt run (single_run); world_monthly_schedule builds each
                            month once it closes. daily_lake leaves the world out
 
-The parity check is blocking: if the lake stops matching the course's numbers, gold is not rebuilt. That's the
+The parity check is blocking: if the lake stops matching the course's numbers, gold is not rebuilt. It is part of
+course 1's add-on, so with LAKEHOUSE_COURSE1 off it isn't declared (the load still refuses a handoff that isn't the
+pinned one). That's the
 home-lab version of a Lakeflow expectation set to stop the pipeline. dbt tests carry the same idea down a level:
 error-severity tests fail the run, warn-severity tests (reference lookups, the 95% quality floor) only record.
 
@@ -48,21 +51,27 @@ REPO = Path(__file__).resolve().parents[2]
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
-from lakehouse import lake  # noqa: E402
+from lakehouse import course1_addon, lake  # noqa: E402
 from lakehouse.metrics import push  # noqa: E402
 
 DBT_DIR = REPO / "lakehouse" / "dbt"
 dbt_project = DbtProject(project_dir=DBT_DIR, profiles_dir=DBT_DIR, target=os.environ.get("DBT_TARGET", "lake"))
 
 
+COURSE1 = course1_addon.enabled()   # course 1's add-on (lakehouse/course1_addon.py): LAKEHOUSE_COURSE1 on or off
+
+
 def _manifest_is_stale() -> bool:
-    """True when any dbt source file is newer than the manifest (or there is no manifest yet)."""
+    """True when any dbt source file is newer than the manifest, when the manifest was parsed with course 1's add-on
+    the other way (flipping LAKEHOUSE_COURSE1 changes no file), or when there is no manifest yet."""
     manifest = dbt_project.manifest_path
     if not manifest.exists():
         return True
     sources = [DBT_DIR / "dbt_project.yml", DBT_DIR / "profiles.yml",
                *(f for folder in ("models", "macros", "tests") for f in (DBT_DIR / folder).rglob("*") if f.is_file())]
-    return max(f.stat().st_mtime for f in sources) > manifest.stat().st_mtime
+    if max(f.stat().st_mtime for f in sources) > manifest.stat().st_mtime:
+        return True
+    return ("model.lakehouse_gold.trust_test" in json.loads(manifest.read_text())["nodes"]) != COURSE1
 
 
 # Re-parse only when the models changed: the webserver, the daemon and every run load this file, and
@@ -81,6 +90,9 @@ LOADED_TABLES = {
 }
 SILVER_KEY = dg.AssetKey(["silver", "hero_offenders"])
 PARITY_CHECK = "matches_course_numbers"
+# Course 1's add-on: the blocking parity check (the 19 Facilitator Guide numbers), declared only while it's on.
+PARITY_SPECS = [dg.AssetCheckSpec(PARITY_CHECK, asset=SILVER_KEY, blocking=True,
+                                  description="All 19 lakehouse/tests checks match FACILITATOR_GUIDE.md")] if COURSE1 else []
 
 
 @dg.multi_asset(
@@ -88,8 +100,7 @@ PARITY_CHECK = "matches_course_numbers"
     specs=[dg.AssetSpec(dg.AssetKey([schema, table]), group_name=schema, kinds={"duckdb", "python"},
                         description=lake.TABLE_COMMENTS.get(f"{schema}.{table}"))
            for schema, tables in LOADED_TABLES.items() for table in tables],
-    check_specs=[dg.AssetCheckSpec(PARITY_CHECK, asset=SILVER_KEY, blocking=True,
-                                   description="All 19 lakehouse/tests checks match FACILITATOR_GUIDE.md")],
+    check_specs=PARITY_SPECS,
 )
 def load_lake(context: dg.AssetExecutionContext):
     """Land course 1's pinned handoff as ref, bronze and silver (lake.run), report each table, push the load's
@@ -117,10 +128,14 @@ def load_lake(context: dg.AssetExecutionContext):
          metrics["records_with_exceptions"], {}),
         ("lakehouse_load_seconds", "How long the latest load took.", metrics["seconds"], {}),
         ("lakehouse_load_finished_timestamp_seconds", "When the latest load finished.",
-         metrics["finished_at"].timestamp(), {})])
+         metrics["finished_at"].timestamp(), {}),
+        ("lakehouse_course1_addon_enabled", "1 while course 1's add-on (LAKEHOUSE_COURSE1) is on, else 0.",
+         int(COURSE1), {})])
     if error:
         context.log.warning(error)
 
+    if not COURSE1:
+        return
     result = subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider",
                              str(REPO / "lakehouse" / "tests")], capture_output=True, text=True, cwd=REPO)
     summary = (result.stdout.strip().splitlines() or ["no output"])[-1]
@@ -541,12 +556,14 @@ notebook_smoke_schedule = dg.ScheduleDefinition(
     default_status=dg.DefaultScheduleStatus.RUNNING,
     description="Sundays 06:00 Central, an hour after daily_lake, so the notebooks see a fresh lake.")
 
+# Course 1's add-on (lakehouse/course1_addon.py): the weekly notebook run, only while it's on.
+COURSE1_JOBS, COURSE1_SCHEDULES = ([notebook_smoke], [notebook_smoke_schedule]) if COURSE1 else ([], [])
+
 defs = dg.Definitions(
     assets=[load_lake, readiness_inputs, gold, openmetadata_lake, fuseki_glossary, data_quality, data_products,
             world_landing, world_full, world_monthly],
-    jobs=[daily_lake, notebook_smoke, monitoring_selftest, lake_housekeeping, world_refresh,
-          world_monthly_job],
-    schedules=[daily_schedule, notebook_smoke_schedule, lake_housekeeping_schedule, world_refresh_schedule,
+    jobs=[daily_lake, *COURSE1_JOBS, monitoring_selftest, lake_housekeeping, world_refresh, world_monthly_job],
+    schedules=[daily_schedule, *COURSE1_SCHEDULES, lake_housekeeping_schedule, world_refresh_schedule,
                world_monthly_schedule],
     sensors=[push_run_success, push_run_failure],
     resources={"dbt": DbtCliResource(project_dir=dbt_project)},

@@ -70,7 +70,11 @@ groups:
           runbook_url: https://github.com/pugwala/lunch-and-learn-data-cleansing/blob/duckdb-lakehouse/lakehouse/runbooks/DailyLakeStale.md
           summary: "daily_lake hasn't succeeded in 26 hours: gold is stale"
       - alert: NotebookSmokeStale
-        expr: time() - lakehouse_job_last_success_timestamp_seconds{pipeline="notebook_smoke"} > 8 * 86400
+        # Course 1's add-on (lakehouse/course1_addon.py): only while the daily run reports it on, so turning it off
+        # doesn't leave the weekly job's last success alerting forever.
+        expr: >
+          time() - lakehouse_job_last_success_timestamp_seconds{pipeline="notebook_smoke"} > 8 * 86400
+          and on() lakehouse_course1_addon_enabled == 1
         labels: {severity: warning}
         annotations:
           runbook_url: https://github.com/pugwala/lunch-and-learn-data-cleansing/blob/duckdb-lakehouse/lakehouse/runbooks/NotebookSmokeStale.md

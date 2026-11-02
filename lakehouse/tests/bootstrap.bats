@@ -313,6 +313,15 @@ set_env()       { sed -i "/^$1=/d" "$ENV"; [ $# = 1 ] || echo "$1=$2" >> "$ENV";
   not_called "handoff.publish"
 }
 
+@test "with course 1's add-on off, session 7's model isn't staged" {
+  set_env LAKEHOUSE_COURSE1 off
+  FAKE_MODEL_EXIT=1
+  run_bootstrap
+  [ "$status" -eq 0 ]
+  [[ $output == *"course 1's add-on is off"* ]]
+  not_called "stage_model.py"
+}
+
 @test "--check reports a missing handoff without publishing it" {
   FAKE_HANDOFF_EXIT=1
   run_bootstrap --check

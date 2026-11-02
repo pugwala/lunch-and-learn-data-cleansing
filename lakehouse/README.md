@@ -120,7 +120,7 @@ What it does, in order:
 6. **Lake data and meaning.** Publishes course 1's pinned handoff if it isn't there yet (`handoff/publish.py`: the
    same bytes as the lock), runs the loader if silver or `ref.null_tokens` is missing, stages session 7's model,
    replaces OpenMetadata's default admin password, runs `om_sync.py`, `om_to_rdf.py` (Fuseki's graphs), `ontology/check_rules.py` (the business rules), then
-   `cube/sync_masks.py` (restarting Cube if the masks changed), builds the Trust Test and Custody dashboards, and
+   `cube/sync_masks.py` (restarting Cube if the masks changed), builds the Trust Test (with course 1's add-on on) and Custody dashboards, and
    makes Home Lakehouse Grafana's home page.
 7. **Proof.** Waits for every health check, runs the 19 parity tests, and checks that every site answers through
    Caddy, on the Tailscale name with certificate checking on, so an untrusted certificate fails.
@@ -640,14 +640,39 @@ Two consumers, neither of which runs course 1's code:
   world built from the handoff is byte-identical to the one built from the lake, at scale S (45 files) and M (75
   files, 16.5M rows).
 
-Tests scan `lake.py` and `universe/` so neither can reach into course 1 again. Still to come: course 1's material
-(the Trust Test dashboard, the parity gate, `notebook_smoke`) as an optional add-on (Priority 4).
+Tests scan `lake.py` and `universe/` so neither can reach into course 1 again.
 
 Tests: `pytest lakehouse/tests/test_handoff.py` (9: every table and fingerprint, the 19 numbers on the published
 files, a miss publishes nothing, a fresh publish matches the lock byte for byte, the generator still makes the pinned
 source, the contract covers every table, a changed type or a repeated key isn't adopted, a good version is) and
 `test_lake_load.py` (6: every table lands as it is, bronze's metadata, the load's numbers, the 19 numbers on the
 landed lake, a changed handoff isn't loaded, `lake.py` runs none of course 1's code).
+
+## Course 1's add-on
+
+Course 2's platform stands on its own; course 1's teaching material rides on it as an **add-on**, switched by one
+setting in `.env`: `LAKEHOUSE_COURSE1=on` (the default) or `off`. Any other value stops the tools that read it, so a
+typo can't quietly drop the add-on. `course1_addon.py` names every piece, and each tool honours the switch its own
+way:
+
+| Piece | Tool | How the switch reaches it |
+| --- | --- | --- |
+| `gold.trust_test` and its tests | dbt | `models/course1/`, enabled in `dbt_project.yml` only while on |
+| The `trust_test` cube | Cube | `cube/course1/`, which `cube.js` (its `repositoryFactory`) loads only while on |
+| The Trust Test dashboard | Superset | `dashboards.py` builds it only while on |
+| The blocking parity check (the 19 numbers) on `load_lake` | Dagster | declared only while on |
+| The weekly `notebook_smoke` job and schedule, with `08_from_lake.ipynb` | Dagster | declared only while on; `NotebookSmokeStale` counts only while the daily run reports `lakehouse_course1_addon_enabled` 1 |
+| Session 7's embedding model | `bootstrap.sh` | staged only while on |
+
+Course 1's handed-over data still lands either way (`silver.trust_test` among it); the add-on is what's built on
+top. With it off, dbt builds every other model, Dagster loads, and `ci/checks.sh` proves both (`standalone`), and
+that Cube's own image loads `course1/` only while on (`cube_addon`). Turning it off on a running lab stops building
+the pieces but doesn't remove what they built before: drop `gold.trust_test`, delete the Trust Test dashboard in
+Superset, and restart Cube.
+
+Tests: `pytest lakehouse/tests/test_course1_addon.py` (10: the switch, the list of pieces, Dagster, dbt and Superset
+each way, Cube's folder, the alert) and one bats test (no model staged while off), all seen failing first; 8
+mutations caught.
 
 ## The expanded world (in progress)
 
@@ -859,7 +884,7 @@ on a copy of the working tree (never `.env`, never dbt's `target/`), in about a 
 - **Static checks:** a virtualenv with the lakehouse's pins (installed only from releases before the image's
   `PIP_CUTOFF`); every Python file compiles and every YAML file parses; the docstring test; the SHACL shapes and
   SPARQL rules parse.
-- **The 70 bats tests,** and promtool and amtool on the monitoring config.
+- **The 71 bats tests,** and promtool and amtool on the monitoring config.
 - **`compose.yaml`** checked against a dummy `.env` (nothing printed).
 - **A sandbox lake:** publish course 1's handoff into a sandbox folder (it must match the lock byte for byte),
   load it, sync and simulate readiness, `dbt build` with every test, and the 19 parity checks, all on a
@@ -875,7 +900,7 @@ only says there's nothing to check. Its first run passed all 14 checks on a GitH
 | --- | --- |
 | Loader, 19 parity checks, DuckLake on Postgres, image build, Postgres roles | On the VM |
 | Dagster webserver and daemon with Postgres storage, their healthchecks, Caddy basic auth | On the VM |
-| `scripts/bootstrap.sh`: 64 bats tests (`bats lakehouse/tests/bootstrap.bats`, needs `apt install bats`), each shown to fail when the behaviour it covers is broken | On the VM, with stub commands; never touches the live stack |
+| `scripts/bootstrap.sh`: 65 bats tests (`bats lakehouse/tests/bootstrap.bats`, needs `apt install bats`), each shown to fail when the behaviour it covers is broken | On the VM, with stub commands; never touches the live stack |
 | dbt gold models and their tests (25 today), Dagster job (both jobs, plus the blocking check stopping gold) | Sandbox, against a plain DuckDB file |
 | Cube v1.8.3 over gold, read-only as `lake_ro`, restricted columns masked except for `restricted_reader`: 15 acceptance tests (`pytest lakehouse/acceptance/test_cube.py`); unmasking everyone made 8 of them fail | On the VM |
 | Superset 6.1.0 under `/superset`, Cube as its only database, the Trust Test and Custody dashboards (the world's dashboard is in `test_world_products.py`): 9 acceptance tests (`pytest lakehouse/acceptance/test_superset.py`); the only-Cube check was shown to fail with a decoy database added, the Custody chart checks failed before the dashboard existed, and `--check` exits 1 on a changed layout | On the VM |
@@ -898,7 +923,7 @@ only says there's nothing to check. Its first run passed all 14 checks on a GitH
 | Alerting (Alertmanager 0.34.1, 27 rules): 9 acceptance tests (`pytest lakehouse/acceptance/test_alerting.py`), each seen failing first; a failed `monitoring_selftest` raised `JobFailing`, ntfy got it at high priority on the selftest topic, and a passing run resolved it, at low priority | On the VM |
 | Alert delivery (ntfy 2.30.0 on port 8443, deny-all, three declared users, the lakehouse template): 7 acceptance tests (`pytest lakehouse/acceptance/test_ntfy.py`), each seen failing first; the Watchdog heartbeat arrives at min priority | On the VM |
 | Runbooks (23 pages, `runbook_url` on every rule, the link in each ntfy notification): 7 acceptance tests (`pytest lakehouse/acceptance/test_runbooks.py`), each seen failing first, and the end-to-end alert test now requires the link in the notification; every file a page names must exist | On the VM |
-| CI checks (`lakehouse/ci/checks.sh`, and the `lakehouse-ci` workflow on GitHub): 15 checks (the `handoff` check added 2026-11-02), all green on the VM in 73 s and on a GitHub runner; `dagster definitions validate` shown to fail on a copy of the definitions with the `deps=` mistake put back | On the VM |
+| CI checks (`lakehouse/ci/checks.sh`, and the `lakehouse-ci` workflow on GitHub): 17 checks (`handoff`, then `cube_addon` and `standalone`, added 2026-11-02), all green on the VM in 73 s and on a GitHub runner; `dagster definitions validate` shown to fail on a copy of the definitions with the `deps=` mistake put back | On the VM |
 | Off-machine backups (`offsite-backup`, restic 0.19.1, the monthly drill, four alerts) and the full restore drill (`backup/restore_drill.sh`): 5 acceptance tests (`pytest lakehouse/acceptance/test_offsite_backup.py`), 5 bats tests for the target and the password, 6 bats tests for the drill (`bats lakehouse/tests/restore_drill.bats`), each seen failing first. The first backup and drill succeeded (330 files identical), and the full drill passed the 19 parity checks on the restored lake | On the VM |
 | Lake housekeeping (`housekeeping.py`, the weekly `lake_housekeeping` job, `LakeHousekeepingStale`): 8 acceptance tests (`pytest lakehouse/acceptance/test_housekeeping.py`), each seen failing first; the deleting steps are tested on a scratch DuckLake, where history went from every snapshot to just the current one with today's data unchanged, a dry run changed nothing, and a planted orphan file was deleted | On the VM |
 | Nightly catalog backup: 6 acceptance tests (`pytest lakehouse/acceptance/test_backup.py`), each seen failing first; a restore drill matched the live catalog row for row | On the VM |
@@ -908,6 +933,7 @@ only says there's nothing to check. Its first run passed all 14 checks on a GitH
 | Custody mart (`mart_custody`, enforced contracts): 7 acceptance tests (`test_custody_marts.py`) and 3 dbt tests, each seen failing first; a deliberate type change was refused by dbt | On the VM |
 | Custody products on Cube (three views; the MCP server picks the view that has the dimension): 10 acceptance tests (`test_custody_cube.py`), each seen failing first | On the VM |
 | Product descriptors, OpenMetadata domain, data products and contracts, DCAT in Fuseki, product freshness and coverage alerts: 17 acceptance tests (`test_products.py`, one per product where a test checks each), each seen failing first; a made-up view in a descriptor failed its test, and a 30-hour-old refresh fired `DataProductStale` | On the VM |
+| Course 1's add-on (`LAKEHOUSE_COURSE1`: dbt, Cube, Superset, Dagster, the notebook alert, bootstrap): 10 tests in `test_course1_addon.py` and 1 bats test, seen failing first; 8 mutations caught. `checks.sh` builds dbt and loads Dagster with it off, and asks Cube's image which files it loads both ways; the live lab (on) passed `daily_lake` and every acceptance test as before | On the VM |
 | Course 1's handoff (`handoff/`: publish, the 19 numbers on the files, the contract, adopt, the lock; `universe` and the daily load reading from it): 9 tests in `test_handoff.py`, 6 in `test_lake_load.py` and 4 in `test_universe.py`, seen failing first (the code scan named 14 places `universe` reached into course 1); 12 mutations all caught. The world built from the handoff is byte-identical to the lake-built one at S and M, and the lake landed from it matched every ref, bronze and silver table from before | On the VM |
 | The world's data products (three descriptors, two domains, two inputs, four Cube views, monthly contracts, the Fights, Damage and Courts dashboard, freshness from Dagster materializations): 19 acceptance tests (`test_world_products.py`), all seen failing first; 7 mutations all caught | On the VM |
 

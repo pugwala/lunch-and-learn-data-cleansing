@@ -15,6 +15,7 @@ x-lake-env: &lake-env
   HF_HOME: /lake/models/huggingface   # session 7's model, staged at a pinned revision by bootstrap.sh
   HF_HUB_OFFLINE: "1"                # notebooks never download from Hugging Face
   PYTHONPATH: /home/jovyan/course     # a notebook in any folder can import lakehouse (and lnl)
+  LAKEHOUSE_COURSE1: ${LAKEHOUSE_COURSE1:-on}   # course 1's add-on (lakehouse/course1_addon.py): on or off
 
 x-om-env: &om-env   # OpenMetadata server and its migration step share these settings
   BASE_PATH: /openmetadata             # served at https://<LAKE_TS_HOST>/openmetadata/
@@ -179,6 +180,7 @@ services:
       CUBEJS_DEV_MODE: "false"
       CUBEJS_CACHE_AND_QUEUE_DRIVER: memory   # no Cube Store until pre-aggregations are needed
       CUBEJS_TELEMETRY: "false"
+      LAKEHOUSE_COURSE1: ${LAKEHOUSE_COURSE1:-on}   # cube.js loads cube/course1/ (the Trust Test) only while on
       PGPASSWORD: ${LAKE_RO_PASSWORD:?set LAKE_RO_PASSWORD in .env}   # read-only role, and only that one
     volumes:
       - ./cube:/cube/conf:ro

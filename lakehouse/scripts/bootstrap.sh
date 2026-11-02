@@ -291,7 +291,10 @@ fi
 
 # Session 7's embedding model lives on the lake disk (HF_HOME) at a pinned revision, and the notebooks run offline.
 # Only this one command may download, so it turns HF_HUB_OFFLINE off for itself.
-if dc exec -T jupyter python lakehouse/scripts/stage_model.py --check >/dev/null 2>&1; then ok "embedding model staged"
+# It belongs to course 1's add-on (lakehouse/course1_addon.py), so with LAKEHOUSE_COURSE1=off it isn't needed.
+if [ "$(env_val LAKEHOUSE_COURSE1 | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')" = off ]; then
+  ok "course 1's add-on is off: session 7's embedding model isn't needed"
+elif dc exec -T jupyter python lakehouse/scripts/stage_model.py --check >/dev/null 2>&1; then ok "embedding model staged"
 elif [ $CHECK = 1 ]; then bad "embedding model not staged (run bootstrap.sh without --check)"
 else model=$(dc exec -T -e HF_HUB_OFFLINE=0 jupyter python lakehouse/scripts/stage_model.py 2>&1) \
        && did "$(echo "$model" | tail -1)" || bad "embedding model: $(echo "$model" | tail -1)"

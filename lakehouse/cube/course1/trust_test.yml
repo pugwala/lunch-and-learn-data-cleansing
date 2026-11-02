@@ -1,3 +1,4 @@
+# Course 1's add-on (lakehouse/course1_addon.py): cube.js loads this folder only while LAKEHOUSE_COURSE1 is on.
 # The Trust Test scorecard from gold: eight questions, each answered from a default load and from the cleansed,
 # typed data. Aggregates only, so nothing here needs masking.
 cubes:
