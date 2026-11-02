@@ -1,0 +1,30 @@
+# Every data source the lakehouse ingests, and the tags its tables get the moment they land (lakehouse/tagging).
+#
+# Registering a source here is how its data gets governed: every table it lands (tables: patterns, schema.table)
+# gets its governance tags, a Source tag and its refresh, and tables built from it inherit the governance and Source
+# tags through dbt's lineage. people says whether its rows describe people; the column rules (rules.yml) only run on
+# tables that do. A table no source claims is still scanned: safer to look than to assume.
+sources:
+  - name: course1-handoff
+    title: Course 1's hero offender records, raw and cleansed (lakehouse/handoff)
+    tag: Course1Cleansing
+    governance: [CJIS]
+    refresh: Daily
+    people: true
+    tables: [bronze.*, silver.*]
+
+  - name: course1-reference
+    title: Course 1's reference data, crosswalks and code lists (lakehouse/handoff)
+    tag: Course1Reference
+    governance: []
+    refresh: Daily
+    people: false
+    tables: [ref.*]
+
+  - name: world-generator
+    title: The expanded world's deliveries, messy CSVs from lakehouse/universe
+    tag: WorldGenerator
+    governance: [CJIS]
+    refresh: Monthly
+    people: true
+    tables: [world_bronze.*]

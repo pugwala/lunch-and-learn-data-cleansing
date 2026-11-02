@@ -22,6 +22,7 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from lakehouse import lake  # noqa: E402
+from lakehouse.tagging import tags as tagger  # noqa: E402
 
 OM = os.environ.get("OM_URL", "http://openmetadata-server:8585/openmetadata") + "/api/v1"
 LAKEHOUSE = Path(__file__).resolve().parents[1]
@@ -29,6 +30,8 @@ SERVICE, DATABASE, GLOSSARY, CLASSIFICATION = "lakehouse", "lake", "Lakehouse", 
 SCHEMAS = ("ref", "bronze", "silver", "gold", "ops", "mart_custody", "mart_readiness",
            "world_bronze", "world_silver", "world_gold")
 SENSITIVITY_TAGS = {"restricted": "Restricted", "personal": "Personal"}
+EXCLUSIVE_FAMILIES = {"Layer", "Refresh"}   # a table has one layer and one refresh; any number of the others
+OM_PII = "PII.Sensitive"   # OpenMetadata's own PII tag, added to every column the tagger finds personal
 TYPES = {"VARCHAR": "STRING", "BIGINT": "BIGINT", "INTEGER": "INT", "SMALLINT": "SMALLINT", "DOUBLE": "DOUBLE",
          "FLOAT": "FLOAT", "DATE": "DATE", "TIME": "TIME", "BOOLEAN": "BOOLEAN", "TIMESTAMP": "TIMESTAMP",
          "TIMESTAMP WITH TIME ZONE": "TIMESTAMPZ"}
@@ -168,8 +171,35 @@ def lake_tables():
     return tables
 
 
-def column_entity(name, dtype, doc, glossary_links):
-    """An OpenMetadata column: mapped type, dbt description, sensitivity tag and glossary-term links."""
+def lake_tags():
+    """The tagger's results (tagging/tags.py, written by the daily run's governance/tags step):
+    ({(schema, table): [tag]}, {(schema, table, column): [tag]}); both empty before its first run."""
+    con = lake.lake_ro_connect()
+    try:
+        found = {r[0] for r in con.sql("SELECT table_name FROM information_schema.tables WHERE table_catalog = 'lake' "
+                                       "AND table_schema = 'ops'").fetchall()}
+        if not {"table_tags", "column_tags"} <= found:
+            return {}, {}
+        table_tags, column_tags = {}, {}
+        for schema, table, tag in con.sql("SELECT table_schema, table_name, tag FROM lake.ops.table_tags "
+                                          "ORDER BY ALL").fetchall():
+            table_tags.setdefault((schema, table), []).append(tag)
+        for schema, table, column, tag in con.sql("SELECT DISTINCT table_schema, table_name, column_name, tag "
+                                                  "FROM lake.ops.column_tags ORDER BY ALL").fetchall():
+            column_tags.setdefault((schema, table, column), []).append(tag)
+        return table_tags, column_tags
+    finally:
+        con.close()
+
+
+def automated(tags):
+    """OpenMetadata tag labels for tags the tagger set: Automated, so they're told apart from hand-set ones."""
+    return [{"tagFQN": t, "source": "Classification", "labelType": "Automated", "state": "Confirmed"} for t in tags]
+
+
+def column_entity(name, dtype, doc, glossary_links, found=()):
+    """An OpenMetadata column: mapped type, dbt description, sensitivity tag, glossary-term links, and the tagger's
+    PIIType tags (found) with OpenMetadata's own PII.Sensitive."""
     col = {"name": name, "dataTypeDisplay": dtype.lower(), "description": doc.get("description", "")}
     m = re.fullmatch(r"DECIMAL\((\d+),\s*(\d+)\)", dtype)
     if m:
@@ -182,6 +212,7 @@ def column_entity(name, dtype, doc, glossary_links):
                      "labelType": "Manual", "state": "Confirmed"})
     tags += [{"tagFQN": f"{GLOSSARY}.{term}", "source": "Glossary", "labelType": "Manual", "state": "Confirmed"}
              for term in sorted(glossary_links.get(name, []))]
+    tags += automated(sorted(found) + ([OM_PII] if any(t.startswith("PIIType.") for t in found) else []))
     col["tags"] = tags
     return col
 
@@ -224,6 +255,17 @@ def sensitivity(s):
         s.ensure("tags", f"{CLASSIFICATION}.{name}", {"classification": CLASSIFICATION, "name": name,
                                                       "description": about},
                  lambda e: (e["name"], text(e.get("description"))))
+
+
+def tag_vocabulary(s):
+    """The tagger's tag families (tagging/rules.yml, tagging/sources.yml) as classifications, each with its tags."""
+    for family, f in tagger.families().items():
+        s.ensure("classifications", family, {"name": family, "description": f["description"],
+                                             "mutuallyExclusive": family in EXCLUSIVE_FAMILIES},
+                 lambda e: (e["name"], text(e.get("description")), bool(e.get("mutuallyExclusive"))))
+        for name, about in f["tags"].items():
+            s.ensure("tags", f"{family}.{name}", {"classification": family, "name": name, "description": about},
+                     lambda e: (e["name"], text(e.get("description"))))
 
 
 def custom_properties(s):
@@ -285,21 +327,26 @@ def tables(s):
         s.ensure("databaseSchemas", f"{SERVICE}.{DATABASE}.{schema}",
                  {"name": schema, "database": f"{SERVICE}.{DATABASE}"}, lambda e: e["name"])
     docs, links = dbt_docs(), term_links()
+    table_tags, column_tags = lake_tags()
     for (schema, table), columns in sorted(lake_tables().items()):
         doc = docs.get((schema, table), {})
         description = doc.get("description") or lake.TABLE_COMMENTS.get(f"{schema}.{table}", "")
         here = {n: links.get(n, []) + links.get(f"{schema}.{table}.{n}", []) for n, _ in columns}
-        cols = [column_entity(n, d, doc.get("columns", {}).get(n, {}), here) for n, d in columns]
+        cols = [column_entity(n, d, doc.get("columns", {}).get(n, {}), here, column_tags.get((schema, table, n), []))
+                for n, d in columns]
         body = {"name": table, "databaseSchema": f"{SERVICE}.{DATABASE}.{schema}", "tableType": "Regular",
-                "description": description, "columns": cols}
+                "description": description, "columns": cols, "tags": automated(table_tags.get((schema, table), []))}
         wanted = {c["name"]: {x["tagFQN"] for x in c["tags"]} for c in cols}
+        wanted_table = {x["tagFQN"] for x in body["tags"]}
         # Tags the repo wants are a floor, not a ceiling: a steward's tag added in OpenMetadata (PUT merges tags,
         # so it survives) and the tags a glossary term passes on (labelType Derived) aren't differences.
         s.ensure("tables", f"{SERVICE}.{DATABASE}.{schema}.{table}", body, fields="columns,tags",
-                 compare=lambda e, wanted=wanted: (text(e.get("description")),
-                                                   [(c["name"], c["dataType"], text(c.get("description")),
-                                                     sorted({x["tagFQN"] for x in c.get("tags") or []}
-                                                            & wanted.get(c["name"], set()))) for c in e["columns"]]))
+                 compare=lambda e, wanted=wanted, wanted_table=wanted_table: (
+                     text(e.get("description")),
+                     sorted({x["tagFQN"] for x in e.get("tags") or []} & wanted_table),
+                     [(c["name"], c["dataType"], text(c.get("description")),
+                       sorted({x["tagFQN"] for x in c.get("tags") or []} & wanted.get(c["name"], set())))
+                      for c in e["columns"]]))
 
 
 def product_descriptors():
@@ -391,7 +438,7 @@ def products(s):
 def main(argv):
     """Sync (or --check) everything; print what differed and a summary line."""
     s = Sync(check="--check" in argv)
-    for step in (relation_types, sensitivity, custom_properties, glossary, tables, products):
+    for step in (relation_types, sensitivity, tag_vocabulary, custom_properties, glossary, tables, products):
         step(s)
     for what in s.drift:
         print(f"  {'differs' if s.check else 'updated'}: {what}")

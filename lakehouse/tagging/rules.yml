@@ -1,0 +1,65 @@
+# What the tagger (lakehouse/tagging/tags.py) looks for in each column, and the tag vocabulary it publishes.
+#
+# A column rule matches by the column's name (column: a regular expression for the whole name) or by its values
+# (values: what a sample of the column's text must look like). Rules only run on tables whose rows describe people
+# (sources.yml: people). Each tag the tagger sets says which rule set it and why, so a steward can check it.
+#
+# Tag families. OpenMetadata already has system classifications called PII and PersonalData, so the column family
+# is PIIType; om_sync.py also adds OpenMetadata's own PII.Sensitive to every column with a PIIType tag.
+families:
+  Governance:
+    description: Rules that govern a whole table, set by the source it came from or inherited through lineage.
+    tags:
+      CJIS: Criminal justice information (the FBI CJIS Security Policy's term). Mock data here, handled as if real.
+      PII: Holds personal data, at least one column tagged PIIType.
+  PIIType:
+    description: The kind of personal data a column holds, found by a rule in lakehouse/tagging/rules.yml.
+  Source:
+    description: Which ingested source a table came from (lakehouse/tagging/sources.yml), directly or by lineage.
+  Layer:
+    description: Where a table sits in the lakehouse.
+    tags:
+      Bronze: Landed as delivered.
+      Silver: Cleansed and typed, every record kept.
+      Gold: Built for reporting from silver.
+      Reference: Reference data, such as crosswalks and code lists.
+      Operations: The lakehouse's own records about its runs.
+  Refresh:
+    description: How often a source lands new data.
+    tags:
+      Daily: Lands every day.
+      Monthly: Lands once a month.
+
+rules:
+  - name: person_name
+    tag: PIIType.PersonName
+    why: A person's name or alias.
+    column: '(last_name|first_name|middle_name|alias)(_std)?'
+  - name: birth_date
+    tag: PIIType.BirthDate
+    why: A person's date of birth.
+    column: 'date_of_birth|birth_date|dob'
+  - name: person_identifier
+    tag: PIIType.PersonIdentifier
+    why: Identifies a person or their record directly (state ID, offender number).
+    column: 'sid_number|offender_number'
+  - name: pseudonym
+    tag: PIIType.Pseudonym
+    why: A stand-in key for a person, meaningless alone but linking everything about them.
+    column: 'person_key|person_id'
+  - name: demographic
+    tag: PIIType.Demographic
+    why: Race, ethnicity, religion or gender, special-category data.
+    column: '(race|ethnicity|religion|gender)(_.*)?'
+  - name: affiliation
+    tag: PIIType.Affiliation
+    why: Membership of a security threat group.
+    column: 'stg_.*'
+  - name: as_written
+    tag: PIIType.AsWritten
+    why: Raw values copied from other columns as written, personal ones included (birth dates, race codes).
+    column: 'value_as_written'
+  - name: free_text
+    tag: PIIType.FreeText
+    why: Text people wrote (mostly six words or more, and varied), which can name anyone and say anything.
+    values: {min_words: 6, share: 0.5, distinct: 0.1, min_values: 100}

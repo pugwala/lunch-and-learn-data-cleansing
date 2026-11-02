@@ -6,7 +6,9 @@
                            declared inputs, the fictional units' closes, and each input's days late, pushed
     gold (dbt build)    -> gold.dim_*, gold.fct_offender_record, gold.dq_scorecard, the marts (custody, and the
                            readiness view), plus dbt tests
-    openmetadata/lake   -> om_sync.py after gold, so OpenMetadata knows today's tables; a non-blocking check that
+    governance/tags     -> tagging/tags.py after gold: governance and metadata tags for every table and column
+                           (ops.table_tags, ops.column_tags), as data lands
+    openmetadata/lake   -> om_sync.py after gold and the tags, so OpenMetadata knows today's tables; a non-blocking check that
                            Cube's masks still match OpenMetadata's Restricted tags
     fuseki/glossary     -> om_to_rdf.py: OpenMetadata's glossary and column tags as RDF in Fuseki, with the rulebook
                            and deduced facts; check business_rules_hold (ontology/shapes.ttl), pushed to Prometheus
@@ -233,14 +235,41 @@ OM_KEY = dg.AssetKey(["openmetadata", "lake"])
 MASKS_CHECK = "cube_masks_match_openmetadata"
 
 
+TAGS_KEY = dg.AssetKey(["governance", "tags"])
+
+
+@dg.asset(
+    key=TAGS_KEY, group_name="governance", kinds={"duckdb", "python"}, deps=[*load_lake.keys, *gold.keys],
+    description="Governance and metadata tags for every lake table and column, set as data lands "
+                "(lakehouse/tagging): ops.table_tags and ops.column_tags, which om_sync.py publishes.",
+)
+def governance_tags(context: dg.AssetExecutionContext):
+    """Tag the lake (tagging/tags.py: sources, column rules, lineage, layers), log and report the counts, and push
+    them to Prometheus."""
+    from lakehouse.tagging import tags
+    counts = tags.tag_lake()
+    context.log.info(f"Tagged {counts['tables']} tables: {counts['personal_columns']} personal columns, "
+                     f"{counts['pii_tables']} tables with personal data, {counts['cjis_tables']} CJIS tables")
+    error = push("lakehouse_tags", [
+        ("lakehouse_tagged_personal_columns", "Columns the tagger found holding personal data (PIIType).",
+         counts["personal_columns"], {}),
+        ("lakehouse_tagged_tables", "Tables carrying a governance tag, by tag.", counts["pii_tables"], {"tag": "PII"}),
+        ("lakehouse_tagged_tables", "Tables carrying a governance tag, by tag.", counts["cjis_tables"], {"tag": "CJIS"})])
+    if error:
+        context.log.warning(error)
+    return dg.MaterializeResult(metadata=counts)
+
+
 def run_script(*args: str) -> subprocess.CompletedProcess:
     """Run a lakehouse script with this Python, from the repo root; returns the finished process."""
     return subprocess.run([sys.executable, *args], capture_output=True, text=True, cwd=REPO)
 
 
 @dg.asset(
-    key=OM_KEY, group_name="openmetadata", kinds={"openmetadata", "python"}, deps=[*load_lake.keys, *gold.keys],
-    description="The glossary, Sensitivity tags and every lake table in OpenMetadata (om_sync.py).",
+    key=OM_KEY, group_name="openmetadata", kinds={"openmetadata", "python"},
+    deps=[*load_lake.keys, *gold.keys, TAGS_KEY],
+    description="The glossary, Sensitivity tags, the tagger's tags and every lake table in OpenMetadata "
+                "(om_sync.py).",
     check_specs=[dg.AssetCheckSpec(MASKS_CHECK, asset=OM_KEY, blocking=False,
                                    description="Cube masks exactly the columns OpenMetadata tags Restricted")],
 )
@@ -560,7 +589,7 @@ notebook_smoke_schedule = dg.ScheduleDefinition(
 COURSE1_JOBS, COURSE1_SCHEDULES = ([notebook_smoke], [notebook_smoke_schedule]) if COURSE1 else ([], [])
 
 defs = dg.Definitions(
-    assets=[load_lake, readiness_inputs, gold, openmetadata_lake, fuseki_glossary, data_quality, data_products,
+    assets=[load_lake, readiness_inputs, gold, governance_tags, openmetadata_lake, fuseki_glossary, data_quality, data_products,
             world_landing, world_full, world_monthly],
     jobs=[daily_lake, *COURSE1_JOBS, monitoring_selftest, lake_housekeeping, world_refresh, world_monthly_job],
     schedules=[daily_schedule, *COURSE1_SCHEDULES, lake_housekeeping_schedule, world_refresh_schedule,

@@ -16,6 +16,7 @@ cleansing the class uses, so every number matches the Facilitator Guide. dbt bui
 | `postgres/init/` | `01-roles.sh`: `ducklake`, `superset`, `dagster` databases and the `lake_rw` / `lake_ro` roles. `02-dagster.sh`, `03-superset.sh` and `04-openmetadata.sh`: the Dagster, Superset and OpenMetadata roles and databases (safe to re-run) |
 | `jupyter/Dockerfile` | `pyspark-notebook` + course requirements + DuckDB 1.5.6, dbt-duckdb, Dagster; extensions pre-installed. One image for every Python process, so DuckDB versions never drift |
 | `lake.py` | Helpers: `lake_connect()`, `lake_ro_connect()`, `run()` (lands course 1's pinned handoff; runs none of course 1's code) |
+| `tagging/` | Automatic governance and metadata tags as data lands: `sources.yml` (each ingested source, its governance, system and refresh), `rules.yml` (the tag vocabulary and the column rules), `tags.py` (the tagger; writes `ops.table_tags` and `ops.column_tags`) |
 | `handoff/` | The handoff from course 1 to course 2: `publish.py` and `parity.py` (course 1's side: its generator and sessions 2-4, published once the 19 numbers match), `receive.py`, `contract.yml` and `course1.lock.json` (course 2's side: what it accepts, the pinned version, checked before anything is built on it) |
 | `sql_magic.py` | `%load_ext lakehouse.sql_magic`: jupysql's `%sql` on the lake, read-only as `lake_ro` |
 | `load_lake.py` | Lands course 1's pinned handoff as reference, bronze and silver, one DuckLake snapshot |
@@ -674,6 +675,43 @@ Tests: `pytest lakehouse/tests/test_course1_addon.py` (10: the switch, the list 
 each way, Cube's folder, the alert) and one bats test (no model staged while off), all seen failing first; 8
 mutations caught.
 
+## Automatic tags as data lands
+
+Every table and column gets governance and metadata tags automatically, as the daily run lands data
+(`governance/tags`, after gold), so nobody has to remember to tag a new source by hand. People can then find, sort
+and govern data by tag in OpenMetadata. Three things set the tags:
+
+1. **The source.** `tagging/sources.yml` registers each ingested source: the tables it lands, its system, its
+   governance tags and its refresh. Course 1's handoff and the world generator say CJIS (mock data, handled as if
+   real); course 1's reference data says nothing, and that its rows describe no one.
+2. **The column rules.** `tagging/rules.yml` finds personal data by a column's name (names, birth dates, state IDs
+   and offender numbers, pseudonymous keys, race, religion and gender, security threat groups, raw values copied
+   from other columns) or by its values (free text: mostly six words or more, and varied). They only run on tables
+   whose rows describe people.
+3. **Lineage.** A table dbt builds inherits the Governance and Source tags of every source upstream of it, so
+   `gold.dim_person` is CJIS because it is built from course 1's records, and `gold.dim_offense`, built only from
+   reference data, isn't.
+
+Every table also gets its layer (Bronze, Silver, Gold, Reference, Operations), and any personal column makes the
+table Governance.PII. Each tag records how and why it was set, in `ops.table_tags` and `ops.column_tags`, which
+anyone can query. `om_sync.py` publishes them to OpenMetadata as five classifications (Governance, PIIType, Source,
+Layer, Refresh), marked Automated so they're told apart from hand-set ones. Every PIIType column also gets
+OpenMetadata's own `PII.Sensitive` (OpenMetadata already has classifications called PII and PersonalData, hence
+PIIType). Search by tag works: filter tables on `Governance.CJIS` and OpenMetadata finds exactly the 54 the tagger
+marked.
+
+Today it tags 54 CJIS tables, 26 with personal data and 86 personal columns. It finds every one of the 42 columns
+people tagged by hand, plus what they missed: the state ID and offender number, gender, the conduct notes as free
+text, and the exceptions table's `value_as_written`, which holds raw birth dates and race codes. The hand-set
+Sensitivity tags, and the Cube masks they drive, are unchanged. Registering a new source in `sources.yml` is all it
+takes for its tables to be tagged on their first load.
+
+Tests: `pytest lakehouse/tests/test_tagging.py` (33: every rule and its near-misses, free text by its values, the
+sources, lineage, how a table's tags combine, and on course 1's real handoff every hand-tagged column and exactly
+what else) and `pytest lakehouse/acceptance/test_tags.py` (5: all 42 hand-tagged columns in the lake, a landed
+table's tags in OpenMetadata, lineage into gold, search by tag, the vocabulary), all seen failing first; 6 mutations
+caught.
+
 ## The expanded world (in progress)
 
 The course's 100,000 records are a flat list. The expansion builds the world around them, lakehouse-only, about
@@ -933,6 +971,7 @@ only says there's nothing to check. Its first run passed all 14 checks on a GitH
 | Custody mart (`mart_custody`, enforced contracts): 7 acceptance tests (`test_custody_marts.py`) and 3 dbt tests, each seen failing first; a deliberate type change was refused by dbt | On the VM |
 | Custody products on Cube (three views; the MCP server picks the view that has the dimension): 10 acceptance tests (`test_custody_cube.py`), each seen failing first | On the VM |
 | Product descriptors, OpenMetadata domain, data products and contracts, DCAT in Fuseki, product freshness and coverage alerts: 17 acceptance tests (`test_products.py`, one per product where a test checks each), each seen failing first; a made-up view in a descriptor failed its test, and a 30-hour-old refresh fired `DataProductStale` | On the VM |
+| Automatic tags (`tagging/`, the `governance/tags` step, `om_sync.py`'s five classifications): 33 tests in `test_tagging.py` and 5 acceptance tests in `test_tags.py`, seen failing first; 6 mutations caught. Live: 54 CJIS tables, 26 with personal data, 86 personal columns, all 42 hand tags found, search by tag finds exactly the tagged tables, and `om_sync.py --check` is in step | On the VM |
 | Course 1's add-on (`LAKEHOUSE_COURSE1`: dbt, Cube, Superset, Dagster, the notebook alert, bootstrap): 10 tests in `test_course1_addon.py` and 1 bats test, seen failing first; 8 mutations caught. `checks.sh` builds dbt and loads Dagster with it off, and asks Cube's image which files it loads both ways; the live lab (on) passed `daily_lake` and every acceptance test as before | On the VM |
 | Course 1's handoff (`handoff/`: publish, the 19 numbers on the files, the contract, adopt, the lock; `universe` and the daily load reading from it): 9 tests in `test_handoff.py`, 6 in `test_lake_load.py` and 4 in `test_universe.py`, seen failing first (the code scan named 14 places `universe` reached into course 1); 12 mutations all caught. The world built from the handoff is byte-identical to the lake-built one at S and M, and the lake landed from it matched every ref, bronze and silver table from before | On the VM |
 | The world's data products (three descriptors, two domains, two inputs, four Cube views, monthly contracts, the Fights, Damage and Courts dashboard, freshness from Dagster materializations): 19 acceptance tests (`test_world_products.py`), all seen failing first; 7 mutations all caught | On the VM |
