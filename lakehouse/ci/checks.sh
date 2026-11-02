@@ -16,9 +16,9 @@
 #   prometheus  promtool checks prometheus.yml and the alert rules
 #   alertmanager amtool checks alertmanager.yml
 #   compose     compose.yaml validates against a dummy .env made from .env.example (nothing printed: -q)
-#   load        the generator and the course's cleansing load a plain DuckDB file (the sandbox lake)
-#   handoff     course 1 publishes its cleansed output into the sandbox (lakehouse/handoff/publish.py): the 19
-#               numbers pass on the files, which must be byte-identical to course1.lock.json for course 2 to use them
+#   handoff     course 1 publishes its output into the sandbox (lakehouse/handoff/publish.py: its generator and
+#               sessions 2-4, then the 19 numbers on the files), which must be byte-identical to course1.lock.json
+#   load        lake.run lands that handoff in a plain DuckDB file (the sandbox lake)
 #   readiness   closes.py syncs the declared inputs and plays the units' closes
 #   dbt         dbt build on the sandbox lake (--target local): every model and test but the expanded world's
 #   parity      the 19 checks against the Facilitator Guide's numbers, and lakehouse/tests (the world's dbt build
@@ -121,8 +121,8 @@ check prometheus docker run --rm -v "$REPO/lakehouse/monitoring/prometheus:/etc/
 check alertmanager docker run --rm -v "$REPO/lakehouse/monitoring/alertmanager:/etc/alertmanager:ro" --entrypoint amtool \
   "prom/alertmanager:$(image_tag prom/alertmanager)" check-config /etc/alertmanager/alertmanager.yml
 check compose compose_validates
-check load sandbox python -c 'from lakehouse import lake; print(lake.run())'
 check handoff sandbox python -m lakehouse.handoff.publish
+check load sandbox python -c 'from lakehouse import lake; print(lake.run())'
 check readiness sandbox sh -c 'python lakehouse/readiness/closes.py sync && python lakehouse/readiness/closes.py simulate'
 check dbt sandbox dbt build --project-dir lakehouse/dbt --profiles-dir lakehouse/dbt --target local \
   --target-path "$WORK/dbt-target" --log-path "$WORK/dbt-logs" --exclude tag:world

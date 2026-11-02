@@ -5,7 +5,7 @@
 ## What it means
 
 The job named in the `pipeline` label failed its latest run: `daily_lake` (the 05:00 load and everything after
-it), `regenerate_lake`, `notebook_smoke` (weekly notebooks), or `lake_housekeeping` (weekly). Alerts for
+it), `notebook_smoke` (weekly notebooks), or `lake_housekeeping` (weekly). Alerts for
 `monitoring_selftest` are the tests failing it on purpose; they go to a test topic, never the phone.
 
 ## What to check

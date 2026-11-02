@@ -1,9 +1,10 @@
-"""DuckLake lakehouse helpers: land the course data in bronze, silver and reference tables.
+"""DuckLake lakehouse helpers: land course 1's handoff in reference, bronze and silver tables.
 
-Not part of the Databricks course, and deliberately kept out of the lnl package: the course only ever reads
-from lnl, never the other way round. This is the home-lab lakehouse track (see lakehouse/README.md): the same
-generator and the same session 2-4 cleansing, written to a DuckLake catalog instead of a Delta table, so the
-lakehouse and the class always agree on every standardized value.
+Course 2 (this lakehouse) starts where course 1 (the cleansing course) ends: course 1 publishes its cleansed output
+as pinned files (lakehouse/handoff), and run() lands the pinned version as it is, after checking every file against
+the lock. Nothing here runs course 1's code: its generator and sessions 2-4 run on course 1's side, in
+lakehouse/handoff/publish.py, which only publishes when the 19 Facilitator Guide numbers match. So the lakehouse and
+the class still agree on every standardized value.
 
 Where the lake lives comes from two environment variables:
   LAKE_CATALOG    ducklake:postgres:dbname=ducklake host=catalog-pg user=lake_rw   (the real setup)
@@ -21,9 +22,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-import pandas as pd
-
-from lnl import config, env
+from lnl import env
 
 LAKE = "lake"
 SCHEMAS = ["ref", "bronze", "silver", "gold", "ops"]
@@ -31,13 +30,15 @@ SENSITIVE_COLUMNS = ["race", "race_code", "race_omb", "religion", "religion_grou
                      "stg_affiliation", "stg_group", "stg_status"]
 
 TABLE_COMMENTS = {
-    "bronze.hero_offenders_raw": "Generator output exactly as written: every column VARCHAR, nothing converted.",
+    "bronze.hero_offenders_raw": "The raw file course 1 received, exactly as written: every column VARCHAR, nothing "
+                                 "converted. Landed from course 1's handoff, with the load's metadata columns.",
     "bronze.conduct_notes_answer_key": "True sentiment of each conduct note, as written. Scoring only.",
-    "silver.hero_offenders": "Sessions 2-4 applied (lnl.pipeline). offender_number is the BIGINT record key. "
-                             "Ordered codes are VARCHAR with a matching _rank column.",
+    "silver.hero_offenders": "Course 1's cleansed records (its sessions 2-4), landed from its pinned handoff. "
+                             "offender_number is the BIGINT record key. Ordered codes are VARCHAR with a matching "
+                             "_rank column.",
     "silver.hero_offenders_exceptions": "Every value a rule flagged, one row each. Records are never dropped.",
     "silver.conduct_notes_answer_key": "Answer key with offender_number as BIGINT so it joins to silver.",
-    "silver.trust_test": "The course's Trust Test scorecard (lnl.trust): each question answered from a default load "
+    "silver.trust_test": "Course 1's Trust Test scorecard: each question answered from a default load "
                          "and from the cleansed, typed data. Aggregates only.",
     "ops.load_runs": "One row per load: counts, timing and the DuckLake snapshot it produced.",
 }
@@ -124,74 +125,6 @@ def snapshot_id(con):
         return None
 
 
-# ---- Shaping data for the lake -----------------------------------------------------------------
-def to_lake_frame(df: pd.DataFrame) -> pd.DataFrame:
-    """pandas -> types DuckDB keeps. Categories become text; ordered ones get a 1-based _rank column so
-    'G4 and above' still works in SQL (DuckLake has no ENUM type)."""
-    out = df.reset_index() if df.index.name else df.copy()
-    for col in list(out.columns):
-        dtype = out[col].dtype
-        if isinstance(dtype, pd.CategoricalDtype):
-            if dtype.ordered:
-                codes = out[col].cat.codes.astype("Int16") + 1
-                out[f"{col}_rank"] = codes.where(codes > 0)
-            out[col] = out[col].astype("string")
-        elif dtype == object:
-            out[col] = out[col].astype("string")
-    return out
-
-
-def _ids(index_or_series) -> pd.Series:
-    """Padded 8-digit ID text (as the course's people-facing lists use) back to BIGINT."""
-    return pd.to_numeric(pd.Series(index_or_series, dtype="string"), errors="coerce").astype("Int64")
-
-
-def exceptions_table(s2: pd.DataFrame, s3: pd.DataFrame, silver: pd.DataFrame) -> pd.DataFrame:
-    """One row per flagged value, from the course's own exception lists. s2/s3 = the data after sessions 2/3."""
-    from lnl import conversions, domains
-    parts = []
-
-    dom = domains.domain_exceptions(silver)
-    parts.append(pd.DataFrame({"offender_number": _ids(dom.index), "rule": "domain_unmapped",
-                               "column_name": dom["column"].values,
-                               "value_as_written": dom["value as written"].astype("string").values,
-                               "reason": dom["reason"].values}))
-
-    conv = conversions.exceptions(s3)
-    parts.append(pd.DataFrame({"offender_number": _ids(conv.index), "rule": "conversion_failed",
-                               "column_name": conv["column"].values,
-                               "value_as_written": conv["value as written"].astype("string").values,
-                               "reason": "did not convert to its type"}))
-
-    flagged = silver["dob_flag"].dropna()
-    parts.append(pd.DataFrame({"offender_number": pd.Series(flagged.index, dtype="Int64"), "rule": "dob_check",
-                               "column_name": "date_of_birth",
-                               "value_as_written": s2.loc[flagged.index, "date_of_birth"].astype("string").values,
-                               "reason": flagged.astype("string").values}))
-
-    ovc = domains.offense_violence_conflicts(silver)
-    parts.append(pd.DataFrame({"offender_number": _ids(ovc.index), "rule": "offense_violence_conflict",
-                               "column_name": "violence_code_std",
-                               "value_as_written": ovc["violence_code_std"].astype("string").values,
-                               "reason": "violence code disagrees with offense against " +
-                                         ovc["offense_against"].astype("string").values}))
-
-    out = pd.concat(parts, ignore_index=True)
-    out["sid_number"] = out["offender_number"].map(silver["sid_number"]).astype("Int64")
-    return out[["offender_number", "sid_number", "rule", "column_name", "value_as_written", "reason"]]
-
-
-def trust_test_table(naive: pd.DataFrame, typed: pd.DataFrame) -> pd.DataFrame:
-    """The course's Trust Test scorecard (lnl.trust, as notebook 4 builds it), one row per question.
-    naive = a pandas-defaults load (pipeline.load_naive); typed = the data after session 4. Aggregates only."""
-    from lnl import trust
-    card = trust.scorecard(trust.naive_answers(naive), trust.typed_answers(typed))
-    return pd.DataFrame({"question_id": card.index, "question": card["Question"].values,
-                         "as_loaded": card["Session 1 (as loaded)"].values,
-                         "cleansed": card["Session 4 (cleansed + typed)"].values,
-                         "changed": (card["Changed?"] == "yes").values})
-
-
 # ---- Loading ------------------------------------------------------------------------------------
 def _replace(con, table: str, view: str, frame=None) -> None:
     """Replace a lake table with the rows of a view, registering a pandas frame under that view's name first if given."""
@@ -220,77 +153,29 @@ def _write_comments(con) -> None:
         con.execute("ROLLBACK")
 
 
-def load_reference(con) -> int:
-    """Land every course reference CSV as ref.<name> (all text), plus ref.null_tokens; returns how many tables."""
-    count = 0
-    for path in sorted(domains_reference_dir().glob("*.csv")):
-        table = f"ref.{path.stem}"
-        con.execute(f"DROP TABLE IF EXISTS {LAKE}.{table}")
-        con.execute(f"CREATE TABLE {LAKE}.{table} AS SELECT * FROM read_csv(?, all_varchar = true, header = true)",
-                    [str(path)])
-        count += 1
-    # The documented "unknown" codes (lnl.cleaning.NULL_TOKENS), so gold scores missing values the way the course
-    # does without copying the list into SQL.
-    from lnl.cleaning import NULL_TOKENS
-    tokens = pd.DataFrame([(col, token) for col, values in NULL_TOKENS.items() for token in values],
-                          columns=["column_name", "token"])
-    _replace(con, "ref.null_tokens", "null_tokens_df", tokens)
-    return count + 1
-
-
-def domains_reference_dir() -> Path:
-    """The course's folder of reference CSVs (lnl.domains.REFERENCE_DIR)."""
-    from lnl import domains
-    return domains.REFERENCE_DIR
-
-
-def course1_output(regenerate: bool = False) -> tuple:
-    """Course 1's cleansed output, made by its own code: generate the raw file (if needed), then sessions 2-4.
-    Returns (the generator's file paths, {table: frame}) for the four silver tables. The lake loads these; the
-    handoff (lakehouse/handoff/publish.py) publishes them for course 2."""
-    from lnl import cleaning, conversions, dates, pipeline
-    paths = env.generate(force=regenerate)
-    raw = pipeline.load_raw()
-    s2 = cleaning.session2(raw)
-    s3 = dates.session3(s2)
-    silver = conversions.session4(s3)
-    return paths, {
-        "silver.hero_offenders": to_lake_frame(silver),
-        "silver.hero_offenders_exceptions": exceptions_table(s2, s3, silver),
-        "silver.conduct_notes_answer_key": to_lake_frame(pipeline.answer_key()),
-        "silver.trust_test": trust_test_table(pipeline.load_naive(), silver),
-    }
-
-
-def run(regenerate: bool = False) -> dict:
-    """Generate (if needed) and land reference, bronze and silver in one transaction = one snapshot.
+def run() -> dict:
+    """Land course 1's pinned handoff (lakehouse/handoff: checked file by file against the lock first) as ref, bronze
+    and silver in one transaction = one snapshot. Every table lands as published; bronze.hero_offenders_raw also gets
+    the load's metadata (run id, time, and the source course 1 named). Course 1's code isn't run here.
     Comments and the ops.load_runs row follow as two small transactions, so a load is three snapshots."""
+    from lakehouse.handoff import receive
     started = time.time()
     run_id = uuid.uuid4().hex[:12]
-    paths, frames = course1_output(regenerate)
-    silver_frame = frames["silver.hero_offenders"]
-    exc = frames["silver.hero_offenders_exceptions"]
-    key = frames["silver.conduct_notes_answer_key"]
-    trust = frames["silver.trust_test"]
+    handoff = receive.require()
+    lock = receive.read_lock()
+    source = lock["source"]
 
     con = lake_connect()
     con.execute("BEGIN TRANSACTION")
     try:
         ensure_schemas(con)
-        ref_tables = load_reference(con)
-        con.execute(f"""
-            CREATE OR REPLACE TEMP VIEW bronze_src AS
-            SELECT *, {_lit(run_id)} AS _run_id, now() AS _ingested_at, {_lit(paths["data"].name)} AS _source_file,
-                   {int(config.SEED)}::INTEGER AS _seed, {int(env.DATA_VERSION)}::INTEGER AS _data_version
-            FROM read_csv({_lit(paths["data"])}, all_varchar = true, header = true)""")
-        _replace(con, "bronze.hero_offenders_raw", "bronze_src")
-        con.execute("CREATE OR REPLACE TEMP VIEW key_src AS "
-                    f"SELECT * FROM read_csv({_lit(paths['answer_key'])}, all_varchar = true, header = true)")
-        _replace(con, "bronze.conduct_notes_answer_key", "key_src")
-        _replace(con, "silver.hero_offenders", "silver_df", silver_frame)
-        _replace(con, "silver.hero_offenders_exceptions", "exc_df", exc)
-        _replace(con, "silver.conduct_notes_answer_key", "key_df", key)
-        _replace(con, "silver.trust_test", "trust_df", trust)
+        for table, entry in sorted(lock["tables"].items()):
+            files = _lit(handoff / entry["file"])
+            stamp = (f", {_lit(run_id)} AS _run_id, now() AS _ingested_at, {_lit(source['file'])} AS _source_file, "
+                     f"{int(source['seed'])}::INTEGER AS _seed, {int(source['data_version'])}::INTEGER AS _data_version"
+                     if table == "bronze.hero_offenders_raw" else "")
+            con.execute(f"CREATE OR REPLACE TEMP VIEW handoff_src AS SELECT *{stamp} FROM read_parquet({files})")
+            _replace(con, table, "handoff_src")
         con.execute("COMMIT")
     except Exception:
         con.execute("ROLLBACK")
@@ -306,9 +191,10 @@ def run(regenerate: bool = False) -> dict:
         "finished_at": datetime.now(timezone.utc),
         "rows_bronze": con.execute(f"SELECT count(*) FROM {LAKE}.bronze.hero_offenders_raw").fetchone()[0],
         "rows_silver": con.execute(f"SELECT count(*) FROM {LAKE}.silver.hero_offenders").fetchone()[0],
-        "exceptions": len(exc),
-        "records_with_exceptions": int(exc["offender_number"].nunique()),
-        "reference_tables": ref_tables,
+        "exceptions": con.execute(f"SELECT count(*) FROM {LAKE}.silver.hero_offenders_exceptions").fetchone()[0],
+        "records_with_exceptions": con.execute(
+            f"SELECT count(DISTINCT offender_number) FROM {LAKE}.silver.hero_offenders_exceptions").fetchone()[0],
+        "reference_tables": sum(t.startswith("ref.") for t in lock["tables"]),
         "seconds": round(time.time() - started, 1),
         "snapshot_id": data_snapshot,
     }

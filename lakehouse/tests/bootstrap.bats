@@ -15,7 +15,7 @@ setup() {
   make_stubs
   export PATH="$T/bin:$PATH" FAKE_LOG=$T/calls.log
   export FAKE_MOUNT_SRC=/dev/fakelake FAKE_LAKE_DEV='' FAKE_MOUNTED_AT='' FAKE_BUILD_EXIT=0 FAKE_HAVE_DATA=yes
-  export FAKE_CURL_DOWN="" FAKE_DASH_EXIT=0 FAKE_MODEL_EXIT=0 FAKE_MASKS_EXIT=0 FAKE_RULES_EXIT=0
+  export FAKE_CURL_DOWN="" FAKE_DASH_EXIT=0 FAKE_MODEL_EXIT=0 FAKE_MASKS_EXIT=0 FAKE_RULES_EXIT=0 FAKE_HANDOFF_EXIT=0
   export FAKE_MASKS_OUT="Cube masks: in step with OpenMetadata (6 restricted columns masked)"
   export FAKE_PG_UP=""   # what `up -d --wait catalog-pg` prints; Compose says "Recreated" when it replaced the container
   : > "$FAKE_LOG"
@@ -73,6 +73,8 @@ case "$*" in
   *"cube/sync_masks.py"*)                    echo "$FAKE_MASKS_OUT"; exit "$FAKE_MASKS_EXIT" ;;
   *"grafana/set_home.py"*)                   echo "Grafana home: Home Lakehouse"; exit 0 ;;
   *"superset/dashboards.py"*)                 echo "Superset dashboards (Trust Test, Custody): in place"; exit "$FAKE_DASH_EXIT" ;;
+  *"handoff.receive check"*)                [ "$FAKE_HANDOFF_EXIT" = 0 ] && echo "v2 matches the lock" || echo "silver.hero_offenders (silver.hero_offenders.parquet): missing"; exit "$FAKE_HANDOFF_EXIT" ;;
+  *"handoff.publish"*)                      echo "Published v2 to /lake/landing/handoff/course1/v2: 13 tables, 19 of 19 numbers match" ;;
   *"exec -T jupyter python"*)                cat >/dev/null; echo "$FAKE_HAVE_DATA" ;;
   *pytest*)                                  echo "19 passed in 0.10s" ;;
   *"run --rm load-lake"*)                    echo "Loaded run fake: 100,000 silver rows" ;;
@@ -293,6 +295,30 @@ set_env()       { sed -i "/^$1=/d" "$ENV"; [ $# = 1 ] || echo "$1=$2" >> "$ENV";
   run_bootstrap
   [ "$status" -eq 0 ]
   called "run --rm load-lake"
+}
+
+@test "publishes course 1's pinned handoff before loading when it isn't there yet" {
+  FAKE_HAVE_DATA=no FAKE_HANDOFF_EXIT=1
+  run_bootstrap
+  [ "$status" -eq 0 ]
+  [[ $output == *"19 of 19 numbers match"* ]]
+  called "handoff.publish"
+  [ "$(grep -n -- 'handoff.publish' "$FAKE_LOG" | head -1 | cut -d: -f1)" -lt "$(grep -n -- 'run --rm load-lake' "$FAKE_LOG" | head -1 | cut -d: -f1)" ]
+}
+
+@test "leaves a pinned handoff that's already there alone" {
+  run_bootstrap
+  [ "$status" -eq 0 ]
+  [[ $output == *"course 1's handoff is the pinned version"* ]]
+  not_called "handoff.publish"
+}
+
+@test "--check reports a missing handoff without publishing it" {
+  FAKE_HANDOFF_EXIT=1
+  run_bootstrap --check
+  [ "$status" -eq 1 ]
+  [[ $output == *"course 1's handoff is missing or changed"* ]]
+  not_called "handoff.publish"
 }
 
 @test "--check changes nothing, even when something needs fixing" {

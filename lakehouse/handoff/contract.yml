@@ -1,0 +1,169 @@
+# The contract for course 1's handoff to course 2: what course 2 accepts (lakehouse/handoff/receive.py).
+#
+# Course 1 publishes its output as one Parquet file per table (publish.py). Before course 2 pins a version
+# (receive.adopt), every table here must be there, with exactly these columns, in this order, of these
+# types, and its key must be unique and never empty. Course 1 also proves the 19 Facilitator Guide numbers
+# on the files before publishing (parity.py); those are the contract's acceptance checks.
+#
+# Changing this file is a decision for both courses: course 1 changes what it hands over, course 2 what it
+# accepts. Columns and types were taken from version v2 (2026-11-02).
+acceptance_checks: lakehouse/handoff/parity.py (the 19 Facilitator Guide numbers)
+tables:
+  bronze.conduct_notes_answer_key:
+    description: "The true sentiment of each conduct note, as written (text). For scoring the text sessions only."
+    key: [offender_number]
+    columns:
+      offender_number: VARCHAR
+      conduct_label: VARCHAR
+  bronze.hero_offenders_raw:
+    description: "The raw file course 1 received from its generator, exactly as written: every column text, nothing converted."
+    key: [offender_number]
+    columns:
+      offender_number: VARCHAR
+      sid_number: VARCHAR
+      last_name: VARCHAR
+      first_name: VARCHAR
+      alias: VARCHAR
+      date_of_birth: VARCHAR
+      gender: VARCHAR
+      race: VARCHAR
+      religion: VARCHAR
+      unit_location: VARCHAR
+      custody_level: VARCHAR
+      violence_code: VARCHAR
+      threat_level: VARCHAR
+      stg_affiliation: VARCHAR
+      superpower: VARCHAR
+      primary_offense: VARCHAR
+      offense_code: VARCHAR
+      housing_restriction: VARCHAR
+      sentence_date: VARCHAR
+      projected_release_date: VARCHAR
+      intake_time: VARCHAR
+      disciplinary_points: VARCHAR
+      restitution_owed: VARCHAR
+      escape_risk: VARCHAR
+      protective_custody: VARCHAR
+      dampener_required: VARCHAR
+      conduct_notes: VARCHAR
+  ref.nibrs_offenses:
+    description: "The NIBRS offense codes the records use, with what each is against."
+    key: [code]
+    columns:
+      code: VARCHAR
+      offense: VARCHAR
+      crime_against: VARCHAR
+  ref.null_tokens:
+    description: "The documented codes that mean unknown, per column."
+    key: [column_name, token]
+    columns:
+      column_name: VARCHAR
+      token: VARCHAR
+  ref.race_crosswalk:
+    description: "Race as written, mapped to the standard values."
+    key: [source_value]
+    columns:
+      source_value: VARCHAR
+      race_code: VARCHAR
+      race_omb: VARCHAR
+  ref.religion_crosswalk:
+    description: "Religion as written, mapped to the standard values."
+    key: [source_value]
+    columns:
+      source_value: VARCHAR
+      religion_group: VARCHAR
+      religion_family: VARCHAR
+  ref.stg_groups:
+    description: "Every way an STG group is written, mapped to its group."
+    key: [alias]
+    columns:
+      alias: VARCHAR
+      stg_group: VARCHAR
+  ref.unit_crosswalk:
+    description: "Custody unit locations as written, mapped to their unit."
+    key: [source_value]
+    columns:
+      source_value: VARCHAR
+      unit_name: VARCHAR
+      unit_code: VARCHAR
+  ref.violence_codes:
+    description: "Violence codes as written, mapped to the standard values."
+    key: [source_value]
+    columns:
+      source_value: VARCHAR
+      violence_code: VARCHAR
+  silver.conduct_notes_answer_key:
+    description: "The conduct-notes answer key with offender_number as a number, so it joins to the cleansed records."
+    key: [offender_number]
+    columns:
+      offender_number: BIGINT
+      conduct_label: VARCHAR
+  silver.hero_offenders:
+    description: "Course 1's cleansed records (its sessions 2-4): standardized codes, parsed dates and converted types, one row per record. Nothing is dropped: what a rule flagged is in silver.hero_offenders_exceptions. Ordered codes are text with a matching _rank column."
+    key: [offender_number]
+    columns:
+      offender_number: BIGINT
+      sid_number: BIGINT
+      last_name: VARCHAR
+      first_name: VARCHAR
+      alias: VARCHAR
+      date_of_birth: DATE
+      gender: VARCHAR
+      race: VARCHAR
+      religion: VARCHAR
+      unit_location: VARCHAR
+      custody_level: VARCHAR
+      violence_code: VARCHAR
+      threat_level: VARCHAR
+      stg_affiliation: VARCHAR
+      superpower: VARCHAR
+      primary_offense: VARCHAR
+      offense_code: VARCHAR
+      housing_restriction: VARCHAR
+      sentence_date: DATE
+      projected_release_date: DATE
+      intake_time: TIME
+      disciplinary_points: BIGINT
+      restitution_owed: DECIMAL(12,2)
+      escape_risk: BOOLEAN
+      protective_custody: BOOLEAN
+      dampener_required: BOOLEAN
+      conduct_notes: VARCHAR
+      last_name_std: VARCHAR
+      first_name_std: VARCHAR
+      alias_std: VARCHAR
+      race_code: VARCHAR
+      race_omb: VARCHAR
+      religion_group: VARCHAR
+      religion_family: VARCHAR
+      stg_group: VARCHAR
+      stg_status: VARCHAR
+      offense_code_std: VARCHAR
+      offense_against: VARCHAR
+      violence_code_std: VARCHAR
+      unit_name: VARCHAR
+      unit_code: VARCHAR
+      age_at_sentencing: BIGINT
+      dob_flag: VARCHAR
+      custody_level_rank: SMALLINT
+      threat_level_rank: SMALLINT
+      violence_code_std_rank: SMALLINT
+  silver.hero_offenders_exceptions:
+    description: "Every value a cleansing rule flagged, one row per record, rule and column: unmapped codes, failed conversions, implausible birth dates, offense and violence codes that disagree."
+    key: [offender_number, rule, column_name]
+    columns:
+      offender_number: BIGINT
+      sid_number: BIGINT
+      rule: VARCHAR
+      column_name: VARCHAR
+      value_as_written: VARCHAR
+      reason: VARCHAR
+  silver.trust_test:
+    description: "Course 1's Trust Test: each question answered from a default load and from the cleansed, typed data. Aggregates only."
+    key: [question_id]
+    columns:
+      question_id: VARCHAR
+      question: VARCHAR
+      as_loaded: VARCHAR
+      cleansed: VARCHAR
+      changed: BOOLEAN

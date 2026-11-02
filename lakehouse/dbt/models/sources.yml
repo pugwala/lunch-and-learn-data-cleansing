@@ -7,7 +7,7 @@ sources:
   - name: silver
     database: lake
     schema: silver
-    description: Written by lakehouse/load_lake.py from the course's own session 2-4 cleansing.
+    description: Course 1's cleansed output (its sessions 2-4), landed by lakehouse/load_lake.py from the pinned handoff (lakehouse/handoff).
     tables:
       - name: hero_offenders
         description: One row per offender record, typed and crosswalked. offender_number is the BIGINT record key.
@@ -50,14 +50,14 @@ sources:
         description: One row per flagged value. Records are flagged, never dropped.
       - name: conduct_notes_answer_key
       - name: trust_test
-        description: The course's Trust Test scorecard (lnl.trust), one row per question.
+        description: Course 1's Trust Test scorecard, one row per question.
 
   - name: bronze
     database: lake
     schema: bronze
     tables:
       - name: hero_offenders_raw
-        description: Generator output as written, every column VARCHAR.
+        description: The raw file course 1 received, as written, every column VARCHAR; landed from its handoff.
         columns:
           - name: race
             meta: {sensitivity: restricted}
@@ -79,7 +79,7 @@ sources:
   - name: ref
     database: lake
     schema: ref
-    description: The course crosswalks from lnl/reference/, standing in for owner-maintained reference data.
+    description: The course crosswalks (lnl/reference/ on course 1's side), landed from its handoff, standing in for owner-maintained reference data.
     tables:
       - name: unit_crosswalk
       - name: nibrs_offenses

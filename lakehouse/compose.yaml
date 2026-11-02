@@ -121,7 +121,7 @@ services:
 
   load-lake:
     # One-shot loader until the scheduler arrives in a later phase:
-    #   docker compose --profile core run --rm load-lake [--regenerate]
+    #   docker compose --profile core run --rm load-lake   (lands the pinned handoff, lakehouse/handoff)
     profiles: [core]
     image: lnl-jupyter:local
     depends_on:

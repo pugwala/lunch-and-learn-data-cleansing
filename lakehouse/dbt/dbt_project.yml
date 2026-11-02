@@ -1,4 +1,4 @@
-# Gold layer for the home-lab lakehouse. Reads silver and ref (written by lakehouse/load_lake.py),
+# Gold layer for the home-lab lakehouse. Reads silver and ref (landed by lakehouse/load_lake.py from course 1's handoff),
 # writes gold. Run inside the jupyter or dagster containers:
 #   dbt build --project-dir lakehouse/dbt --profiles-dir lakehouse/dbt --exclude tag:world
 # The expanded world (models/world, tag:world) has its own bronze, silver and gold, read from the generator's

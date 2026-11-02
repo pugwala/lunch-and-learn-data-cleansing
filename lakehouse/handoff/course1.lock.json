@@ -4,12 +4,23 @@
     "passed": 19
   },
   "source": {
+    "data_version": 6,
     "file": "hero_offender_data_v6_s2026_r100000.csv",
     "rows": 100000,
     "seed": 2026,
     "sha256": "649dc8398937e22f2fddf3203bb14023d91a3d0789839b41c072465b1cc1fde8"
   },
   "tables": {
+    "bronze.conduct_notes_answer_key": {
+      "file": "bronze.conduct_notes_answer_key.parquet",
+      "rows": 100000,
+      "sha256": "f025770b59da90dd225fc5396fd53cc4063c43647ce83e6ac0b755d6b44ad087"
+    },
+    "bronze.hero_offenders_raw": {
+      "file": "bronze.hero_offenders_raw.parquet",
+      "rows": 100000,
+      "sha256": "7d55cab819e77e8ad5012c4e7006b4c6e73c88028e730de6ada3957e1341be97"
+    },
     "ref.nibrs_offenses": {
       "file": "ref.nibrs_offenses.parquet",
       "rows": 26,
@@ -66,5 +77,5 @@
       "sha256": "5ceb415965575bed9a7b2e4325304afc0dbc33404233dac686626f23294cfb49"
     }
   },
-  "version": "v1"
+  "version": "v2"
 }

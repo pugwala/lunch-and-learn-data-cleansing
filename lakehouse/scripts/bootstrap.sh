@@ -261,6 +261,17 @@ done
 
 # ---------------------------------------------------------------------------------------------------------------
 step "6/7 Lake data"
+# The loader lands course 1's pinned handoff (lakehouse/handoff). A fresh install has none yet, so course 1 publishes
+# it first: its own generator and sessions 2-4, the 19 numbers checked, the same bytes as the lock.
+if dc exec -T jupyter python -m lakehouse.handoff.receive check >/dev/null 2>&1; then
+  ok "course 1's handoff is the pinned version"
+elif [ $CHECK = 1 ]; then
+  bad "course 1's handoff is missing or changed (python -m lakehouse.handoff.receive check)"
+else
+  echo "  publishing course 1's handoff..."
+  out=$(dc exec -T jupyter python -m lakehouse.handoff.publish 2>&1) || { echo "$out" | tail -20; die "Publishing course 1's handoff failed (output above)."; }
+  did "$(echo "$out" | grep -m1 '^Published')"
+fi
 have=$(dc exec -T jupyter python - <<'PY' 2>/dev/null || echo error
 import sys; sys.path.insert(0, "/home/jovyan/course")
 from lakehouse.lake import lake_connect

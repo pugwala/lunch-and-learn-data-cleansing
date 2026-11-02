@@ -1,15 +1,17 @@
 """Course 1's side of the handoff: publish its cleansed output for course 2, but only if it matches the 19 numbers.
 
-    python -m lakehouse.handoff.publish [--version v1] [--out DIR] [--lock]
+    python -m lakehouse.handoff.publish [--version v2] [--out DIR]
 
 Runs course 1's own code (the generator, then sessions 2-4, through lake.course1_output), writes one Parquet file per
 table into a scratch folder, and checks the 19 Facilitator Guide numbers on those files (parity.py), read the way
 course 2 will read them (receive.connect). Only when every number matches does the folder get its manifest and take
-its place as <out>; a miss raises ParityFailed and publishes nothing. --lock also pins the result for course 2
-(course1.lock.json), which is how a new version is adopted on purpose.
+its place as <out>; a miss raises ParityFailed and publishes nothing. Course 2 then adopts it on purpose
+(python -m lakehouse.handoff.receive adopt <out>), which checks the contract and pins it.
 
-What's published: the four silver tables (the cleansed records, every flagged value, the conduct-notes answer key,
-the Trust Test) and the reference data the rules use (each course CSV as text, plus the null tokens).
+What's published: what course 1 received (bronze: the raw file and its conduct-notes answer key, every column as
+text, as written), what it made of it (silver: the cleansed records, every flagged value, the answer key keyed to
+the records, the Trust Test), and the reference data its rules use (each course CSV as text, plus the null tokens).
+The contract (contract.yml) describes every table.
 """
 import argparse
 import importlib.util
@@ -23,7 +25,7 @@ import pandas as pd
 
 from . import parity, receive
 
-VERSION = "v1"
+VERSION = "v2"
 SOURCE_ROWS, SOURCE_SEED = 100_000, 2026
 GENERATOR = Path(__file__).resolve().parents[2] / "generator" / "gen_hero_offenders.py"
 sha256 = receive.sha256
@@ -33,10 +35,107 @@ class ParityFailed(RuntimeError):
     """Course 1's output doesn't match the 19 numbers, so it wasn't published."""
 
 
-def course1_output() -> tuple:
-    """(the generator's file paths, {table: frame}) for the four silver tables, from course 1's own code."""
-    from lakehouse import lake
-    return lake.course1_output()
+# ---- Course 1's own code: sessions 2-4 and the tables they make (moved here from lake.py, 2026-11-02) ----------
+
+def to_lake_frame(df: pd.DataFrame) -> pd.DataFrame:
+    """pandas -> types DuckDB keeps. Categories become text; ordered ones get a 1-based _rank column so
+    'G4 and above' still works in SQL (DuckLake has no ENUM type)."""
+    out = df.reset_index() if df.index.name else df.copy()
+    for col in list(out.columns):
+        dtype = out[col].dtype
+        if isinstance(dtype, pd.CategoricalDtype):
+            if dtype.ordered:
+                codes = out[col].cat.codes.astype("Int16") + 1
+                out[f"{col}_rank"] = codes.where(codes > 0)
+            out[col] = out[col].astype("string")
+        elif dtype == object:
+            out[col] = out[col].astype("string")
+    return out
+
+
+def _ids(index_or_series) -> pd.Series:
+    """Padded 8-digit ID text (as the course's people-facing lists use) back to BIGINT."""
+    return pd.to_numeric(pd.Series(index_or_series, dtype="string"), errors="coerce").astype("Int64")
+
+
+def exceptions_table(s2: pd.DataFrame, s3: pd.DataFrame, silver: pd.DataFrame) -> pd.DataFrame:
+    """One row per flagged value, from the course's own exception lists. s2/s3 = the data after sessions 2/3."""
+    from lnl import conversions, domains
+    parts = []
+
+    dom = domains.domain_exceptions(silver)
+    parts.append(pd.DataFrame({"offender_number": _ids(dom.index), "rule": "domain_unmapped",
+                               "column_name": dom["column"].values,
+                               "value_as_written": dom["value as written"].astype("string").values,
+                               "reason": dom["reason"].values}))
+
+    conv = conversions.exceptions(s3)
+    parts.append(pd.DataFrame({"offender_number": _ids(conv.index), "rule": "conversion_failed",
+                               "column_name": conv["column"].values,
+                               "value_as_written": conv["value as written"].astype("string").values,
+                               "reason": "did not convert to its type"}))
+
+    flagged = silver["dob_flag"].dropna()
+    parts.append(pd.DataFrame({"offender_number": pd.Series(flagged.index, dtype="Int64"), "rule": "dob_check",
+                               "column_name": "date_of_birth",
+                               "value_as_written": s2.loc[flagged.index, "date_of_birth"].astype("string").values,
+                               "reason": flagged.astype("string").values}))
+
+    ovc = domains.offense_violence_conflicts(silver)
+    parts.append(pd.DataFrame({"offender_number": _ids(ovc.index), "rule": "offense_violence_conflict",
+                               "column_name": "violence_code_std",
+                               "value_as_written": ovc["violence_code_std"].astype("string").values,
+                               "reason": "violence code disagrees with offense against " +
+                                         ovc["offense_against"].astype("string").values}))
+
+    out = pd.concat(parts, ignore_index=True)
+    out["sid_number"] = out["offender_number"].map(silver["sid_number"]).astype("Int64")
+    return out[["offender_number", "sid_number", "rule", "column_name", "value_as_written", "reason"]]
+
+
+def trust_test_table(naive: pd.DataFrame, typed: pd.DataFrame) -> pd.DataFrame:
+    """The course's Trust Test scorecard (lnl.trust, as notebook 4 builds it), one row per question.
+    naive = a pandas-defaults load (pipeline.load_naive); typed = the data after session 4. Aggregates only."""
+    from lnl import trust
+    card = trust.scorecard(trust.naive_answers(naive), trust.typed_answers(typed))
+    return pd.DataFrame({"question_id": card.index, "question": card["Question"].values,
+                         "as_loaded": card["Session 1 (as loaded)"].values,
+                         "cleansed": card["Session 4 (cleansed + typed)"].values,
+                         "changed": (card["Changed?"] == "yes").values})
+
+
+def course1_output(regenerate: bool = False) -> tuple:
+    """Course 1's cleansed output, made by its own code: generate the raw file (if needed), then sessions 2-4.
+    Returns (the generator's file paths, {table: frame}) for the four silver tables, which publish() hands over."""
+    from lnl import cleaning, conversions, dates, env, pipeline
+    paths = env.generate(force=regenerate)
+    raw = pipeline.load_raw()
+    s2 = cleaning.session2(raw)
+    s3 = dates.session3(s2)
+    silver = conversions.session4(s3)
+    return paths, {
+        "silver.hero_offenders": to_lake_frame(silver),
+        "silver.hero_offenders_exceptions": exceptions_table(s2, s3, silver),
+        "silver.conduct_notes_answer_key": to_lake_frame(pipeline.answer_key()),
+        "silver.trust_test": trust_test_table(pipeline.load_naive(), silver),
+    }
+
+
+def data_version() -> int:
+    """The version of the generator's data layout (lnl.env.DATA_VERSION, the v6 in the raw file's name)."""
+    from lnl import env
+    return int(env.DATA_VERSION)
+
+
+def raw_tables(paths: dict) -> dict:
+    """{bronze.<name>: (SQL that reads it, None)}: what course 1 received, every column as text, as written: the
+    generator's raw file and its conduct-notes answer key."""
+    def as_text(path):
+        """SQL reading one CSV with every column as text."""
+        literal = str(path).replace("'", "''")
+        return f"SELECT * FROM read_csv('{literal}', all_varchar = true, header = true)", None
+    return {"bronze.hero_offenders_raw": as_text(paths["data"]),
+            "bronze.conduct_notes_answer_key": as_text(paths["answer_key"])}
 
 
 def reference_tables() -> dict:
@@ -76,7 +175,8 @@ def publish(out_dir: Path, version: str = VERSION) -> dict:
         paths, frames = course1_output()
         con = duckdb.connect()
         con.execute("SET preserve_insertion_order = true")
-        sources = {t: ("SELECT * FROM frame", f) for t, f in frames.items()} | reference_tables()
+        sources = ({t: ("SELECT * FROM frame", f) for t, f in frames.items()} | raw_tables(paths)
+                   | reference_tables())
         tables = {}
         for table, (sql, frame) in sorted(sources.items()):
             path = scratch / f"{table}.parquet"
@@ -84,7 +184,7 @@ def publish(out_dir: Path, version: str = VERSION) -> dict:
             tables[table] = {"file": path.name, "rows": rows, "sha256": sha256(path)}
         manifest = {"version": version, "tables": tables,
                     "source": {"file": Path(paths["data"]).name, "rows": SOURCE_ROWS, "seed": SOURCE_SEED,
-                               "sha256": sha256(paths["data"])}}
+                               "data_version": data_version(), "sha256": sha256(paths["data"])}}
         missed = parity.failures(receive.connect(scratch, manifest))
         if missed:
             raise ParityFailed(f"Course 1's output misses {len(missed)} of the 19 numbers: " + "; ".join(missed))
@@ -112,19 +212,15 @@ def generate_source(work_dir: Path) -> str:
 
 
 def main(argv=None) -> int:
-    """Command line: publish a version (and, with --lock, pin it for course 2)."""
+    """Command line: publish a version (course 2 adopts it separately, with receive.py)."""
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--version", default=VERSION)
     ap.add_argument("--out", type=Path, help="default: receive.ROOT/<version>")
-    ap.add_argument("--lock", action="store_true", help="pin this version for course 2 (course1.lock.json)")
     args = ap.parse_args(argv)
     out = args.out or receive.ROOT / args.version
     manifest = publish(out, args.version)
     print(f"Published {args.version} to {out}: {len(manifest['tables'])} tables, "
           f"{manifest['parity']['passed']} of {manifest['parity']['checks']} numbers match")
-    if args.lock:
-        receive.LOCK.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
-        print(f"Pinned {args.version} in {receive.LOCK}")
     return 0
 
 

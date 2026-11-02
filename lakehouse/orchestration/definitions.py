@@ -1,6 +1,7 @@
 """Dagster definitions for the home-lab lakehouse.
 
-    load_lake (Python)  -> ref.*, bronze.*, silver.*, ops.load_runs, then the parity check
+    load_lake (Python)  -> ref.*, bronze.*, silver.*, ops.load_runs from course 1's pinned handoff, then the parity
+                           check
     readiness_inputs    -> ops.business_inputs, ops.product_inputs, ops.input_closes (readiness/closes.py): the
                            declared inputs, the fictional units' closes, and each input's days late, pushed
     gold (dbt build)    -> gold.dim_*, gold.fct_offender_record, gold.dq_scorecard, the marts (custody, and the
@@ -82,13 +83,6 @@ SILVER_KEY = dg.AssetKey(["silver", "hero_offenders"])
 PARITY_CHECK = "matches_course_numbers"
 
 
-class LoadConfig(dg.Config):
-    """Run config for load_lake (and so for daily_lake and regenerate_lake)."""
-
-    regenerate: bool = False
-    """Rebuild the CSV from the seed before loading (normally the cached file is reused)."""
-
-
 @dg.multi_asset(
     name="load_lake",
     specs=[dg.AssetSpec(dg.AssetKey([schema, table]), group_name=schema, kinds={"duckdb", "python"},
@@ -97,10 +91,10 @@ class LoadConfig(dg.Config):
     check_specs=[dg.AssetCheckSpec(PARITY_CHECK, asset=SILVER_KEY, blocking=True,
                                    description="All 19 lakehouse/tests checks match FACILITATOR_GUIDE.md")],
 )
-def load_lake(context: dg.AssetExecutionContext, config: LoadConfig):
-    """Land ref, bronze and silver (lake.run), report each table, push the load's numbers, then run the blocking
-    parity check: the 19 lakehouse/tests checks against FACILITATOR_GUIDE.md."""
-    metrics = lake.run(regenerate=config.regenerate)
+def load_lake(context: dg.AssetExecutionContext):
+    """Land course 1's pinned handoff as ref, bronze and silver (lake.run), report each table, push the load's
+    numbers, then run the blocking parity check: the 19 lakehouse/tests checks against FACILITATOR_GUIDE.md."""
+    metrics = lake.run()
     context.log.info(f"Loaded run {metrics['run_id']}: {metrics['rows_silver']:,} rows, "
                      f"{metrics['exceptions']:,} flagged values, snapshot {metrics['snapshot_id']}")
     shared = {"run_id": metrics["run_id"], "snapshot_id": metrics["snapshot_id"]}
@@ -453,10 +447,6 @@ def monitoring_selftest():
 daily_lake = dg.define_asset_job("daily_lake", selection=dg.AssetSelection.all() - WORLD_ASSETS,
                                  description="Load reference, bronze and silver, check parity, build gold, "
                                              "sync OpenMetadata, refresh Fuseki.")
-regenerate_lake = dg.define_asset_job(
-    "regenerate_lake", selection=dg.AssetSelection.all() - WORLD_ASSETS,
-    description="Same as daily_lake, but rebuild the CSV from the seed first.",
-    config={"ops": {"load_lake": {"config": {"regenerate": True}}}})
 
 daily_schedule = dg.ScheduleDefinition(
     job=daily_lake, cron_schedule="0 5 * * *", execution_timezone="America/Chicago",
@@ -554,7 +544,7 @@ notebook_smoke_schedule = dg.ScheduleDefinition(
 defs = dg.Definitions(
     assets=[load_lake, readiness_inputs, gold, openmetadata_lake, fuseki_glossary, data_quality, data_products,
             world_landing, world_full, world_monthly],
-    jobs=[daily_lake, regenerate_lake, notebook_smoke, monitoring_selftest, lake_housekeeping, world_refresh,
+    jobs=[daily_lake, notebook_smoke, monitoring_selftest, lake_housekeeping, world_refresh,
           world_monthly_job],
     schedules=[daily_schedule, notebook_smoke_schedule, lake_housekeeping_schedule, world_refresh_schedule,
                world_monthly_schedule],

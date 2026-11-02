@@ -1,8 +1,8 @@
 # Home-lab DuckDB lakehouse
 
 The course's mock data in a DuckDB lakehouse on a single Proxmox VM: DuckLake tables (Postgres catalog,
-Parquet on local disk), loaded by the same generator and the same session 2–4 cleansing the class uses, so
-every number matches the Facilitator Guide. dbt builds gold, and Dagster runs it all at 05:00 Central.
+Parquet on local disk), loaded from course 1's published handoff: its own generator and the same session 2–4
+cleansing the class uses, so every number matches the Facilitator Guide. dbt builds gold, and Dagster runs it all at 05:00 Central.
 
 > ⚠️ **Mock data only**, same rule as the rest of the repo. DuckDB and DuckLake have no table grants, row filters
 > or column masks: anyone with the catalog password can read every column, race and religion included.
@@ -15,10 +15,10 @@ every number matches the Facilitator Guide. dbt builds gold, and Dagster runs it
 | `.env.example` | Every setting and secret; copy to `.env` |
 | `postgres/init/` | `01-roles.sh`: `ducklake`, `superset`, `dagster` databases and the `lake_rw` / `lake_ro` roles. `02-dagster.sh`, `03-superset.sh` and `04-openmetadata.sh`: the Dagster, Superset and OpenMetadata roles and databases (safe to re-run) |
 | `jupyter/Dockerfile` | `pyspark-notebook` + course requirements + DuckDB 1.5.6, dbt-duckdb, Dagster; extensions pre-installed. One image for every Python process, so DuckDB versions never drift |
-| `lake.py` | Helpers: `lake_connect()`, `lake_ro_connect()`, `run()`, `course1_output()` (course 1's own code, sessions 2-4), `to_lake_frame()`, `exceptions_table()`, `trust_test_table()` |
-| `handoff/` | The handoff from course 1 to course 2: `publish.py` and `parity.py` (course 1's side: publish its cleansed output once the 19 numbers match), `receive.py` and `course1.lock.json` (course 2's side: the pinned version, checked before anything is built on it) |
+| `lake.py` | Helpers: `lake_connect()`, `lake_ro_connect()`, `run()` (lands course 1's pinned handoff; runs none of course 1's code) |
+| `handoff/` | The handoff from course 1 to course 2: `publish.py` and `parity.py` (course 1's side: its generator and sessions 2-4, published once the 19 numbers match), `receive.py`, `contract.yml` and `course1.lock.json` (course 2's side: what it accepts, the pinned version, checked before anything is built on it) |
 | `sql_magic.py` | `%load_ext lakehouse.sql_magic`: jupysql's `%sql` on the lake, read-only as `lake_ro` |
-| `load_lake.py` | Generates the data if needed and lands reference, bronze and silver as one DuckLake snapshot |
+| `load_lake.py` | Lands course 1's pinned handoff as reference, bronze and silver, one DuckLake snapshot |
 | `tests/test_parity.py` | 19 checks that the lake matches the Facilitator Guide's numbers (`handoff/parity.py`), plus bronze's row count |
 | `dbt/` | Gold models and tests (dbt-duckdb, attaches DuckLake), and the expanded world's bronze, silver and gold (`models/world`, tag `world`) |
 | `orchestration/` | Dagster definitions and instance config |
@@ -79,7 +79,8 @@ load_lake ──► parity check (blocking) ──► dbt build (gold, then mart
 - **`fuseki/glossary`** runs `om_to_rdf.py`, so the SPARQL graphs carry the same day's meaning, then its non-blocking
   check `business_rules_hold` validates `ontology/shapes.ttl` and pushes the violations per rule to Prometheus.
 
-Jobs: `daily_lake` (scheduled 05:00 Central, on by default), `regenerate_lake` (rebuilds the CSV first) and
+Jobs: `daily_lake` (scheduled 05:00 Central, on by default; it lands course 1's pinned handoff, so new data
+means a new handoff version, not a job) and
 `notebook_smoke` (Sundays 06:00 Central, on by default): it runs the seven course notebooks as delivered plus
 `08_from_lake.ipynb` with papermill, saves the executed copies in `/lake/notebook-runs/<date>_<run>/`, and fails
 if any cell errors. It's an op job rather than an asset, so `daily_lake`'s all-asset selection never includes it.
@@ -116,7 +117,8 @@ What it does, in order:
    `postgres/init/` only on an empty volume), generates OpenMetadata's own JWT signing keys once (under
    `/lake/openmetadata/keys`, never in the repo), starts the twenty-two long-running services by name, reloads Caddy, makes Prometheus and Alertmanager reread
    their config (SIGHUP), and restarts Dagster if catalog-pg was recreated (its pooled connections would be dead).
-6. **Lake data and meaning.** Runs the loader if silver or `ref.null_tokens` is missing, stages session 7's model,
+6. **Lake data and meaning.** Publishes course 1's pinned handoff if it isn't there yet (`handoff/publish.py`: the
+   same bytes as the lock), runs the loader if silver or `ref.null_tokens` is missing, stages session 7's model,
    replaces OpenMetadata's default admin password, runs `om_sync.py`, `om_to_rdf.py` (Fuseki's graphs), `ontology/check_rules.py` (the business rules), then
    `cube/sync_masks.py` (restarting Cube if the masks changed), builds the Trust Test and Custody dashboards, and
    makes Home Lakehouse Grafana's home page.
@@ -612,28 +614,40 @@ Course 1 is the cleansing course: sessions 1 to 7, ending with "Meaning Over Wor
 architecture, and it starts from course 1's **cleansed output** (the boundary document, 2026-11-02). The two meet
 through files, never shared code or live tables:
 
-1. **Course 1 publishes** (`python -m lakehouse.handoff.publish --version v1`). It runs its own code (the generator,
-   then sessions 2 to 4) and writes one Parquet file per table: the four silver tables (the cleansed records, every
-   flagged value, the conduct-notes answer key, the Trust Test) and the reference data (seven tables). It checks the
-   19 Facilitator Guide numbers on those files, read the way course 2 will read them. Only when all 19 match does the
-   folder appear, with a manifest of every file's row count and SHA-256; a miss publishes nothing. It takes 6 s.
-2. **Course 2 pins a version** in `handoff/course1.lock.json` (today `v1`, made from the raw file
-   `649dc839...`). The files live in `/lake/landing/handoff/course1/v1/`, landed like any upstream delivery.
+1. **Course 1 publishes** (`python -m lakehouse.handoff.publish --version v2`). It runs its own code (the
+   generator, then sessions 2 to 4) and writes one Parquet file per table: what it received (bronze: the raw file and
+   its conduct-notes answer key, as text), what it made of it (silver: the cleansed records, every flagged value, the
+   answer key, the Trust Test) and the reference data (seven tables). It checks the 19 Facilitator Guide numbers on
+   those files, read the way course 2 will read them. Only when all 19 match does the folder appear, with a manifest
+   of every file's row count and SHA-256; a miss publishes nothing. It takes 6 s.
+2. **Course 2 adopts a version on purpose** (`python -m lakehouse.handoff.receive adopt <folder>`). The files must
+   match their manifest and keep **the contract**, `handoff/contract.yml`: every table, its description, its key
+   (unique, never empty) and each column's type, in order. A version that changes a type or repeats a key is
+   refused, and nothing is pinned. An adopted version is pinned in `handoff/course1.lock.json` (today `v2`, made
+   from the raw file `649dc839...`). The files live in `/lake/landing/handoff/course1/<version>/`.
 3. **Course 2 checks before it builds.** `receive.require()` compares every file with the lock and refuses a missing
-   or changed one by name; `receive.connect()` reads them as DuckDB views named like the lake's tables.
+   or changed one by name; `receive.check` does the same from the command line.
 
-The expanded world (`universe/`) is the first consumer: it reads its core from the pinned handoff, and its word lists
-(names, cities, powers, groups) are course 2's own copy, `universe/course_words.json`, taken from the generator on
-2026-11-02. Nothing in `universe/` runs course 1's generator or reads its live tables, and a test scans the code to
-keep it that way. The move changed no data: the world built from the handoff is byte-identical to the one built
-from the lake, at scale S (45 files) and scale M (75 files, 16.5M rows).
+Two consumers, neither of which runs course 1's code:
 
-Still to come: the lake's own silver from the handoff instead of running course 1's pandas pipeline in the daily run,
-with a written contract (Priority 3), and course 1's material as an optional add-on (Priority 4).
+- **The daily load** (`lake.run`, the `load_lake` asset) lands every pinned table as it is, as `ref.*`, `bronze.*`
+  and `silver.*`; bronze also gets the load's metadata columns. Course 1's sessions no longer run in the daily run,
+  and `regenerate_lake` is gone: new data means a new published version, adopted on purpose. The 19-number parity
+  gate still runs on what landed. The move changed no data: every ref, bronze and silver table matched its rows,
+  types and contents from before, and `daily_lake` succeeded.
+- **The expanded world** (`universe/`) reads its core from the pinned handoff; its word lists (names, cities,
+  powers, groups) are course 2's own copy, `universe/course_words.json`, taken from the generator on 2026-11-02. The
+  world built from the handoff is byte-identical to the one built from the lake, at scale S (45 files) and M (75
+  files, 16.5M rows).
 
-Tests: `pytest lakehouse/tests/test_handoff.py` (5: every table and fingerprint, the 19 numbers on the published
+Tests scan `lake.py` and `universe/` so neither can reach into course 1 again. Still to come: course 1's material
+(the Trust Test dashboard, the parity gate, `notebook_smoke`) as an optional add-on (Priority 4).
+
+Tests: `pytest lakehouse/tests/test_handoff.py` (9: every table and fingerprint, the 19 numbers on the published
 files, a miss publishes nothing, a fresh publish matches the lock byte for byte, the generator still makes the pinned
-source).
+source, the contract covers every table, a changed type or a repeated key isn't adopted, a good version is) and
+`test_lake_load.py` (6: every table lands as it is, bronze's metadata, the load's numbers, the 19 numbers on the
+landed lake, a changed handoff isn't loaded, `lake.py` runs none of course 1's code).
 
 ## The expanded world (in progress)
 
@@ -845,10 +859,10 @@ on a copy of the working tree (never `.env`, never dbt's `target/`), in about a 
 - **Static checks:** a virtualenv with the lakehouse's pins (installed only from releases before the image's
   `PIP_CUTOFF`); every Python file compiles and every YAML file parses; the docstring test; the SHACL shapes and
   SPARQL rules parse.
-- **The 56 bats tests,** and promtool and amtool on the monitoring config.
+- **The 70 bats tests,** and promtool and amtool on the monitoring config.
 - **`compose.yaml`** checked against a dummy `.env` (nothing printed).
-- **A sandbox lake:** generate, load, publish course 1's handoff into a sandbox folder (it must match the lock
-  byte for byte), sync and simulate readiness, `dbt build` with every test, and the 19 parity checks, all on a
+- **A sandbox lake:** publish course 1's handoff into a sandbox folder (it must match the lock byte for byte),
+  load it, sync and simulate readiness, `dbt build` with every test, and the 19 parity checks, all on a
   plain DuckDB file.
 - **`dagster definitions validate`:** it catches what a compile can't. It was shown failing on the `@multi_asset`
   mistake of 2026-10-27.
@@ -861,7 +875,7 @@ only says there's nothing to check. Its first run passed all 14 checks on a GitH
 | --- | --- |
 | Loader, 19 parity checks, DuckLake on Postgres, image build, Postgres roles | On the VM |
 | Dagster webserver and daemon with Postgres storage, their healthchecks, Caddy basic auth | On the VM |
-| `scripts/bootstrap.sh`: 61 bats tests (`bats lakehouse/tests/bootstrap.bats`, needs `apt install bats`), each shown to fail when the behaviour it covers is broken | On the VM, with stub commands; never touches the live stack |
+| `scripts/bootstrap.sh`: 64 bats tests (`bats lakehouse/tests/bootstrap.bats`, needs `apt install bats`), each shown to fail when the behaviour it covers is broken | On the VM, with stub commands; never touches the live stack |
 | dbt gold models and their tests (25 today), Dagster job (both jobs, plus the blocking check stopping gold) | Sandbox, against a plain DuckDB file |
 | Cube v1.8.3 over gold, read-only as `lake_ro`, restricted columns masked except for `restricted_reader`: 15 acceptance tests (`pytest lakehouse/acceptance/test_cube.py`); unmasking everyone made 8 of them fail | On the VM |
 | Superset 6.1.0 under `/superset`, Cube as its only database, the Trust Test and Custody dashboards (the world's dashboard is in `test_world_products.py`): 9 acceptance tests (`pytest lakehouse/acceptance/test_superset.py`); the only-Cube check was shown to fail with a decoy database added, the Custody chart checks failed before the dashboard existed, and `--check` exits 1 on a changed layout | On the VM |
@@ -894,7 +908,7 @@ only says there's nothing to check. Its first run passed all 14 checks on a GitH
 | Custody mart (`mart_custody`, enforced contracts): 7 acceptance tests (`test_custody_marts.py`) and 3 dbt tests, each seen failing first; a deliberate type change was refused by dbt | On the VM |
 | Custody products on Cube (three views; the MCP server picks the view that has the dimension): 10 acceptance tests (`test_custody_cube.py`), each seen failing first | On the VM |
 | Product descriptors, OpenMetadata domain, data products and contracts, DCAT in Fuseki, product freshness and coverage alerts: 17 acceptance tests (`test_products.py`, one per product where a test checks each), each seen failing first; a made-up view in a descriptor failed its test, and a 30-hour-old refresh fired `DataProductStale` | On the VM |
-| Course 1's handoff (`handoff/`: publish, the 19 numbers on the files, the lock, `universe` reading from it): 5 tests in `test_handoff.py` and 4 in `test_universe.py`, seen failing first (the code scan named 14 places `universe` reached into course 1); 6 mutations all caught. The world built from the handoff is byte-identical to the lake-built one at S and M | On the VM |
+| Course 1's handoff (`handoff/`: publish, the 19 numbers on the files, the contract, adopt, the lock; `universe` and the daily load reading from it): 9 tests in `test_handoff.py`, 6 in `test_lake_load.py` and 4 in `test_universe.py`, seen failing first (the code scan named 14 places `universe` reached into course 1); 12 mutations all caught. The world built from the handoff is byte-identical to the lake-built one at S and M, and the lake landed from it matched every ref, bronze and silver table from before | On the VM |
 | The world's data products (three descriptors, two domains, two inputs, four Cube views, monthly contracts, the Fights, Damage and Courts dashboard, freshness from Dagster materializations): 19 acceptance tests (`test_world_products.py`), all seen failing first; 7 mutations all caught | On the VM |
 
 ## Next phases
