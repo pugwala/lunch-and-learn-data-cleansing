@@ -1,9 +1,14 @@
--- Is a data product's number for a month-end final yet? One row per product per month-end of the custody snapshot.
+-- Is a data product's number for a month-end final yet? One row per product per month-end of the lake's calendar:
+-- every month-end from var readiness_start (January 1996, when the expanded world's first fights happen) to the
+-- custody snapshot's last, the same for every product, so no product's early months are missing.
 -- A month is final when every input the product depends on (depends_on: in products/<product>.yml) has been
 -- reported complete through that month-end (readiness/closes.py report); until then it is provisional, and
 -- waiting_on names the units still open. A view, not a table: a unit's close shows on the very next query.
 with month_ends as (
-    select distinct month_end from {{ ref('custody_snapshot_monthly') }}
+    select cast(last_day(m) as date) as month_end
+    from range(cast('{{ var("readiness_start", "1996-01-01") }}' as timestamp),
+               (select max(month_end) from {{ ref('custody_snapshot_monthly') }}) + interval 1 day,
+               interval 1 month) as t(m)
 ),
 
 -- The latest report per input counts, so reporting an earlier month-end reopens a month.

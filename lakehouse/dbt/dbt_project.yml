@@ -16,6 +16,7 @@ seed-paths: ["seeds"]
 
 vars:
   world_root: /lake/landing/universe/M   # the expanded world's build (lakehouse/universe), messy CSVs and keys
+  readiness_start: "1996-01-01"   # the first month period_readiness covers: the expanded world's first fights
 target-path: target
 clean-targets: ["target", "logs"]
 

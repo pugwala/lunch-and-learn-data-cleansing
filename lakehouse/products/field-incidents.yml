@@ -1,0 +1,22 @@
+# A data product: one file is its whole promise (see custody-population.yml for how it is published and tested).
+name: field-incidents
+title: Field Incidents
+domain: Field Operations
+owner: Lakehouse stewards
+question: How many fights happen each month, where, of what kind and how they end, and how many people take part?
+description: >
+  Every fight in the expanded world since January 1996, by month, city, kind and outcome, with the bystanders
+  hurt, and who took part, by side, role and what became of them. People are distinct person keys, counted at query
+  time, so someone in two fights is one person; never add months up. No restricted or personal columns.
+tables:            # what the product delivers: none may hold a restricted or personal column
+  - world_gold.fct_incident
+  - world_gold.fct_participation
+  - world_gold.dim_location
+sources:           # where its data comes from
+  - world_silver.incident
+  - world_silver.participant
+cube_views: [field_incidents, fight_participants]
+glossary_terms: [Incident, Participant, Location, Person Key]
+depends_on: [field-reports]   # products/inputs/: a month is final once Field Operations has closed its reports
+refresh: {every: 1, unit: month, at: "05:30", timezone: America/Chicago}
+max_age_hours: 768   # 32 days: world_refresh and world_monthly_job run on the 1st

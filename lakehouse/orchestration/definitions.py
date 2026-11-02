@@ -210,6 +210,11 @@ world_refresh = dg.define_asset_job(
 world_monthly_job = dg.define_asset_job(
     "world_monthly_job", selection=dg.AssetSelection.assets(world_monthly), partitions_def=world_months,
     description="The world's big facts for one month (or a backfill's range, in one run), and the answer-key tests.")
+world_refresh_schedule = dg.ScheduleDefinition(
+    name="world_refresh_schedule", job=world_refresh, cron_schedule="30 4 1 * *", execution_timezone="America/Chicago",
+    default_status=dg.DefaultScheduleStatus.RUNNING,
+    description="04:30 Central on the 1st: the world, its bronze, dimensions and incidents, before world_monthly_job "
+                "(05:30) builds the month that just closed. The world's data products promise 32 days.")
 world_monthly_schedule = dg.build_schedule_from_partitioned_job(
     world_monthly_job, hour_of_day=5, minute_of_hour=30, default_status=dg.DefaultScheduleStatus.RUNNING,
     description="05:30 Central on the 1st: the month that just closed.")
@@ -339,12 +344,29 @@ def readiness_inputs(context: dg.AssetExecutionContext):
                                              **{f"days_late_{s['input']}": s["days_late"] for s in status}})
 
 
+def table_asset_keys() -> dict:
+    """{"schema.table": asset key} for every dbt model, from dbt's manifest: the table a model builds (its schema,
+    its alias: wg_fct_incident builds world_gold.fct_incident) and its asset key (<schema>/<model>, as
+    GoldTranslator names it)."""
+    nodes = json.loads(Path(dbt_project.manifest_path).read_text())["nodes"].values()
+    return {f"{n['config']['schema']}.{n['alias']}": dg.AssetKey([n["config"]["schema"], n["name"]])
+            for n in nodes if n["resource_type"] == "model"}
+
+
+def refreshed_at(instance: dg.DagsterInstance, tables: list, keys: dict) -> float:
+    """When a product was last refreshed, in epoch seconds: the oldest of its tables' latest materializations
+    (any partition), since a product is only as fresh as its stalest table; 0 when a table was never built."""
+    events = [instance.get_latest_materialization_event(keys[t]) if t in keys else None for t in tables]
+    return min((e.timestamp if e else 0.0) for e in events) if events else 0.0
+
+
 @dg.asset(key=dg.AssetKey(["monitoring", "data_products"]), group_name="monitoring", kinds={"prometheus", "python"},
           deps=[k for k in gold.keys if k.path[0] in ("mart_custody", "mart_readiness")],
           description="Each data product's freshness, coverage, readiness and headline numbers, pushed for Prometheus.")
 def data_products(context: dg.AssetExecutionContext):
-    """Push, per product in lakehouse/products/: when it was refreshed (now: this runs right after its mart is
-    rebuilt, so a failed mart leaves it unrefreshed), its max age from the descriptor, the snapshot's coverage
+    """Push, per product in lakehouse/products/: when it was refreshed (the oldest of its tables' latest Dagster
+    materializations: today's for the custody marts, the 1st of the month for the world's), its max age from the
+    descriptor, the snapshot's coverage
     when the product delivers it, the latest month-end headline when it is served by custody_population, and
     whether its latest month-end is final (every business input it depends on has closed it)."""
     con = lake.lake_ro_connect()
@@ -354,10 +376,11 @@ def data_products(context: dg.AssetExecutionContext):
     final = dict(con.sql("SELECT product, is_final FROM mart_readiness.period_readiness "
                          "WHERE month_end = (SELECT max(month_end) FROM mart_readiness.period_readiness)").fetchall())
     con.close()
-    now, pushed = time.time(), []
+    keys, pushed = table_asset_keys(), []
     for f in sorted(PRODUCTS_DIR.glob("*.yml")):
         p = yaml.safe_load(f.read_text())
-        samples = [("lakehouse_product_refreshed_timestamp_seconds", "When the data product was last refreshed.", now, {}),
+        samples = [("lakehouse_product_refreshed_timestamp_seconds", "When the data product was last refreshed.",
+                    refreshed_at(context.instance, p["tables"], keys), {}),
                    ("lakehouse_product_max_age_seconds", "The oldest the product promises to be (its descriptor).",
                     p["max_age_hours"] * 3600, {})]
         if "mart_custody.snapshot_coverage" in p["tables"]:
@@ -533,7 +556,8 @@ defs = dg.Definitions(
             world_landing, world_full, world_monthly],
     jobs=[daily_lake, regenerate_lake, notebook_smoke, monitoring_selftest, lake_housekeeping, world_refresh,
           world_monthly_job],
-    schedules=[daily_schedule, notebook_smoke_schedule, lake_housekeeping_schedule, world_monthly_schedule],
+    schedules=[daily_schedule, notebook_smoke_schedule, lake_housekeeping_schedule, world_refresh_schedule,
+               world_monthly_schedule],
     sensors=[push_run_success, push_run_failure],
     resources={"dbt": DbtCliResource(project_dir=dbt_project)},
 )

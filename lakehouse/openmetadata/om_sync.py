@@ -309,13 +309,23 @@ def product_descriptors():
             [yaml.safe_load(f.read_text()) for f in sorted((folder / "domains").glob("*.yml"))])
 
 
+OM_TYPES = {"INTEGER": "INT"}   # dbt's type name -> OpenMetadata's, where they differ (OM refuses INTEGER)
+
+
 def dbt_contracts():
-    """{model name: [(column, DATA_TYPE)]} for every dbt model whose contract is enforced, columns in order."""
-    out = {}
-    for path in (LAKEHOUSE / "dbt" / "models").rglob("*.yml"):
+    """{"schema.table": [(column, DATA_TYPE)]} for every dbt model whose contract is enforced, columns in order,
+    types as OpenMetadata names them (OM_TYPES). Keyed by the table the model builds (its folder's schema, its alias
+    if it has one), as dbt_docs() is: the world model wg_fct_incident builds world_gold.fct_incident."""
+    out, schemas = {}, dbt_model_schemas()
+    models_dir = LAKEHOUSE / "dbt" / "models"
+    for path in models_dir.rglob("*.yml"):
+        folder = path.parent.relative_to(models_dir).as_posix()
+        owner = max((f for f in schemas if folder == f or folder.startswith(f + "/")), key=len, default=None)
         for m in (yaml.safe_load(path.read_text()) or {}).get("models", []):
             if ((m.get("config") or {}).get("contract") or {}).get("enforced"):
-                out[m["name"]] = [(c["name"], c["data_type"].upper()) for c in m["columns"]]
+                table = (m.get("config") or {}).get("alias") or m["name"]
+                out[f"{schemas.get(owner, 'gold')}.{table}"] = [
+                    (c["name"], OM_TYPES.get(c["data_type"].upper(), c["data_type"].upper())) for c in m["columns"]]
     return out
 
 
@@ -362,15 +372,15 @@ def products(s):
     for p in descriptors:
         r = p["refresh"]
         for table in p["tables"]:
-            model = table.split(".")[1]
-            if model not in contracts or table in done:   # a table in two products gets one contract
+            if table not in contracts or table in done:   # a table in two products gets one contract
                 continue
             done.add(table)
-            name = f"{model}-contract"
+            name = f"{table.split('.')[1]}-contract"
+            every = "" if r["every"] == 1 else f"{r['every']} "
             body = {"name": name, "description": f"The shape and freshness {table} promises: its columns as dbt "
-                    "enforces them, refreshed daily by daily_lake.",
+                    f"enforces them, refreshed every {every}{r['unit']} by {r['at']} ({r['timezone']}).",
                     "entity": {"id": tables[table]["id"], "type": "table"},
-                    "schema": [{"name": c, "dataType": t} for c, t in contracts[model]],
+                    "schema": [{"name": c, "dataType": t} for c, t in contracts[table]],
                     "sla": {"refreshFrequency": {"interval": r["every"], "unit": r["unit"]},
                             "maxLatency": {"value": p["max_age_hours"], "unit": "hour"},
                             "availabilityTime": r["at"], "timezone": OM_TIMEZONES[r["timezone"]]}}

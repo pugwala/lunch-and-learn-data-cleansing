@@ -1,0 +1,11 @@
+# A business input (see records.yml for what each field means).
+name: insurance-claims
+title: Damage claims
+unit: Insurance
+system: Claims system
+description: >
+  The month's damage claims, assessed and settled by Insurance: what each damaged asset cost and what the insurer
+  paid. Claims take longer than reports, so the month's damage stays provisional for weeks after its fights are final.
+closes_within_days: 20
+simulate:
+  closes_after_days: 15

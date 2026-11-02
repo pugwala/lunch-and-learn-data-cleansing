@@ -187,14 +187,15 @@ def month_of(value):
 
 
 def test_custody_dashboard_says_which_months_are_final(api):
-    """"Period status by month-end" lists the latest month-ends for both products, final or provisional and what
-    each waits on, exactly as mart_readiness.period_readiness says."""
+    """"Period status by month-end" lists the latest month-ends for both custody products (and no other), final or
+    provisional and what each waits on, exactly as mart_readiness.period_readiness says."""
     from lakehouse import lake
     rows = custody_charts(api)["Period status by month-end"]
+    assert {r["product"] for r in rows} == {"custody-population", "custody-offenses"}
     con = lake.lake_ro_connect()
     latest = con.execute("SELECT max(month_end) FROM mart_readiness.period_readiness").fetchone()[0]
     want = set(con.execute("SELECT product, period_status, waiting_on FROM mart_readiness.period_readiness "
-                           "WHERE month_end = ?", [latest]).fetchall())
+                           "WHERE month_end = ? AND product LIKE 'custody-%'", [latest]).fetchall())
     got = {(r["product"], r["period_status"], r["waiting_on"]) for r in rows if month_of(r["month_end"]) == latest.strftime("%Y-%m")}
     assert got == want
 

@@ -1,0 +1,20 @@
+# A data product: one file is its whole promise (see custody-population.yml for how it is published and tested).
+name: incident-damage
+title: Incident Damage
+domain: Field Operations
+owner: Lakehouse stewards
+question: What do fights destroy each month, what does insurance pay, and what is left uninsured?
+description: >
+  Every damage assessment from the expanded world's fights, by the month of the fight, the city and the kind of
+  asset: what it cost, whether it was insured, what insurance paid and how long the repair took. The uninsured cost
+  is what nobody covered. No restricted or personal columns.
+tables:            # what the product delivers: none may hold a restricted or personal column
+  - world_gold.fct_damage
+sources:           # where its data comes from: the city comes from the fight
+  - world_gold.fct_incident
+  - world_gold.dim_location
+cube_views: [incident_damage]
+glossary_terms: [Damage Assessment, Incident, Location]
+depends_on: [field-reports, insurance-claims]   # the fight's report, then the claim's settlement
+refresh: {every: 1, unit: month, at: "05:30", timezone: America/Chicago}
+max_age_hours: 768   # 32 days: world_refresh and world_monthly_job run on the 1st

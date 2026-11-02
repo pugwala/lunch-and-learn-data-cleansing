@@ -1,0 +1,20 @@
+# A data product: one file is its whole promise (see custody-population.yml for how it is published and tested).
+name: court-outcomes
+title: Court Outcomes
+domain: Justice
+owner: Lakehouse stewards
+question: How many charges do the courts decide each month, how do they end, and how many people are convicted?
+description: >
+  Every charge from the expanded world's fights, by the month the court decided it, its NIBRS offense code and its
+  outcome, with convictions and the distinct people charged (person keys, counted at query time). A conviction
+  links to today's offender record. No restricted or personal columns.
+tables:            # what the product delivers: none may hold a restricted or personal column
+  - world_gold.fct_charge
+sources:           # where its data comes from: offense descriptions come from the course's offense codes
+  - world_gold.fct_incident
+  - gold.dim_offense
+cube_views: [court_outcomes]
+glossary_terms: [Charge, Court Outcome, Offense Code, Person Key, Offender Number]
+depends_on: [courts]   # the Courts liaison's decisions: the same input Custody Offenses waits on
+refresh: {every: 1, unit: month, at: "05:30", timezone: America/Chicago}
+max_age_hours: 768   # 32 days: world_refresh and world_monthly_job run on the 1st

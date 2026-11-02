@@ -1,0 +1,290 @@
+# The expanded world's data products (lakehouse/products/field-incidents.yml, incident-damage.yml,
+# court-outcomes.yml). Four hidden cubes over world_gold, one per fact; consumers see four views, one per product
+# question. People are distinct person keys, counted at query time (count_distinct), so they are never summed.
+# None of these has a restricted or personal member, so no masking applies.
+#
+# Each view carries its product's period_status and waiting_on: a hidden readiness cube per product, one row per
+# month-end, joined by the month a row belongs to (the fight's month; for charges, the month the court decided),
+# so it rides along without changing any count.
+cubes:
+  - name: world_incidents
+    sql_table: lake.world_gold.fct_incident
+    public: false
+    description: One row per fight in the expanded world (world_gold.fct_incident).
+    joins:
+      - name: world_cities
+        relationship: many_to_one
+        sql: "{CUBE}.city_id = {world_cities}.location_id"
+      - name: field_incidents_readiness
+        relationship: many_to_one
+        sql: "last_day({CUBE}.incident_month) = {field_incidents_readiness}.month_end"
+    dimensions:
+      - name: incident_id
+        sql: incident_id
+        type: number
+        primary_key: true
+      - name: incident_month
+        sql: incident_month
+        type: time
+        description: The month the fight happened (empty when its date couldn't be read).
+      - name: incident_type
+        sql: incident_type
+        type: string
+      - name: outcome
+        sql: outcome
+        type: string
+        description: How the fight ended.
+    measures:
+      - name: fights
+        type: count
+        description: Fights.
+      - name: bystanders_injured
+        sql: bystanders_injured
+        type: sum
+        description: Bystanders injured in the fights.
+      - name: bystanders_killed
+        sql: bystanders_killed
+        type: sum
+        description: Bystanders killed in the fights.
+      - name: avg_duration_min
+        sql: duration_min
+        type: avg
+        description: How long a fight lasted, on average, in minutes.
+
+  - name: world_cities
+    sql_table: lake.world_gold.dim_location
+    public: false
+    dimensions:
+      - name: location_id
+        sql: location_id
+        type: number
+        primary_key: true
+      - name: city_name
+        sql: name
+        type: string
+        description: The city the fight happened in.
+
+  - name: world_participation
+    sql_table: lake.world_gold.fct_participation
+    public: false
+    description: One row per person in a fight (world_gold.fct_participation).
+    joins:
+      - name: world_incidents
+        relationship: many_to_one
+        sql: "{CUBE}.incident_id = {world_incidents}.incident_id"
+      - name: field_incidents_readiness
+        relationship: many_to_one
+        sql: "last_day({CUBE}.incident_month) = {field_incidents_readiness}.month_end"
+    dimensions:
+      - name: participant_id
+        sql: participant_id
+        type: number
+        primary_key: true
+      - name: incident_month
+        sql: incident_month
+        type: time
+      - name: side
+        sql: side
+        type: string
+      - name: role
+        sql: role
+        type: string
+      - name: status
+        sql: status
+        type: string
+        description: What became of the person in the fight (captured, escaped, injured, ...).
+    measures:
+      - name: participations
+        type: count
+        description: People in fights, counted once per fight (someone in two fights counts twice).
+      - name: people_involved
+        sql: person_key
+        type: count_distinct
+        description: Distinct people (person keys) in the fights; never add these up across months or groups.
+
+  - name: world_damage
+    sql_table: lake.world_gold.fct_damage
+    public: false
+    description: One row per damage assessment (world_gold.fct_damage).
+    joins:
+      - name: world_incidents
+        relationship: many_to_one
+        sql: "{CUBE}.incident_id = {world_incidents}.incident_id"
+      - name: incident_damage_readiness
+        relationship: many_to_one
+        sql: "last_day({CUBE}.incident_month) = {incident_damage_readiness}.month_end"
+    dimensions:
+      - name: damage_id
+        sql: damage_id
+        type: number
+        primary_key: true
+      - name: incident_month
+        sql: incident_month
+        type: time
+        description: The month of the fight that did the damage.
+      - name: asset_type
+        sql: asset_type
+        type: string
+      - name: insured
+        sql: insured
+        type: boolean
+      - name: repair_status
+        sql: repair_status
+        type: string
+    measures:
+      - name: assessments
+        type: count
+        description: Damage assessments.
+      - name: damage_cost_usd
+        sql: cost_usd
+        type: sum
+        description: What the damage cost, in US dollars.
+      - name: insurance_paid_usd
+        sql: insurance_paid_usd
+        type: sum
+        description: What insurance paid, in US dollars.
+      - name: uninsured_cost_usd
+        sql: cost_usd
+        type: sum
+        filters:
+          - sql: "NOT {CUBE}.insured"
+        description: The cost of damage nobody insured, in US dollars.
+      - name: avg_days_to_repair
+        sql: days_to_repair
+        type: avg
+        description: Days from the fight to the repair, on average, for repaired assets.
+
+  - name: world_charges
+    sql_table: lake.world_gold.fct_charge
+    public: false
+    description: One row per charge with its court outcome (world_gold.fct_charge).
+    joins:
+      - name: offenses
+        relationship: many_to_one
+        sql: "{CUBE}.offense_code = {offenses}.offense_code"
+      - name: court_outcomes_readiness
+        relationship: many_to_one
+        sql: "last_day({CUBE}.decided_on) = {court_outcomes_readiness}.month_end"
+    dimensions:
+      - name: charge_id
+        sql: charge_id
+        type: number
+        primary_key: true
+      - name: decided_on
+        sql: decided_on
+        type: time
+        description: The day the court decided the charge (empty while it is pending).
+      - name: filed_on
+        sql: filed_on
+        type: time
+      - name: offense_code
+        sql: offense_code
+        type: string
+      - name: outcome
+        sql: outcome
+        type: string
+        description: How the court decided the charge (convicted, pleaded guilty, acquitted, dismissed, pending).
+      - name: is_conviction
+        sql: is_conviction
+        type: boolean
+    measures:
+      - name: charges
+        type: count
+        description: Charges.
+      - name: convictions
+        type: count
+        filters:
+          - sql: "{CUBE}.is_conviction"
+        description: Charges that ended in a conviction (convicted or pleaded guilty).
+      - name: people_charged
+        sql: person_key
+        type: count_distinct
+        description: Distinct people (person keys) charged; never add these up across months or groups.
+
+  # Readiness for each world product: mart_readiness.period_readiness, one row per month-end (see custody.yml).
+  - name: field_incidents_readiness
+    sql: "SELECT * FROM lake.mart_readiness.period_readiness WHERE product = 'field-incidents'"
+    public: false
+    refresh_key: {every: 10 second}
+    dimensions: &world_readiness
+      - name: month_key
+        sql: "CAST({CUBE}.month_end AS VARCHAR)"
+        type: string
+        primary_key: true
+      - name: month_end
+        sql: month_end
+        type: time
+      - name: period_status
+        sql: period_status
+        type: string
+        description: final once every business input the product depends on has closed the month, else provisional.
+      - name: waiting_on
+        sql: waiting_on
+        type: string
+        description: The business units whose inputs are still open for the month (empty when final).
+
+  - name: incident_damage_readiness
+    sql: "SELECT * FROM lake.mart_readiness.period_readiness WHERE product = 'incident-damage'"
+    public: false
+    refresh_key: {every: 10 second}
+    dimensions: *world_readiness
+
+  - name: court_outcomes_readiness
+    sql: "SELECT * FROM lake.mart_readiness.period_readiness WHERE product = 'court-outcomes'"
+    public: false
+    refresh_key: {every: 10 second}
+    dimensions: *world_readiness
+
+views:
+  - name: field_incidents
+    description: >
+      Field incidents: fights each month, by city, kind and outcome, with bystanders hurt. period_status says
+      whether a month's numbers are final yet, waiting_on who they still wait for. People are in fight_participants.
+    meta: {product: field-incidents}
+    cubes:
+      - join_path: world_incidents
+        includes: [incident_month, incident_type, outcome, fights, bystanders_injured, bystanders_killed,
+                   avg_duration_min]
+      - join_path: world_incidents.world_cities
+        includes: [city_name]
+      - join_path: world_incidents.field_incidents_readiness
+        includes: [period_status, waiting_on]
+
+  - name: fight_participants
+    description: >
+      Who took part in the fights: by month, side, role and what became of them. Count people with
+      people_involved (distinct person keys, never summed); participations counts each person once per fight.
+    meta: {product: field-incidents}
+    cubes:
+      - join_path: world_participation
+        includes: [incident_month, side, role, status, participations, people_involved]
+      - join_path: world_participation.field_incidents_readiness
+        includes: [period_status, waiting_on]
+
+  - name: incident_damage
+    description: >
+      Incident damage: what the fights destroyed, by the fight's month, city and asset type; what it cost, what
+      insurance paid, and the uninsured cost. period_status says whether a month's numbers are final yet (they
+      wait on Insurance's claims as well as Field Operations' reports).
+    meta: {product: incident-damage}
+    cubes:
+      - join_path: world_damage
+        includes: [incident_month, asset_type, insured, repair_status, assessments, damage_cost_usd,
+                   insurance_paid_usd, uninsured_cost_usd, avg_days_to_repair]
+      - join_path: world_damage.world_incidents.world_cities
+        includes: [city_name]
+      - join_path: world_damage.incident_damage_readiness
+        includes: [period_status, waiting_on]
+
+  - name: court_outcomes
+    description: >
+      Court outcomes: charges by the month the court decided them, by offense and outcome, with convictions and
+      the distinct people charged (never summed). period_status says whether a month's decisions are final yet.
+    meta: {product: court-outcomes}
+    cubes:
+      - join_path: world_charges
+        includes: [decided_on, filed_on, offense_code, outcome, is_conviction, charges, convictions, people_charged]
+      - join_path: world_charges.offenses
+        includes: [offense_description]
+      - join_path: world_charges.court_outcomes_readiness
+        includes: [period_status, waiting_on]

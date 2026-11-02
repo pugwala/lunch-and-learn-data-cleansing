@@ -28,7 +28,7 @@ every number matches the Facilitator Guide. dbt builds gold, and Dagster runs it
 | `monitoring/` | Prometheus config, probe targets and alert rules (`prometheus/`), Alertmanager config (`alertmanager/`), blackbox modules (`blackbox/`), Grafana provisioning, the Home Lakehouse dashboard and `set_home.py` (`grafana/`) |
 | `ntfy/` | ntfy, where alerts go: `server.yml` (deny-all, which user may do what), `start.sh` (declares the users from `.env`), `templates/lakehouse.yml` (the notification and its priority) |
 | `ontology/` | Business rules over the Fuseki graphs: `rules/*.rq` (deductions, one SPARQL CONSTRUCT each), `shapes.ttl` (SHACL constraints), `check_rules.py` (asks Fuseki to validate them) |
-| `products/` | The data products, one descriptor each (`custody-population.yml`, `custody-offenses.yml`), their domains (`domains/`), and the business inputs they depend on (`inputs/`, one file each) |
+| `products/` | The data products, one descriptor each (two custody products, three in the expanded world), their domains (`domains/`), and the business inputs they depend on (`inputs/`, one file each) |
 | `readiness/` | `closes.py`: syncs the declared inputs and dependencies to the lake, records each month a business unit closes (`report`), plays the fictional units (`simulate`), and shows who is late (`status`) |
 | `metrics.py` | `push()`: Dagster's pipeline and data-quality numbers to the Pushgateway (never fails a run) |
 | `housekeeping.py` | DuckLake housekeeping, run weekly by `lake_housekeeping`: expire snapshots older than 30 days, merge small files, delete unneeded and orphaned files (`--dry-run` only reports) |
@@ -257,6 +257,11 @@ SQL Lab query goes through the governed layer and nothing in Superset reads Duck
 **Trust Test dashboard.** The course's Trust Test scorecard (session 1's eight questions, answered from a default load and from the cleansed, typed data) flows through every layer: the loader computes it with `lnl.trust` into `silver.trust_test`, dbt publishes `gold.trust_test`, Cube serves it as the `trust_test` cube, and `superset/dashboards.py` builds the **Trust Test** dashboard on it through Superset's API. `bootstrap.sh` runs that script (with `--check` when checking), and a re-run changes nothing.
 
 **Custody dashboard.** The same script builds **Custody** (`/superset/dashboard/custody/`) on the custody data products' Cube views: people in custody at each month-end, people by custody level and by offense category at the latest month-end, and new sentences per month. Each chart's metric is Cube's own measure, written as `MEASURE(people_in_custody)`, so people stay distinct SIDs counted by Cube, not a sum Superset makes up. "Latest" is Cube's `is_latest_month_end` flag, so the tables move on by themselves when a month completes. Each dashboard is one entry in `DASHBOARDS` in `superset/dashboards.py`; add a dict there to add one.
+
+**Fights, Damage and Courts dashboard** (`/superset/dashboard/world/`), on the expanded world's three products: fights
+per month and by outcome, damage cost per month and the uninsured cost by asset type, convictions per month and
+charges by court outcome. Each dashboard's status table lists only its own products, read from the descriptors by
+domain.
 
 In SQL Lab, query cubes with Cube's SQL: `SELECT MEASURE(record_count) FROM offender_records`.
 
@@ -502,18 +507,25 @@ system holds to it:
 | The promise | Where it lives |
 | --- | --- |
 | The question, owner, description | `products/<name>.yml`, published to OpenMetadata as a Data Product in its Domain |
-| The tables it delivers | dbt models in a mart schema (`mart_custody`); none may hold a restricted or personal column |
+| The tables it delivers | dbt models with enforced contracts (`mart_custody`, `world_gold`); none may hold a restricted or personal column |
 | A shape that won't change silently | dbt enforced contracts, mirrored as OpenMetadata Data Contracts with the SLA |
 | What it means | Glossary terms on its columns; the product as a DCAT dataset in Fuseki |
 | Who may see what | One Cube view per question, with no restricted members |
-| Fresh by when | `max_age_hours`; `monitoring/data_products` pushes its age, and `DataProductStale` alerts past it |
+| Fresh by when | `max_age_hours`; `monitoring/data_products` pushes when its tables were last built (the oldest of their latest Dagster materializations), and `DataProductStale` alerts past it |
 
-Two products today, in the **Custody Operations** domain:
+Five products today, in three domains:
 
-- **Custody Population**: who is held at each month-end, by unit, custody level and threat level (Cube view
-  `custody_population`).
-- **Custody Offenses**: what they're held for, and new sentences each month (views `custody_offenses`,
-  `custody_admissions`).
+| Product | Domain | Answers | Cube views | Refreshed |
+| --- | --- | --- | --- | --- |
+| **Custody Population** | Custody Operations | Who is held at each month-end, by unit, custody level and threat level | `custody_population` | daily, 26 h |
+| **Custody Offenses** | Custody Operations | What they're held for, and new sentences each month | `custody_offenses`, `custody_admissions` | daily, 26 h |
+| **Field Incidents** | Field Operations | Fights each month by city, kind and outcome; who took part (distinct person keys) | `field_incidents`, `fight_participants` | monthly, 32 days |
+| **Incident Damage** | Field Operations | What fights destroyed, what insurance paid, and the uninsured cost | `incident_damage` | monthly, 32 days |
+| **Court Outcomes** | Justice | Charges decided each month, by outcome and offense; convictions; people charged | `court_outcomes` | monthly, 32 days |
+
+The world's products (dataset expansion, chunk 9) deliver `world_gold` tables directly: they already have enforced
+contracts, so they need no mart. The world is rebuilt on the 1st (`world_refresh` at 04:30, `world_monthly_job` at
+05:30, both scheduled), so they promise a month, not a day.
 
 **People, not records.** A person can hold several records, sometimes two at once (1,008 overlapping pairs), so
 the products count people as distinct SIDs at query time, from a snapshot that carries the SID, and never store
@@ -523,10 +535,11 @@ that explicit; "inmate" and "offender" are roles, so synonyms.
 
 **Adding a product**, test first as everything here:
 
-1. Model its tables in dbt under `dbt/models/marts/<subject>/`, with `contract: {enforced: true}` and a type on
-   every column; give the folder a `+schema` in `dbt_project.yml`.
+1. Model its tables in dbt with `contract: {enforced: true}` and a type on every column: under
+   `dbt/models/marts/<subject>/` with a `+schema` in `dbt_project.yml`, or use gold tables that already have one
+   (the world's products use `world_gold`).
 2. Add a Cube view per question it answers (`cube/model/`), with no restricted members.
-3. Write `products/<name>.yml` (copy one of the two) and, for a new domain, `products/domains/<name>.yml`.
+3. Write `products/<name>.yml` (copy one) and, for a new domain, `products/domains/<name>.yml`.
 4. Run `scripts/bootstrap.sh` (or wait for 05:00): OpenMetadata, Fuseki and monitoring pick it up.
    `acceptance/test_products.py` checks every table, view and term it names is real.
 
@@ -537,21 +550,27 @@ its own unit on its own schedule. Until then it is **provisional**: fresh, valid
 product declares the **business inputs** it depends on; each input's unit reports when a month is closed; a month is
 **final** once every input has closed it.
 
-| Input (`products/inputs/`) | Unit | Closes within | Custody Population | Custody Offenses |
-| --- | --- | --- | --- | --- |
-| `records`: admissions, releases, transfers | Records | 5 days | needs it | needs it |
-| `classification`: custody-level and threat reviews | Classification | 10 days | needs it | |
-| `courts`: sentencing orders and offense codes | Courts liaison | 7 days | | needs it |
+| Input (`products/inputs/`) | Unit | Closes within | Needed by |
+| --- | --- | --- | --- |
+| `records`: admissions, releases, transfers | Records | 5 days | Custody Population, Custody Offenses |
+| `classification`: custody-level and threat reviews | Classification | 10 days | Custody Population |
+| `courts`: sentencing orders and charge decisions | Courts liaison | 7 days | Custody Offenses, Court Outcomes |
+| `field-reports`: incident reports | Field Operations | 3 days | Field Incidents, Incident Damage |
+| `insurance-claims`: damage claims | Insurance | 20 days | Incident Damage |
 
 The units are fictional, so the daily run plays them: each closes the month on its `simulate.closes_after_days`, so
-every month starts provisional and turns final over its first ten days. Where it shows:
+every month starts provisional and turns final over its first three weeks (Insurance is the slowest). One input can
+feed products in different domains: the Courts liaison's close finalizes Custody Offenses and Court Outcomes alike.
+A new input with no history is closed by the next daily run through the latest month its unit would have closed
+by then, so adding one doesn't leave thirty years provisional. Every product has a row for every month-end from January 1996 (`readiness_start` in
+`dbt_project.yml`, the world's first fights) to the custody snapshot's last. Where it shows:
 
-- **Cube:** `period_status` (`final` or `provisional`) and `waiting_on` in `custody_population` and
-  `custody_offenses`, and every product's months in the `period_readiness` view. One row per month-end, joined by
-  month-end, so no count changes.
+- **Cube:** `period_status` (`final` or `provisional`) and `waiting_on` in every product view, and every product's
+  months in the `period_readiness` view. One row per month-end, joined by the month a row belongs to (for charges,
+  the month the court decided), so no count changes.
 - **The MCP server:** `query_metric` on a product's metric adds `readiness` (the latest month-end, and every month
   still provisional, with who it waits on).
-- **Superset:** *Period status by month-end*, at the top of the Custody dashboard.
+- **Superset:** a status table at the top of the Custody and the Fights, Damage and Courts dashboards.
 - **Alerts:** `BusinessInputLate` when a unit is past its own deadline; `lakehouse_product_latest_period_final` per
   product in Prometheus.
 - **The ontology:** each input an `lh:BusinessInput`, each product `lh:dependsOn` its inputs (`graph/readiness`),
@@ -753,6 +772,28 @@ rows are kept as written, so they may break it:
 Tests: `pytest lakehouse/acceptance/test_world_meaning.py` (10, on the stack), plus the rule tests in the world's
 dbt build. 6 mutations all caught, each by its own rule.
 
+**Chunk 9, the world's data products (`products/`, `cube/model/world.yml`, `superset/dashboards.py`).** Three
+products in two new domains, declared in files like the custody ones (see Data products): **Field Incidents** and
+**Incident Damage** in Field Operations, **Court Outcomes** in Justice. Each:
+
+- delivers `world_gold` tables, whose dbt contracts become OpenMetadata data contracts with a monthly SLA
+  (`om_sync.py` now finds a model's contract by the table it builds, so aliased world models are covered);
+- is served by hidden cubes over `world_gold` and public views (`field_incidents`, `fight_participants`,
+  `incident_damage`, `court_outcomes`) that count people as distinct person keys and carry `period_status`, so the
+  MCP agent answers "fights by month in 2025" with the product's readiness, with no change to the server;
+- waits on business inputs: two new ones, Field Operations' `field-reports` and Insurance's `insurance-claims`,
+  and the Courts liaison's existing `courts`;
+- reports its freshness truthfully: the daily run pushes the oldest of its tables' latest builds, so a monthly
+  product shows when the world was last built, not when the check ran. A new `world_refresh_schedule` (04:30 on the
+  1st) rebuilds the whole world each month, before `world_monthly_job`.
+
+Superset has a **Fights, Damage and Courts** dashboard. Tests: `pytest lakehouse/acceptance/test_world_products.py`
+(19, on the stack, all seen failing first); `test_products.py`, `test_readiness.py` and `test_superset.py` now expect
+five products and the January 1996 calendar. 7 mutations all caught: people summed instead of counted once, the
+uninsured and conviction filters dropped, the calendar starting with the custody snapshot again, Incident Damage
+forgetting Insurance, contracts keyed by model name again, and the Custody status table listing every product.
+OpenMetadata names dbt's `INTEGER` as `INT`; `om_sync.py` translates it, or the contract is refused.
+
 ## Test status
 
 **Before a push, or in CI:** `bash lakehouse/ci/checks.sh` runs every check that needs no secrets and no running stack,
@@ -779,7 +820,7 @@ only says there's nothing to check. Its first run passed all 14 checks on a GitH
 | `scripts/bootstrap.sh`: 61 bats tests (`bats lakehouse/tests/bootstrap.bats`, needs `apt install bats`), each shown to fail when the behaviour it covers is broken | On the VM, with stub commands; never touches the live stack |
 | dbt gold models and their tests (25 today), Dagster job (both jobs, plus the blocking check stopping gold) | Sandbox, against a plain DuckDB file |
 | Cube v1.8.3 over gold, read-only as `lake_ro`, restricted columns masked except for `restricted_reader`: 15 acceptance tests (`pytest lakehouse/acceptance/test_cube.py`); unmasking everyone made 8 of them fail | On the VM |
-| Superset 6.1.0 under `/superset`, Cube as its only database, the Trust Test and Custody dashboards: 9 acceptance tests (`pytest lakehouse/acceptance/test_superset.py`); the only-Cube check was shown to fail with a decoy database added, the Custody chart checks failed before the dashboard existed, and `--check` exits 1 on a changed layout | On the VM |
+| Superset 6.1.0 under `/superset`, Cube as its only database, the Trust Test and Custody dashboards (the world's dashboard is in `test_world_products.py`): 9 acceptance tests (`pytest lakehouse/acceptance/test_superset.py`); the only-Cube check was shown to fail with a decoy database added, the Custody chart checks failed before the dashboard existed, and `--check` exits 1 on a changed layout | On the VM |
 | dbt on DuckLake: the first `daily_lake` run (load 7.5 s, gold 5.5 s, one expected `dq_score_floor` warning), checked by 14 acceptance tests: `docker compose --profile core exec -T jupyter pytest -q lakehouse/acceptance` | On the VM |
 | Trust Test from loader to dashboard (`silver.trust_test` → `gold.trust_test` → Cube → Superset): 1 parity check, 4 acceptance tests and 3 bats tests, each shown failing before the code existed | On the VM |
 | `%load_ext lakehouse.sql_magic` (jupysql, read-only as `lake_ro`): 6 acceptance tests (`pytest lakehouse/acceptance/test_sql.py`), plus a real notebook kernel run from outside the repo; the password and read-only checks were shown to fail on deliberate breaks | On the VM |
@@ -807,7 +848,8 @@ only says there's nothing to check. Its first run passed all 14 checks on a GitH
 | Person model (glossary term, `isAbout` relation, `gold.dim_person`): 8 acceptance tests (`test_person.py`) and 6 dbt tests, each seen failing first | On the VM |
 | Custody mart (`mart_custody`, enforced contracts): 7 acceptance tests (`test_custody_marts.py`) and 3 dbt tests, each seen failing first; a deliberate type change was refused by dbt | On the VM |
 | Custody products on Cube (three views; the MCP server picks the view that has the dimension): 10 acceptance tests (`test_custody_cube.py`), each seen failing first | On the VM |
-| Product descriptors, OpenMetadata domain, data products and contracts, DCAT in Fuseki, product freshness and coverage alerts: 14 acceptance tests (`test_products.py`), each seen failing first; a made-up view in a descriptor failed its test, and a 30-hour-old refresh fired `DataProductStale` | On the VM |
+| Product descriptors, OpenMetadata domain, data products and contracts, DCAT in Fuseki, product freshness and coverage alerts: 17 acceptance tests (`test_products.py`, one per product where a test checks each), each seen failing first; a made-up view in a descriptor failed its test, and a 30-hour-old refresh fired `DataProductStale` | On the VM |
+| The world's data products (three descriptors, two domains, two inputs, four Cube views, monthly contracts, the Fights, Damage and Courts dashboard, freshness from Dagster materializations): 19 acceptance tests (`test_world_products.py`), all seen failing first; 7 mutations all caught | On the VM |
 
 ## Next phases
 

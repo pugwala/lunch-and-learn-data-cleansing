@@ -1,0 +1,12 @@
+# A business input (see records.yml for what each field means).
+name: field-reports
+title: Incident reports
+unit: Field Operations
+system: Incident reporting
+description: >
+  The month's incident reports from the field, filed and signed off by Field Operations: every fight, where it
+  happened, who took part and how it ended. Until they are, the month's fights, and the damage they did, may still
+  change.
+closes_within_days: 3
+simulate:
+  closes_after_days: 2

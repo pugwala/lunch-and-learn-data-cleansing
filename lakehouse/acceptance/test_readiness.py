@@ -101,13 +101,15 @@ def test_the_lake_holds_what_the_files_declare():
 # --- readiness follows the closes ------------------------------------------------------------------------------
 
 def test_readiness_follows_the_watermarks():
-    """For every product and month-end of the snapshot: final exactly when each input it depends on has been
+    """For every product and month-end of the calendar (January 1996 to the snapshot's last): final exactly when each input it depends on has been
     reported complete through that month-end (the latest report counts); otherwise provisional, waiting on the
     units of the inputs still open."""
     con = lake.lake_ro_connect()
     marks = dict(con.execute("SELECT input, arg_max(complete_through, reported_at) FROM ops.input_closes "
                              "GROUP BY input").fetchall())
-    months = [r[0] for r in con.execute("SELECT DISTINCT month_end FROM mart_custody.custody_snapshot_monthly").fetchall()]
+    months = [r[0] for r in con.execute(   # the calendar: every month-end from January 1996 to the snapshot's last
+        "SELECT CAST(last_day(m) AS DATE) FROM range(TIMESTAMP '1996-01-01', "
+        "(SELECT max(month_end) FROM mart_custody.custody_snapshot_monthly) + INTERVAL 1 DAY, INTERVAL 1 MONTH) t(m)").fetchall()]
     con.close()
     got = readiness()
     assert set(got) == {(name, m) for name in PRODUCTS for m in months}

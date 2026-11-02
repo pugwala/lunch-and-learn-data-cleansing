@@ -66,9 +66,11 @@ def get(om, path, **params):
 
 # --- the descriptors tell the truth ----------------------------------------------------------------------------
 
-def test_both_products_have_a_full_descriptor():
-    """custody-population and custody-offenses exist, each with every field, named after its file."""
-    assert set(PRODUCTS) == {"custody-population", "custody-offenses"}
+def test_every_product_has_a_full_descriptor():
+    """The two custody products and the expanded world's three exist, each with every field, named after its
+    file."""
+    assert set(PRODUCTS) == {"custody-population", "custody-offenses", "field-incidents", "incident-damage",
+                             "court-outcomes"}
     for stem, p in PRODUCTS.items():
         assert REQUIRED <= set(p), (stem, REQUIRED - set(p))
         assert p["name"] == stem and p["max_age_hours"] > 0
@@ -107,7 +109,7 @@ def test_the_domain_is_consumer_aligned(om):
     assert domain["domainType"] == "Consumer-aligned" and domain.get("description")
 
 
-@pytest.mark.parametrize("stem", ["custody-population", "custody-offenses"])
+@pytest.mark.parametrize("stem", sorted(PRODUCTS))
 def test_each_data_product_matches_its_descriptor(om, stem):
     """The data product sits in its domain, its assets are exactly the delivered tables, and its custom
     properties carry the question, views and terms."""
@@ -126,21 +128,22 @@ def test_each_data_product_matches_its_descriptor(om, stem):
 
 def test_contracted_tables_carry_dbts_columns_and_the_sla(om):
     """Every delivered table with a dbt-enforced contract has an OpenMetadata data contract: the same columns and
-    types as dbt, and the SLA the descriptors promise (daily, at 05:00 Central, at most 26 hours old)."""
-    models = dbt_models()
-    contracted = {t for p in PRODUCTS.values() for t in p["tables"]
-                  if ((models.get(t.split(".")[1]) or {}).get("config") or {}).get("contract", {}).get("enforced")}
-    assert contracted == {"mart_custody.custody_snapshot_monthly", "mart_custody.snapshot_coverage"}
-    for table in contracted:
-        model = table.split(".")[1]   # a contract's name sits under its table: <table FQN>.dataContract_<name>
-        contract = get(om, f"dataContracts/name/lakehouse.lake.{table}.dataContract_{model}-contract", fields="sla")
+    types as dbt, and the SLA its product's descriptor promises (custody: daily at 05:00 Central, at most 26 hours
+    old; the world: monthly at 05:30, at most 768). Tables are found as dbt builds them (schema, alias)."""
+    from lakehouse.openmetadata.om_sync import dbt_contracts
+    contracts = dbt_contracts()
+    contracted = {t: p for p in PRODUCTS.values() for t in p["tables"] if t in contracts}
+    assert {"mart_custody.custody_snapshot_monthly", "mart_custody.snapshot_coverage",
+            "world_gold.fct_incident", "world_gold.fct_charge"} <= set(contracted)
+    for table, p in contracted.items():
+        name = table.split(".")[1]   # a contract's name sits under its table: <table FQN>.dataContract_<name>
+        contract = get(om, f"dataContracts/name/lakehouse.lake.{table}.dataContract_{name}-contract", fields="sla")
         assert contract["entity"]["id"] == get(om, f"tables/name/lakehouse.lake.{table}")["id"]
-        want = [(c["name"], c["data_type"].upper()) for c in models[table.split(".")[1]]["columns"]]
-        assert [(c["name"], c["dataType"]) for c in contract["schema"]] == want
-        sla = contract["sla"]
-        assert sla["refreshFrequency"] == {"interval": 1, "unit": "day"}
-        assert sla["maxLatency"] == {"value": 26, "unit": "hour"}
-        assert sla["availabilityTime"] == "05:00" and sla["timezone"] == "GMT-06:00 (America/Chicago)"   # OM's label
+        assert [(c["name"], c["dataType"]) for c in contract["schema"]] == contracts[table]
+        sla, r = contract["sla"], p["refresh"]
+        assert sla["refreshFrequency"] == {"interval": r["every"], "unit": r["unit"]}, table
+        assert sla["maxLatency"] == {"value": p["max_age_hours"], "unit": "hour"}, table
+        assert sla["availabilityTime"] == r["at"] and sla["timezone"] == "GMT-06:00 (America/Chicago)"   # OM's label
 
 
 # --- Fuseki: the products as DCAT datasets ---------------------------------------------------------------------
@@ -155,14 +158,15 @@ def test_products_are_dcat_datasets_in_their_domain():
     """Each product is a dcat:Dataset with its title, domain, tables and Cube views as dcat:DataService."""
     rows = select(PRODUCT_PREFIXES + "SELECT ?title ?domain WHERE { ?p a dcat:Dataset ; dct:title ?title ; "
                   "lh:domain ?domain } ORDER BY ?title")
-    assert rows == [{"title": "Custody Offenses", "domain": "Custody Operations"},
-                    {"title": "Custody Population", "domain": "Custody Operations"}]
+    assert rows == sorted(({"title": p["title"], "domain": p["domain"]} for p in PRODUCTS.values()),
+                          key=lambda r: r["title"])
     assert ask(PRODUCT_PREFIXES + 'ASK { prod:custody-population lh:usesTable "mart_custody.custody_snapshot_monthly" ; '
                'dcat:accessService ?v . ?v a dcat:DataService ; dct:title "custody_population" }')
 
 
-def test_a_change_to_person_touches_both_products():
-    """Impact analysis in one query: both products speak in the Person term."""
+def test_a_change_to_person_touches_both_custody_products():
+    """Impact analysis in one query: both custody products speak in the Person term (the world's speak in Person
+    Key)."""
     rows = select(PRODUCT_PREFIXES + "SELECT ?title WHERE { ?p a dcat:Dataset ; dct:title ?title ; "
                   "lh:usesTerm term:person } ORDER BY ?title")
     assert [r["title"] for r in rows] == ["Custody Offenses", "Custody Population"]
@@ -195,9 +199,12 @@ def test_each_product_reports_its_freshness_against_its_own_promise():
 
 
 def test_each_product_reports_its_coverage():
-    """Records the snapshot can't place in time are reported, per product: 5,860 of 100,000 today."""
-    assert prom("lakehouse_product_records_without_dates") == {stem: 5_860.0 for stem in PRODUCTS}
-    assert prom("lakehouse_product_records_total") == {stem: 100_000.0 for stem in PRODUCTS}
+    """Records the snapshot can't place in time are reported, per product that delivers the snapshot (the custody
+    ones): 5,860 of 100,000 today."""
+    snapshot = {stem for stem, p in PRODUCTS.items() if "mart_custody.snapshot_coverage" in p["tables"]}
+    assert snapshot == {"custody-population", "custody-offenses"}
+    assert prom("lakehouse_product_records_without_dates") == {stem: 5_860.0 for stem in snapshot}
+    assert prom("lakehouse_product_records_total") == {stem: 100_000.0 for stem in snapshot}
 
 
 def test_population_headline_matches_cube():

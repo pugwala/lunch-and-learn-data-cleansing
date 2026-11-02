@@ -1,11 +1,12 @@
 # A business input (see records.yml for what each field means).
 name: courts
-title: Sentencing orders and offense codes
+title: Sentencing orders and charge decisions
 unit: Courts liaison
 system: Court case feed
 description: >
-  The month's sentencing orders from the courts, with their offense codes, entered by the Courts liaison unit.
-  Until they are, what people are held for at the month-end may still change.
+  The month's court decisions, entered by the Courts liaison unit: sentencing orders with their offense codes, and
+  the outcome of every charge decided (convicted, pleaded guilty, acquitted, dismissed). Until they are, what people
+  are held for at the month-end, and how the month's charges ended, may still change.
 closes_within_days: 7
 simulate:
   closes_after_days: 5

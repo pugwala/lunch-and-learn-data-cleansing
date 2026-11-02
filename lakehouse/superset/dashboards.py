@@ -6,14 +6,18 @@
 bootstrap.sh runs it in the jupyter container, as Superset's admin, after the lake has data. Every chart reads a
 cube from the Cube database that superset/start.sh registers, so dashboards only ever see the governed model.
 Running it again changes nothing: each object is found by name first and only written when it differs.
-Two dashboards, each a spec in DASHBOARDS: the Trust Test, and Custody (the custody data products' views). Custody
-charts use Cube's own MEASURE(...) as their metric, so people are still counted as distinct SIDs, by Cube.
+Three dashboards, each a spec in DASHBOARDS: the Trust Test; Custody (the custody data products' views); and
+Fights, Damage and Courts (the expanded world's products: Field Operations and Justice). Product charts use Cube's
+own MEASURE(...) as their metric, so people are still counted as distinct SIDs or person keys, by Cube. Each
+dashboard's status table lists its own products, read from their descriptors (lakehouse/products/) by domain.
 """
 import json
 import os
 import sys
+from pathlib import Path
 
 import requests
+import yaml
 
 SUPERSET = os.environ.get("SUPERSET_URL", "http://superset:8088/superset")
 TIMEOUT = 60
@@ -41,6 +45,26 @@ date (about 6%) can't be placed in time and aren't in it. "Latest month-end" is 
 
 A month's numbers are **final** only once every business unit that feeds them has closed the month (Records,
 Classification, Courts liaison); until then they are **provisional**. *Period status* says which, and who is late."""
+
+
+WORLD_DASHBOARD = "Fights, Damage and Courts"
+WORLD_SLUG = "world"
+WORLD_INTRO = """## Fights, Damage and Courts
+
+The expanded world, from three data products: **Field Incidents** and **Incident Damage** (Field Operations) and
+**Court Outcomes** (Justice). Every fight since January 1996, what it destroyed and what insurance paid, and how the
+courts decided the charges that followed. People are distinct person keys, counted by Cube, never added up.
+
+A month is **final** only once every business unit that feeds it has closed it: Field Operations' incident reports,
+Insurance's damage claims (which take weeks longer) and the Courts liaison's decisions. Until then it is
+**provisional**. The world is rebuilt on the 1st of each month."""
+PRODUCTS_DIR = Path(__file__).resolve().parents[1] / "products"
+
+
+def products_in(*domains):
+    """The names of the data products in these domains, from their descriptors (lakehouse/products/*.yml)."""
+    found = (yaml.safe_load(f.read_text()) for f in sorted(PRODUCTS_DIR.glob("*.yml")))
+    return [p["name"] for p in found if p["domain"] in domains]
 
 
 def login():
@@ -97,14 +121,18 @@ def context(ds_id, params, query):
             "form_data": params, "result_format": "json", "result_type": "full"}
 
 
-def raw_table(columns, order_by, ascending, limit):
-    """A builder of (params, query_context) for a plain table of rows, sorted by one column."""
+def raw_table(columns, order_by, ascending, limit, only=None):
+    """A builder of (params, query_context) for a plain table of rows, sorted by one column; only = (column,
+    values) keeps the rows whose column is one of the values."""
     def build(ds_id):
         """The table's spec for one dataset."""
+        adhoc = ([{"expressionType": "SIMPLE", "subject": only[0], "operator": "IN", "comparator": list(only[1]),
+                   "clause": "WHERE"}] if only else [])
         params = {"datasource": f"{ds_id}__table", "viz_type": "table", "query_mode": "raw",
                   "all_columns": columns, "order_by_cols": [json.dumps([order_by, ascending])],
-                  "row_limit": limit, "server_pagination": False, "include_search": False, "adhoc_filters": []}
-        query = {"columns": columns, "orderby": [[order_by, ascending]], "row_limit": limit, "filters": [],
+                  "row_limit": limit, "server_pagination": False, "include_search": False, "adhoc_filters": adhoc}
+        query = {"columns": columns, "orderby": [[order_by, ascending]], "row_limit": limit,
+                 "filters": [{"col": only[0], "op": "IN", "val": list(only[1])}] if only else [],
                  "extras": {"having": "", "where": ""}, "metrics": [], "post_processing": []}
         return params, context(ds_id, params, query)
     return build
@@ -141,20 +169,26 @@ def monthly_line(time_column, metric):
     return build
 
 
-def latest_table(groupby, metric):
-    """A builder of (params, query_context) for a table of one Cube measure by one dimension, latest month-end."""
+def grouped_table(groupby, metric, latest=False):
+    """A builder of (params, query_context) for a table of one Cube measure by one dimension, largest first: over
+    all time, or with latest, at the latest month-end only (Cube's is_latest_month_end)."""
     def build(ds_id):
         """The table chart's spec for one dataset."""
-        latest = {"expressionType": "SIMPLE", "subject": "is_latest_month_end", "operator": "==", "comparator": True,
-                  "clause": "WHERE"}
+        adhoc = [{"expressionType": "SIMPLE", "subject": "is_latest_month_end", "operator": "==", "comparator": True,
+                  "clause": "WHERE"}] if latest else []
         params = {"datasource": f"{ds_id}__table", "viz_type": "table", "query_mode": "aggregate",
-                  "groupby": [groupby], "metrics": [metric], "all_columns": [], "adhoc_filters": [latest],
+                  "groupby": [groupby], "metrics": [metric], "all_columns": [], "adhoc_filters": adhoc,
                   "row_limit": 100, "order_desc": True, "server_pagination": False, "include_search": False}
         query = {"columns": [groupby], "metrics": [metric], "orderby": [[metric, False]], "row_limit": 100,
-                 "filters": [{"col": "is_latest_month_end", "op": "==", "val": True}],
+                 "filters": [{"col": "is_latest_month_end", "op": "==", "val": True}] if latest else [],
                  "extras": {"having": "", "where": ""}, "post_processing": []}
         return params, context(ds_id, params, query)
     return build
+
+
+def latest_table(groupby, metric):
+    """A builder for a table of one Cube measure by one dimension, at the latest month-end."""
+    return grouped_table(groupby, metric, latest=True)
 
 
 PEOPLE = measure("people_in_custody", "People in custody")
@@ -167,7 +201,8 @@ DASHBOARDS = [
     {"title": CUSTODY_DASHBOARD, "slug": CUSTODY_SLUG, "intro": CUSTODY_INTRO,
      "charts": [
          {"name": "Period status by month-end", "cell": "status", "table": "period_readiness", "viz": "table",
-          "spec": raw_table(["month_end", "product", "period_status", "waiting_on"], "month_end", False, 12),
+          "spec": raw_table(["month_end", "product", "period_status", "waiting_on"], "month_end", False, 12,
+                            only=("product", products_in("Custody Operations"))),
           "height": 40,
           "description": "Whether each product's numbers for a month-end are final yet, and who they still wait on."},
          {"name": "People in custody, by month-end", "cell": "population", "table": "custody_population", "viz": "echarts_timeseries_line",
@@ -188,6 +223,38 @@ DASHBOARDS = [
               "now": ["People in custody by custody level, latest month-end",
                       "People in custody by offense category, latest month-end"],
               "admissions": ["New sentences per month"]}},
+    {"title": WORLD_DASHBOARD, "slug": WORLD_SLUG, "intro": WORLD_INTRO,
+     "charts": [
+         {"name": "World period status by month-end", "cell": "world-status", "table": "period_readiness",
+          "viz": "table", "height": 40,
+          "spec": raw_table(["month_end", "product", "period_status", "waiting_on"], "month_end", False, 12,
+                            only=("product", products_in("Field Operations", "Justice"))),
+          "description": "Whether each world product's numbers for a month-end are final yet, and who they wait on."},
+         {"name": "Fights per month", "cell": "fights", "table": "field_incidents", "viz": "echarts_timeseries_line",
+          "spec": monthly_line("incident_month", measure("fights", "Fights")), "height": 50,
+          "description": "Fights each month in the expanded world (Field Incidents)."},
+         {"name": "Fights by outcome", "cell": "fight-outcomes", "table": "field_incidents", "viz": "table",
+          "spec": grouped_table("outcome", measure("fights", "Fights")), "height": 50,
+          "description": "How the fights ended, since 1996 (Field Incidents)."},
+         {"name": "Damage cost per month (USD)", "cell": "damage", "table": "incident_damage",
+          "viz": "echarts_timeseries_line", "height": 50,
+          "spec": monthly_line("incident_month", measure("damage_cost_usd", "Damage cost (USD)")),
+          "description": "What the month's fights destroyed, in US dollars (Incident Damage)."},
+         {"name": "Uninsured damage by asset type (USD)", "cell": "uninsured", "table": "incident_damage",
+          "viz": "table", "height": 50,
+          "spec": grouped_table("asset_type", measure("uninsured_cost_usd", "Uninsured cost (USD)")),
+          "description": "The cost nobody insured, by kind of asset, since 1996 (Incident Damage)."},
+         {"name": "Convictions per month", "cell": "convictions", "table": "court_outcomes",
+          "viz": "echarts_timeseries_line", "height": 50,
+          "spec": monthly_line("decided_on", measure("convictions", "Convictions")),
+          "description": "Charges that ended in a conviction, by the month the court decided (Court Outcomes)."},
+         {"name": "Charges by court outcome", "cell": "outcomes", "table": "court_outcomes", "viz": "table",
+          "spec": grouped_table("outcome", measure("charges", "Charges")), "height": 50,
+          "description": "How every charge was decided, or that it is still pending (Court Outcomes)."}],
+     "rows": {"world-status": ["World period status by month-end"],
+              "fights": ["Fights per month", "Fights by outcome"],
+              "damage": ["Damage cost per month (USD)", "Uninsured damage by asset type (USD)"],
+              "courts": ["Convictions per month", "Charges by court outcome"]}},
 ]
 
 
