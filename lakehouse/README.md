@@ -38,7 +38,7 @@ every number matches the Facilitator Guide. dbt builds gold, and Dagster runs it
 | `fuseki/` | Apache Jena Fuseki 6.2.0, built from Apache's verified release: `Dockerfile`, `config.ttl` (one dataset; writes need the writer user), `shiro.ini` (no users; admin only inside the container), `start.sh` |
 | `cube/sync_masks.py` | Makes Cube mask exactly the columns OpenMetadata tags `Sensitivity.Restricted` |
 | `glossary/glossary.yml` | The glossary: 15 terms with definitions, synonyms, columns, metrics and typed relations; `om_sync.py` loads it into OpenMetadata |
-| `universe/` | The expanded world's generator (dataset expansion, in progress; people, places, fights, charges and missions so far): one random stream per table chunk, Parquet chunks written in parallel, the S/M/L knob, a fingerprinted manifest, and the check that the course's 100,000 records never change. See [The expanded world](#the-expanded-world-in-progress) |
+| `universe/` | The expanded world's generator (dataset expansion, in progress; people, places, fights, charges and missions, and their mess with answer keys, so far): one random stream per table chunk, Parquet chunks written in parallel, the S/M/L knob, a fingerprinted manifest, and the check that the course's 100,000 records never change. See [The expanded world](#the-expanded-world-in-progress) |
 | `08_from_lake.ipynb` | Session 8 for the lakehouse: the Trust Test answered in SQL over silver, checked against `gold.trust_test` |
 
 ## Tables
@@ -636,6 +636,38 @@ random villain slot in a fight goes to a new villain with chance 0.6 (`fights.NE
 63% of the charges after the records fall on new people, and at M convictions (391k convicted or pleaded guilty)
 outnumber dismissals (303k). New villains fight often for it, about 135 fights each against 14 for today's. Charges and dispositions keep one row per linkable record at
 every scale. Tests: `pytest lakehouse/tests/test_universe_cases.py` (11, against the lake; 10 mutations all caught).
+
+**Chunk 6, built-in mess with answer keys (`universe/mess.py`).** The clean Parquet tables stay the truth, unchanged.
+A whole build then gives each table what a source system would really hand over (about 9 s more at M; `--no-mess`
+skips it):
+
+| Folder | At M | What's in it |
+| --- | --- | --- |
+| `messy/<table>/part-NNNNN.csv` | 692 MB | The table as CSV text, chunk for chunk, with the course's kinds of mess at fixed rates. `person` also has 8,877 duplicate people |
+| `answer_key/<table>/part-NNNNN.parquet` | 63 MB, 8.3M rows | One row per deliberate defect: `id` (the messy row's id), `column_name`, `kind`, `as_written`, `truth` (the clean value written the standard way; null where the truth is null) |
+
+The key is exact: a messy cell not in the key is the clean value written the standard way (ISO dates,
+`YYYY-MM-DD HH:MM:SS` times, `true`/`false`, plain numbers, blank for null), and every cell in the key differs. The
+kinds and their rates (`mess.RATES`, each a share of the cells the kind can hit; `mess.SPEC` says which columns):
+
+| Kind | Rate | Example (as written → truth) |
+| --- | --- | --- |
+| `date_format` | 30% of dates and times | `22-JUN-2020 03:23:12` → `2020-06-22 03:23:12`; `3/22/01`, `20010322`, `Nov 15 2022` |
+| `code_variant` | 12% of codes | `PART` → `partial`, `STREET FIGHT`, ` member `, `13b` → `13B`, `290.0` → `290`, `Y` → `true`. Within a column each spelling means one value, so a crosswalk undoes it |
+| `money_text` | 60% of money | `$2,759,918.00`, `USD 3,183.00`, `15923.0`, `-` for zero |
+| `number_text` | 5% of counts | `12.0`, `012`, `three` |
+| `name_variant` | 15% of names | `Adams` → `ADAMS` |
+| `unknown` | 1% of values | `UNK`, `N/A`, `?`, `00/00/0000` hiding a real value (cleans to null; the truth is lost) |
+| `null_token` | 25% of nulls | `NULL`, `NONE`, blanks, a tab where the truth is null |
+| `orphan` | 0.2% of links | A link to an id the target table doesn't have |
+| `out_of_order` | 0.4% of later dates | Left a team before joining it, a mission ended before it started, a repair or charge before the fight, a decision before the charge was filed |
+| `duplicate_person` | 2% of people | The same person again under a new id after the last one, same SID |
+| `duplicate_ref` | 30% of links to them | A link to a duplicated person that points at the copy |
+
+What stays clean: every table's own ids, `sid_number`, and `disposition.offender_number`, the link back to the
+course's records. The mess has its own random streams, so the clean tables keep their bytes (the manifest proves it),
+and the manifest fingerprints the messy files and keys too. Tests: `pytest lakehouse/tests/test_universe_mess.py`
+(27, against the lake; 9 mutations all caught).
 
 ## Test status
 

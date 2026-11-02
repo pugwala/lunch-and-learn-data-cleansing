@@ -1,4 +1,5 @@
-"""The build's manifest: what was built, from which seed and scale, and every file's fingerprint.
+"""The build's manifest: what was built, from which seed and scale, and every file's fingerprint (the clean tables
+under "tables"; their messy copies and answer keys, mess.py, under "mess" as messy/<table> and answer_key/<table>).
 
 manifest.json sits at the top of a build's folder. verify() rereads every file and reports any that is missing or
 whose bytes changed, so a damaged or hand-edited build can't pass for a real one.
@@ -12,10 +13,11 @@ GENERATOR_VERSION = 1
 NAME = "manifest.json"
 
 
-def write(out_dir: Path, seed: int, scale_name: str, tables: dict) -> Path:
-    """Write manifest.json for a build: tables is {table: build_table()'s entry}."""
+def write(out_dir: Path, seed: int, scale_name: str, tables: dict, mess: dict = None) -> Path:
+    """Write manifest.json for a build: tables is {table: build_table()'s entry}, mess {messy/<table> or
+    answer_key/<table>: the same kind of entry}."""
     data = {"generator_version": GENERATOR_VERSION, "seed": seed, "scale": scale_name,
-            "core_sha256": core.CORE_SHA256, "tables": tables}
+            "core_sha256": core.CORE_SHA256, "tables": tables, "mess": mess or {}}
     path = Path(out_dir) / NAME
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
@@ -30,7 +32,8 @@ def read(out_dir: Path) -> dict:
 def verify(out_dir: Path) -> list:
     """Every problem with a build, as "<table>/<file>: missing" or "<table>/<file>: changed"; [] when it's whole."""
     problems = []
-    for table, entry in read(out_dir)["tables"].items():
+    m = read(out_dir)
+    for table, entry in {**m["tables"], **m.get("mess", {})}.items():
         for f in entry["files"]:
             path = Path(out_dir) / table / f["name"]
             if not path.exists():

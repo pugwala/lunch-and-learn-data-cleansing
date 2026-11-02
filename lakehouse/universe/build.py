@@ -1,7 +1,7 @@
 """Build the expanded world: python -m lakehouse.universe.build --scale M [--seed 2026] [--out DIR] [--workers N]
 
 Extracts today's people from the lake (read-only), builds every table in dependency order with world.py's factories,
-and writes the manifest. Fights come after people, and power uses after participants, because each reads
+then (for a whole build) each table's messy CSV copy and answer key (mess.py), and writes the manifest. Fights come after people, and power uses after participants, because each reads
 the tables before it. The default folder is /lake/landing/universe/<scale>. A build replaces the folder's tables;
 manifest.verify() then checks every file.
 """
@@ -13,7 +13,7 @@ import time
 from functools import partial
 from pathlib import Path
 
-from . import core, courts, fights, manifest, missions, scale, world, writer
+from . import core, courts, fights, manifest, mess, missions, scale, world, writer
 
 ORDER = ["location", "power", "team", "person", "person_power", "team_member",
          "incident", "participant", "power_use", "damage",
@@ -40,8 +40,9 @@ def factory(name: str, ctx: dict):
 
 
 def build(out_dir: Path, scale_name: str = "M", seed: int = core.CORE_SEED, workers: int = 1, tables=None,
-          con=None, log=print, chunk_rows: int = writer.CHUNK_ROWS) -> dict:
-    """Build the tables (all, or the named ones in dependency order) into out_dir and write its manifest."""
+          con=None, log=print, chunk_rows: int = writer.CHUNK_ROWS, with_mess: bool = True) -> dict:
+    """Build the tables (all, or the named ones in dependency order) into out_dir and write its manifest. A whole
+    build also makes the mess (unless with_mess is False); the mess needs every table, so a partial build skips it."""
     out_dir = Path(out_dir)
     if con is None:
         sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -56,7 +57,15 @@ def build(out_dir: Path, scale_name: str = "M", seed: int = core.CORE_SEED, work
         built[name] = writer.build_table(name, scale.rows(name, scale_name), factory(name, ctx), out_dir,
                                          seed=seed, workers=workers, chunk_rows=chunk_rows)
         log(f"  {name:13} {built[name]['rows']:>11,} rows  {time.time() - started:6.1f}s")
-    manifest.write(out_dir, seed=seed, scale_name=scale_name, tables=built)
+    made = {}
+    if tables is None and with_mess:
+        for folder in ("messy", "answer_key"):
+            shutil.rmtree(out_dir / folder, ignore_errors=True)
+        started = time.time()
+        made = mess.build_mess(out_dir, ctx, built, workers=workers)
+        log(f"  {'mess':13} {sum(e['rows'] for k, e in made.items() if k.startswith('answer_key')):>11,} "
+            f"defects  {time.time() - started:6.1f}s")
+    manifest.write(out_dir, seed=seed, scale_name=scale_name, tables=built, mess=made)
     return built
 
 
@@ -67,11 +76,12 @@ def main(argv=None):
     ap.add_argument("--seed", type=int, default=core.CORE_SEED)
     ap.add_argument("--out", type=Path)
     ap.add_argument("--workers", type=int, default=max(1, (os.cpu_count() or 2) - 2))
+    ap.add_argument("--no-mess", action="store_true", help="skip the messy copies and answer keys")
     args = ap.parse_args(argv)
     out = args.out or DEFAULT_ROOT / args.scale
     print(f"Building the world at scale {args.scale} (seed {args.seed}) into {out}")
     started = time.time()
-    build(out, args.scale, args.seed, args.workers)
+    build(out, args.scale, args.seed, args.workers, with_mess=not args.no_mess)
     problems = manifest.verify(out)
     print(f"Done in {time.time() - started:.0f}s; manifest " + ("verified" if not problems else f"PROBLEMS: {problems}"))
     return 1 if problems else 0
