@@ -1,18 +1,26 @@
-"""MCP server for the home-lab lakehouse: governed metrics from Cube, meanings from the glossary.
+"""MCP server for the home-lab lakehouse: governed metrics from Cube, meanings from the glossary, and the rulebook.
 
 Tools
     list_metrics()                                    every metric query_metric offers: its view, data product,
                                                       description, aggregation and dimensions
-    query_metric(metric, group_by=None, limit=100)   a Cube measure by name, optionally grouped by dimensions; a
-                                                      data product's metric also says which months are final
+    query_metric(metric, group_by=None, filters=None, time_dimension=None, date_from=None, date_to=None,
+                 granularity=None, limit=100)
+                                                      a Cube measure by name, optionally grouped by dimensions,
+                                                      filtered, and over a time range by day, week, month, quarter
+                                                      or year; a data product's metric also says which months are
+                                                      final. Filters on a masked column compare the masked value
     define_term(term)                                 a glossary term from OpenMetadata: definition, synonyms,
                                                       columns, metrics, sensitivity and typed relations
+    business_rules(about=None)                        the rulebook from Fuseki (all of it, or the rules about one
+                                                      term or synonym): each rule's statement, terms and enforcers,
+                                                      and whether a shape or alert holds today (from Prometheus)
 
 Served over streamable HTTP at /mcp (stateless, JSON responses) and through Caddy at https://<LAKE_TS_HOST>/mcp.
 Every request needs `Authorization: Bearer <MCP_TOKEN>`. The server holds no lake credentials: list_metrics and
 query_metric go
 through Cube's REST API, so an agent sees only Cube's governed model, never the lake. define_term reads the
 Lakehouse glossary in OpenMetadata (loaded there by om_sync.py) as mcp-reader, a read-only account.
+business_rules reads Fuseki's public SPARQL endpoint and Prometheus, both read-only and without credentials.
 """
 import base64
 import hmac
@@ -20,8 +28,11 @@ import html
 import json
 import os
 import time
+import re
 import urllib.error
+import urllib.parse
 import urllib.request
+from datetime import date
 from decimal import Decimal
 from typing import Any
 
@@ -37,14 +48,25 @@ CUBE_API = os.environ.get("CUBE_API", "http://cube:4000/cubejs-api/v1")
 OM_API = os.environ.get("OM_API", "http://openmetadata-server:8585/openmetadata/api/v1")
 OM_READER = "mcp-reader@open-metadata.org"
 GLOSSARY = "Lakehouse"
+FUSEKI = os.environ.get("FUSEKI_URL", "http://fuseki:3030/fuseki") + "/lakehouse"
+PROMETHEUS = os.environ.get("PROMETHEUS_URL", "http://prometheus:9090/prometheus")
+RULEBOOK = "https://lakehouse.invalid/graph/rulebook"
+OPERATORS = ["equals", "notEquals", "contains", "notContains", "startsWith", "endsWith", "gt", "gte", "lt", "lte",
+             "set", "notSet"]
+GRANULARITIES = ["day", "week", "month", "quarter", "year"]
+CHECKED_ELSEWHERE = {"dbt": "a dbt test, run with the lake's dbt builds (lakehouse/dbt/tests)",
+                     "test": "an acceptance test (lakehouse/acceptance)",
+                     "sparql": "a deduction rule Fuseki applies on every load (lakehouse/ontology/rules)",
+                     "cube": "a Cube measure that computes it the governed way"}
 _om_token = {"value": None}
 
 server = MCPServer(
     name="lakehouse",
-    instructions="Governed metrics and definitions for the home-lab lakehouse's mock offender data. Ask "
-                 "list_metrics for what can be asked, query_metric for a metric by name (an unknown name lists "
-                 "the real ones) and define_term "
-                 "for what a term means. There is no raw SQL access, by design.")
+    instructions="Governed metrics, definitions and business rules for the home-lab lakehouse's mock offender "
+                 "data. Ask list_metrics for what can be asked, query_metric for a metric by name (grouped, "
+                 "filtered or over a time range; an unknown name lists the real ones), define_term for what a term "
+                 "means, and business_rules for the rules about a term and whether they hold today. There is no raw "
+                 "SQL access, by design.")
 
 
 # ---- Results (typed, so clients get structured content with a schema) -----------------------------------------
@@ -62,12 +84,32 @@ class Readiness(BaseModel):
     provisional: list[PeriodStatus]
 
 
+class MetricFilter(BaseModel):
+    """Keep only rows whose dimension compares with values by the operator (equals, notEquals, contains,
+    notContains, startsWith, endsWith, gt, gte, lt, lte; set and notSet take no values)."""
+    dimension: str
+    operator: str = "equals"
+    values: list[str] = []
+
+
+class TimeWindow(BaseModel):
+    """The time range a metric was asked over: the time dimension, the first and last day (inclusive), and the
+    granularity its rows are by (none: one total for the range)."""
+    dimension: str
+    date_from: str | None = None
+    date_to: str | None = None
+    granularity: str | None = None
+
+
 class MetricResult(BaseModel):
-    """A metric's rows: one per combination of the group_by dimensions, each with the metric's value. When the
-    metric comes from a data product's view, readiness says which of its month-ends are final yet."""
+    """A metric's rows: one per combination of the group_by dimensions (and time period, when asked by a
+    granularity), each with the metric's value, after the filters. When the metric comes from a data product's
+    view, readiness says which of its month-ends are final yet."""
     metric: str
     group_by: list[str]
     rows: list[dict[str, Any]]
+    filters: list[MetricFilter] = []
+    time: TimeWindow | None = None
     readiness: Readiness | None = None
 
 
@@ -91,6 +133,29 @@ class Relation(BaseModel):
     """A typed link to another glossary term (identifies, partOf, broader, relatedTo)."""
     type: str
     term: str
+
+
+class Enforcer(BaseModel):
+    """What enforces a rule (kind: cube, dbt, prometheus, shacl, sparql or test; name), whether it holds today
+    (holds, broken, unknown, or not checked here) and how that's known."""
+    kind: str
+    name: str
+    status: str
+    detail: str
+
+
+class BusinessRule(BaseModel):
+    """One rule in the rulebook: what must hold, the glossary terms it's about, and what enforces it."""
+    name: str
+    statement: str
+    about: list[str]
+    enforced_by: list[Enforcer]
+
+
+class RuleBook(BaseModel):
+    """The rules asked for: all of them, or those about one glossary term."""
+    about: str | None
+    rules: list[BusinessRule]
 
 
 class TermDefinition(BaseModel):
@@ -124,10 +189,12 @@ def cube(path, payload=None):
 
 def catalog():
     """Every public measure and dimension Cube offers, as {"measures": [...], "dimensions": [...]} of full names,
-    plus "products": {view: data product} for views tagged meta.product."""
+    plus "time_dimensions" (those of type time) and "products": {view: data product} for views tagged meta.product."""
     meta = cube("meta")
     out = {kind: [m["name"] for c in meta["cubes"] for m in c.get(kind, []) if m.get("public", True)]
            for kind in ("measures", "dimensions")}
+    out["time_dimensions"] = [d["name"] for c in meta["cubes"] for d in c.get("dimensions", [])
+                              if d.get("public", True) and d.get("type") == "time"]
     out["products"] = {c["name"]: c["meta"]["product"] for c in meta["cubes"] if (c.get("meta") or {}).get("product")}
     return out
 
@@ -201,28 +268,95 @@ def list_metrics() -> MetricList:
     return MetricList(metrics=metrics)
 
 
+def a_day(value, what):
+    """A YYYY-MM-DD date as text, or ToolError naming the format."""
+    if value is None:
+        return None
+    try:
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+            raise ValueError
+        date.fromisoformat(value)
+    except ValueError:
+        raise ToolError(f"{what} must be a date written YYYY-MM-DD, not {value!r}") from None
+    return value
+
+
+def time_window(measure, time_dimension, date_from, date_to, granularity, cat):
+    """The time dimension (a full Cube name) to ask over, or None when no time range or granularity was asked:
+    the one named, or the measure's view's only time dimension. ToolError lists what would work."""
+    date_from, date_to = a_day(date_from, "date_from"), a_day(date_to, "date_to")
+    if granularity is not None and granularity not in GRANULARITIES:
+        raise ToolError(f"No granularity {granularity!r}. Granularities: {', '.join(GRANULARITIES)}")
+    if time_dimension is None and date_from is None and date_to is None and granularity is None:
+        return None
+    view = measure.split(".", 1)[0]
+    times = [t for t in cat["time_dimensions"] if t.startswith(view + ".")] or cat["time_dimensions"]
+    if time_dimension is None:
+        if len(times) != 1:
+            raise ToolError("Name a time_dimension: " + ", ".join(sorted(t.split(".", 1)[1] for t in times)))
+        return times[0]
+    found = resolve(time_dimension, times, prefer_cube=view)
+    if found is None:
+        raise ToolError(f"No time dimension named {time_dimension!r}. Time dimensions: " +
+                        ", ".join(sorted({t.split(".", 1)[1] for t in cat["time_dimensions"]})))
+    return found
+
+
 @server.tool()
-def query_metric(metric: str, group_by: list[str] | None = None, limit: int = 100) -> MetricResult:
-    """A governed metric from Cube by name (for example record_count, total_restitution, answers_changed),
-    optionally grouped by dimensions (for example custody_level, unit_name, offense_against). Short names work;
-    an unknown name returns the list of real ones. Only Cube's model is reachable: restricted and personal
-    columns aren't in it. A metric from a data product also returns readiness: whether its latest month-end is
-    final, and which months are still provisional and who they wait on; say so when you report a provisional month."""
+def query_metric(metric: str, group_by: list[str] | None = None, filters: list[MetricFilter] | None = None,
+                 time_dimension: str | None = None, date_from: str | None = None, date_to: str | None = None,
+                 granularity: str | None = None, limit: int = 100) -> MetricResult:
+    """A governed metric from Cube by name (for example record_count, total_restitution, people_in_custody),
+    optionally grouped by dimensions (for example custody_level, unit_name, offense_against), filtered (for
+    example [{"dimension": "custody_level", "operator": "equals", "values": ["G5"]}]; notEquals and notContains
+    keep rows where the dimension is empty, as Cube does), and over a time range:
+    date_from and date_to (YYYY-MM-DD, inclusive) on a time_dimension (for example sentence_date; a view with one
+    time dimension uses it on its own), by granularity day, week, month, quarter or year (none: one total for the
+    range). Short names work; an unknown name returns the real ones. Only Cube's model is reachable: restricted
+    columns come back masked, and a filter on one compares the masked value. A metric from a data product also
+    returns readiness: whether its latest month-end is final, and which months are still provisional and who they
+    wait on; say so when you report a provisional month."""
     cat = catalog()
-    measure, dims = pick(metric, group_by or [], cat)
+    filters = filters or []
+    for f in filters:
+        if f.operator not in OPERATORS:
+            raise ToolError(f"No filter operator {f.operator!r}. Operators: {', '.join(OPERATORS)}")
+    names = (group_by or []) + [f.dimension for f in filters]
+    measure, dims = pick(metric, names + ([time_dimension] if time_dimension else []), cat)
     if measure is None:
         raise ToolError(f"No metric named {metric!r}. Metrics: " +
                          ", ".join(sorted({m.split(".", 1)[1] for m in cat["measures"]})))
-    for name, dim in zip(group_by or [], dims):
+    for name, dim in zip(names, dims):
         if dim is None:
             raise ToolError(f"No dimension named {name!r}. Dimensions: " +
                              ", ".join(sorted({d.split(".", 1)[1] for d in cat["dimensions"]})))
-    data = cube("load", {"query": {"measures": [measure], "dimensions": dims, "limit": max(1, min(limit, 1000))}})
+    group_dims, filter_dims = dims[:len(group_by or [])], dims[len(group_by or []):len(names)]
+    tdim = time_window(measure, time_dimension, date_from, date_to, granularity, cat)
+    query = {"measures": [measure], "dimensions": group_dims, "limit": max(1, min(limit, 1000)),
+             "filters": [{"member": d, "operator": f.operator, **({"values": f.values} if f.operator not in
+                                                                   ("set", "notSet") else {})}
+                         for d, f in zip(filter_dims, filters)]}
+    if tdim:
+        window = {"dimension": tdim}
+        if date_from or date_to:
+            window["dateRange"] = [date_from or "1900-01-01", date_to or "2999-12-31"]
+        if granularity:
+            window["granularity"] = granularity
+            query["order"] = {tdim: "asc"}
+        query["timeDimensions"] = [window]
+    data = cube("load", {"query": query})
     short = lambda full: full.split(".", 1)[1]   # noqa: E731
-    rows = [{short(k): (number(v) if k == measure else v) for k, v in row.items() if k in dims + [measure]}
-            for row in data.get("data", [])]
+    period = f"{tdim}.{granularity}" if tdim and granularity else None
+    rows = []
+    for row in data.get("data", []):
+        out = {short(k): (number(v) if k == measure else v) for k, v in row.items() if k in group_dims + [measure]}
+        if period:
+            out[short(tdim)] = str(row.get(period) or "")[:10]
+        rows.append(out)
     product = cat["products"].get(measure.split(".", 1)[0])
-    return MetricResult(metric=short(measure), group_by=[short(d) for d in dims], rows=rows,
+    return MetricResult(metric=short(measure), group_by=[short(d) for d in group_dims], rows=rows, filters=filters,
+                        time=TimeWindow(dimension=short(tdim), date_from=date_from, date_to=date_to,
+                                        granularity=granularity) if tdim else None,
                         readiness=readiness(product) if product else None)
 
 
@@ -280,6 +414,92 @@ def define_term(term: str) -> TermDefinition:
                                   relations=[Relation(type=r.get("relationType", "relatedTo"), term=r["term"]["name"])
                                              for r in t.get("relatedTerms") or []])
     raise ToolError(f"No term {term!r} in the glossary. Terms: " + ", ".join(sorted(t["name"] for t in terms)))
+
+
+# ---- The rulebook (Fuseki) and today's checks (Prometheus) ---------------------------------------------------
+def sparql(query):
+    """Rows of a SPARQL SELECT on Fuseki's public endpoint, as [{variable: value}]."""
+    body = urllib.parse.urlencode({"query": query}).encode()
+    req = urllib.request.Request(f"{FUSEKI}/sparql", data=body, method="POST",
+                                 headers={"Accept": "application/sparql-results+json",
+                                          "Content-Type": "application/x-www-form-urlencoded"})
+    try:
+        result = json.loads(urllib.request.urlopen(req, timeout=30).read())
+    except (urllib.error.URLError, ValueError) as e:
+        raise ToolError(f"Fuseki is unavailable ({e})") from None
+    return [{k: v["value"] for k, v in row.items()} for row in result["results"]["bindings"]]
+
+
+def prometheus(query):
+    """The series a PromQL query returns now, or None when Prometheus can't be reached."""
+    url = f"{PROMETHEUS}/api/v1/query?" + urllib.parse.urlencode({"query": query})
+    try:
+        return json.loads(urllib.request.urlopen(url, timeout=15).read())["data"]["result"]
+    except (urllib.error.URLError, ValueError, KeyError):
+        return None
+
+
+def enforcer(ref):
+    """One enforced_by entry ("kind:name") with whether it holds today: a SHACL shape by the daily rule check's
+    violations, a Prometheus alert by whether it's firing; anything else is checked elsewhere."""
+    kind, name = ref.split(":", 1)
+    if kind == "shacl":
+        series = prometheus(f'lakehouse_business_rule_violations{{shape="{name}"}}')
+        if series is None:
+            return Enforcer(kind=kind, name=name, status="unknown", detail="Prometheus is unavailable")
+        if not series:
+            return Enforcer(kind=kind, name=name, status="unknown", detail="the daily rule check hasn't reported it yet")
+        n = int(float(series[0]["value"][1]))
+        return Enforcer(kind=kind, name=name, status="holds" if n == 0 else "broken",
+                        detail=f"{n} violation{'s' * (n != 1)} in the daily rule check")
+    if kind == "prometheus":
+        series = prometheus(f'ALERTS{{alertname="{name}", alertstate="firing"}}')
+        if series is None:
+            return Enforcer(kind=kind, name=name, status="unknown", detail="Prometheus is unavailable")
+        return Enforcer(kind=kind, name=name, status="broken" if series else "holds",
+                        detail="the alert is firing" if series else "the alert isn't firing")
+    return Enforcer(kind=kind, name=name, status="not checked here",
+                    detail=f"checked by {CHECKED_ELSEWHERE.get(kind, kind)}")
+
+
+@server.tool()
+def business_rules(about: str | None = None) -> RuleBook:
+    """The lakehouse's business rules, from the rulebook in Fuseki: every rule, or those about one glossary term
+    (its name or any synonym, in any case). Each rule says what must hold, which terms it's about, and what
+    enforces it: a SHACL shape or a Prometheus alert also says whether it holds today; a dbt test, an acceptance
+    test, a deduction or a Cube measure says it's checked elsewhere. An unknown term lists the terms rules are about."""
+    # A rule's terms and their names are matched together, in one OPTIONAL keyed on the rule: matched apart, a rule
+    # about no term would pick up every term's name.
+    rows = sparql(f"""PREFIX lh: <https://lakehouse.invalid/ontology#>
+        PREFIX dct: <http://purl.org/dc/terms/>
+        PREFIX skos: <http://www.w3.org/2004/02/skos/core#>
+        SELECT ?title ?statement ?term ?by WHERE {{
+          GRAPH <{RULEBOOK}> {{ ?r a lh:BusinessRule ; dct:title ?title ; dct:description ?statement ;
+                                   lh:enforcedBy ?by }}
+          OPTIONAL {{ GRAPH <{RULEBOOK}> {{ ?r lh:about ?t }} ?t skos:prefLabel ?term }} }}""")
+    rules = {}
+    for row in rows:
+        r = rules.setdefault(row["title"], {"statement": row["statement"], "about": set(), "by": set()})
+        r["by"].add(row["by"])
+        if row.get("term"):
+            r["about"].add(row["term"])
+    wanted = None
+    if about is not None:
+        labels = sparql("""PREFIX skos: <http://www.w3.org/2004/02/skos/core#>
+            SELECT ?name ?alt WHERE { ?t a skos:Concept ; skos:prefLabel ?name . OPTIONAL { ?t skos:altLabel ?alt } }""")
+        names = {}
+        for row in labels:
+            names[row["name"].casefold()] = row["name"]
+            if row.get("alt"):
+                names.setdefault(row["alt"].casefold(), row["name"])
+        wanted = names.get(about.strip().casefold())
+        if wanted is None:
+            raise ToolError(f"No glossary term or synonym {about!r}. Rules are about: " +
+                            ", ".join(sorted({t for r in rules.values() for t in r["about"]})))
+    return RuleBook(about=wanted, rules=[
+        BusinessRule(name=title, statement=r["statement"], about=sorted(r["about"]),
+                     enforced_by=[enforcer(ref) for ref in sorted(r["by"])])
+        for title, r in sorted(rules.items()) if wanted is None or wanted in r["about"]])
 
 
 # ---- HTTP ----------------------------------------------------------------------------------------------------
