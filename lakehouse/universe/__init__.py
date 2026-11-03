@@ -11,4 +11,7 @@ Chunk 2 is the foundation every table is built on:
     scale     the S/M/L knob: row counts from the approved data model, always keeping today's people
     manifest  every file's row count and fingerprint, plus the seed, scale and handoff version; verify() checks them
     core      the core read from the pinned handoff, and course 2's own word lists (course_words.json)
+
+Chunk 10 adds bench: a scale built and run end to end (dbt, queries) in a scratch DuckLake of its own, timed and
+measured, never touching the live lake.
 """

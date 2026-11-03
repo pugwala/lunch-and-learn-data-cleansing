@@ -954,6 +954,40 @@ glossary's **Incident Report** term is about Incident and related to Person. Tes
 keeps every narrative; 3 dbt mutations caught). Rebuilt at M beside the live world, every one of the 75 existing
 files was byte-identical; only the four new folders were added.
 
+**Chunk 10, the scale-up to L and benchmarks (`universe/bench.py`).** One command builds a scale and runs it end to
+end in a **scratch lake** of its own: `docker compose --profile core exec -T jupyter python -m lakehouse.universe.bench
+--scale L` (default folder `/lake/scratch/<scale>`). The scratch lake is a real DuckLake, the same Parquet format as
+the live one, but its catalog is a file in the folder (`catalog.ducklake`) and its data goes to the folder's `data/`.
+It gets the two tables the world's rule tests read from course 1's pinned handoff, where the world's core comes
+from too, so the live lake is never opened. dbt
+runs the world's models in the two runs Dagster makes: `world_full`, then `world_monthly` with every month at once,
+as a backfill runs it, answer-key and rule tests included. Then six queries like the dashboards' run three times
+each. Every step is its own process, timed, with the peak memory of its whole process tree (the build's workers
+included); the report is `bench.json` in the folder. A run clears its folder first, so a folder in or around the
+live data or the live world is refused. The backups only see `/lake/data`, so the scratch lakes aren't in them.
+
+Measured 2026-11-03 on the VM (12 vCPU, 47 GB, 10 build workers), with the whole stack running; the second of two runs, within a few percent of the first:
+
+| Step | M (16.7M rows) | L (65.6M rows) | L ÷ M |
+| --- | --- | --- | --- |
+| Build the world (clean tables, mess, keys) | 38 s, peak 9.6 GB | 164 s, peak 27.6 GB | 4.3× time, 2.9× memory |
+| dbt `world_full` (bronze, silver dimensions, gold dimensions) | 9.9 s, 1.3 GB | 15.0 s, 2.0 GB | 1.5× |
+| dbt `world_monthly` (the big facts, every month, the answer-key tests) | 13.0 s, 2.9 GB | 29.2 s, 6.3 GB | 2.2× |
+| Busiest villains (participation × people, top 20) | 0.078 s | 0.261 s | 3.3× |
+| Damage by city (three-table join) | 0.064 s | 0.143 s | 2.2× |
+| The other four (one fact table, grouped) | 0.004 to 0.009 s | 0.008 to 0.026 s | 2 to 3× |
+| On disk: the world (of it messy CSVs) | 1.0 GB (785 MB) | 4.1 GB (3.2 GB) | 4.0× |
+| On disk: the lake's Parquet | 774 MB | 3.1 GB | 3.9× |
+
+What it says: **L fits this VM, and the limit is the build's memory, not the lake.** dbt and the queries grow
+more slowly than the data (DuckDB uses all 12 cores; the dashboards' questions stay well under a second at 4.8M
+fights and 24M participations), and every answer-key and rule test passes at L as at M. The build grows a little
+faster than the data and its 27.6 GB peak, beside the running stack, left about 7 GB free: each worker keeps its own
+copy of the fight plan, which grows with the scale. Use fewer workers (`--workers 4`) for a bigger scale or a
+smaller machine; disk is no concern (7.1 GB for L, all of it, against 951 GB free). The live lab stays at M; L
+stays in `/lake/scratch/L` to try things on. Tests: `pytest lakehouse/tests/test_universe_bench.py` (8, a whole
+run at S; 13 mutations all caught, the two that would point dbt at the live lake checked by a unit test, never run).
+
 ## Test status
 
 **Before a push, or in CI:** `bash lakehouse/ci/checks.sh` runs every check that needs no secrets and no running stack,
@@ -1017,10 +1051,11 @@ only says there's nothing to check. Its first run passed all 14 checks on a GitH
 | Course 1's handoff (`handoff/`: publish, the 19 numbers on the files, the contract, adopt, the lock; `universe` and the daily load reading from it): 9 tests in `test_handoff.py`, 6 in `test_lake_load.py` and 4 in `test_universe.py`, seen failing first (the code scan named 14 places `universe` reached into course 1); 12 mutations all caught. The world built from the handoff is byte-identical to the lake-built one at S and M, and the lake landed from it matched every ref, bronze and silver table from before | On the VM |
 | The world's data products (three descriptors, two domains, two inputs, four Cube views, monthly contracts, the Fights, Damage and Courts dashboard, freshness from Dagster materializations): 19 acceptance tests (`test_world_products.py`), all seen failing first; 7 mutations all caught | On the VM |
 | Incident reports, the free text (`universe/reports.py`, the mention key, the world's bronze and silver, the Incident Report term): 13 tests in `test_universe_reports.py`, 1 more in `test_world_lake.py` and the reports' checks in `test_world_meaning.py`, all seen failing first; 15 mutations all caught. Live at M: 200,000 reports, 1,893,406 mentions, every one at its place in silver; the tagger tags the narrative free text on its own | On the VM |
+| Scale-up and benchmarks (`universe/bench.py`: a scale end to end in a scratch DuckLake, never the live one): 8 tests in `test_universe_bench.py`, all seen failing first; 13 mutations all caught. Run at M and L: L (65.6M rows) built in 164 s at a 27.6 GB peak, dbt in 44 s with every answer-key test passing, every benchmark query under 0.3 s | On the VM |
 
 ## Next phases
 
-**Dataset expansion:** chunks 0 to 9 and Priority 5 (incident reports) are done, so the approved model is complete; next is chunk 10, the scale-up to L with benchmarks.
+**Dataset expansion:** chunks 0 to 10 and Priority 5 (incident reports) are done: the approved model is complete and benchmarked at L (in `/lake/scratch/L`; the live lab stays at M). Next is chunk 11, the optional course sessions.
 
 Phases 0 to 6 are done: OpenMetadata holds the glossary and the sensitivity tags, the tags drive Cube's masks,
 Fuseki serves the same meaning as SPARQL, and Prometheus, Grafana and Alertmanager watch the platform, the pipeline
