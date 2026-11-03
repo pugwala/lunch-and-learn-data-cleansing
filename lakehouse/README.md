@@ -1,5 +1,8 @@
 # Home-lab DuckDB lakehouse
 
+> **Moved (2026-11-03).** The lakehouse now lives in its own repo, [pugwala/lakehouse](https://github.com/pugwala/lakehouse),
+> with course 1 as a pinned submodule, and the live lab runs from there. This branch is frozen and no longer updated.
+
 The course's mock data in a DuckDB lakehouse on a single Proxmox VM: DuckLake tables (Postgres catalog,
 Parquet on local disk), loaded from course 1's published handoff: its own generator and the same session 2–4
 cleansing the class uses, so every number matches the Facilitator Guide. dbt builds gold, and Dagster runs it all at 05:00 Central.
