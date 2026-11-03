@@ -81,3 +81,13 @@ models:
   description: Fights each mission ran into, typed and cleaned, problems flagged in issues.
   config:
     alias: mission_incident
+- name: ws_incident_report
+  description: 'Incident reports typed and cleaned, problems flagged in issues: who wrote what about which fight, and
+    when. The narrative is free text kept exactly as written; it names people (names, aliases, SIDs, birth dates,
+    phone numbers), and mention_key/incident_report says where.'
+  config:
+    alias: incident_report
+  columns:
+  - name: narrative
+    meta:
+      sensitivity: personal

@@ -37,15 +37,16 @@ def tag_set(entity: dict) -> set:
 
 
 def test_every_column_people_tagged_by_hand_is_tagged_in_the_lake():
-    """ops.column_tags gives a PIIType tag to every one of the 42 columns dbt's docs mark restricted or personal,
-    across the course's and the world's tables."""
+    """ops.column_tags gives a PIIType tag to every one of the 44 columns dbt's docs mark restricted or personal,
+    across the course's and the world's tables (44 since Priority 5: the incident reports' narrative, bronze and
+    silver, which the tagger finds as free text)."""
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "openmetadata"))
     import om_sync
     hand = {(s, t, c) for (s, t), d in om_sync.dbt_docs().items() for c, cd in d.get("columns", {}).items()
             if cd.get("sensitivity")}
     tagged = set(lake_rows("SELECT DISTINCT table_schema, table_name, column_name FROM lake.ops.column_tags "
                            "WHERE tag LIKE 'PIIType.%'"))
-    assert len(hand) == 42
+    assert len(hand) == 44
     assert sorted(hand - tagged) == []
 
 

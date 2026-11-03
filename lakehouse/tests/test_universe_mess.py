@@ -29,7 +29,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from lakehouse import lake  # noqa: E402
-from lakehouse.universe import build, manifest, mess, scale, writer  # noqa: E402
+from lakehouse.universe import build, manifest, mess, reports, scale, writer  # noqa: E402
 
 CHUNK_ROWS = 250_000
 OUT = {}
@@ -125,10 +125,12 @@ def eligible_cells(kind: str) -> int:
 # --- shape -------------------------------------------------------------------------------------------------------
 
 def test_every_table_has_a_messy_copy_and_an_answer_key_in_the_manifest(world):
-    """manifest.json fingerprints a messy CSV and an answer key per table, verify() rereads them, and the messy copy
-    has the clean table's columns and rows (person also has its duplicates)."""
+    """manifest.json fingerprints a messy CSV and an answer key per table, plus the incident reports' mention key,
+    verify() rereads them, and the messy copy has the clean table's columns and rows (person also has its
+    duplicates)."""
     m = manifest.read(world)
-    assert set(m["mess"]) == {f"{d}/{t}" for d in ("messy", "answer_key") for t in build.ORDER}
+    assert set(m["mess"]) == ({f"{d}/{t}" for d in ("messy", "answer_key") for t in build.ORDER}
+                              | {reports.MENTIONS})
     assert set(m["tables"]) == set(build.ORDER)
     assert manifest.verify(world) == []
     for t in build.ORDER:

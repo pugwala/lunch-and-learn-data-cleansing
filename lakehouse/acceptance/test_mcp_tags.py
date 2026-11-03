@@ -53,9 +53,10 @@ def tagged_columns(tag: str) -> set:
 
 
 def test_one_table_tag_finds_every_table_that_carries_it():
-    """Governance.CJIS: exactly the 54 tables the tagger marked CJIS, each saying it matched on the table itself."""
+    """Governance.CJIS: exactly the 56 tables the tagger marked CJIS (56 since Priority 5's incident reports), each
+    saying it matched on the table itself."""
     got = find(tags=["Governance.CJIS"])
-    assert tables(got) == tagged_tables("Governance.CJIS") and got["table_count"] == 54
+    assert tables(got) == tagged_tables("Governance.CJIS") and got["table_count"] == 56
     assert all(t["table_tags"] == ["Governance.CJIS"] and t["matched"] == ["Governance.CJIS"] for t in got["tables"])
 
 
@@ -120,7 +121,7 @@ def test_no_tags_lists_every_tag_in_use():
     got = find()
     assert got["tables"] == [] and len(got["tags"]) >= 40
     by = {t["tag"]: t for t in got["tags"]}
-    assert by["Governance.CJIS"]["tables"] == 54 and by["Governance.CJIS"]["family"] == "Governance"
+    assert by["Governance.CJIS"]["tables"] == 56 and by["Governance.CJIS"]["family"] == "Governance"
     assert by["PIIType.BirthDate"]["columns"] == 4 and by["PIIType.BirthDate"]["description"]
     assert by["Lakehouse.SID Number"]["columns"] > 0 and by["Lakehouse.SID Number"]["description"]
 

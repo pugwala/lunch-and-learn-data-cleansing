@@ -117,3 +117,6 @@ mission,status,ongoing
 mission_member,role,lead
 mission_member,role,member
 mission_member,role,support
+incident_report,report_kind,desk report
+incident_report,report_kind,field report
+incident_report,report_kind,witness statement

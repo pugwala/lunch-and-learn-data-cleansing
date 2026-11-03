@@ -41,7 +41,7 @@ import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
-from . import core, scale
+from . import core, reports, scale
 from .rng import stream
 
 # Which columns get which mess. fk: {column: the table it links to}. order: {later date: (the link to follow, or
@@ -78,6 +78,9 @@ SPEC = {
                 "order": {"ended_on": (None, None, "started_on")}},
     "mission_member": {"codes": ["role"], "fk": {"mission_id": "mission", "person_id": "person"}},
     "mission_incident": {"fk": {"mission_id": "mission", "incident_id": "incident"}},
+    # The narrative is in no class, so it stays exactly as written: the mention key's places hold in the lake.
+    "incident_report": {"timestamps": ["filed_at"], "codes": ["report_kind"],
+                        "fk": {"incident_id": "incident", "author_person_id": "person"}},
 }
 
 # Each kind's share of the cells it can hit.
@@ -409,6 +412,8 @@ def write_chunk(table_name: str, chunk: int, ctx: dict, out_dir: Path) -> dict:
     clean = pq.read_table(Path(ctx[f"{table_name}_dir"]) / f"{part}.parquet")
     messy, key = dirty(table_name, clean, stream(ctx["seed"], f"mess/{table_name}", chunk), ctx)
     out = {}
+    if table_name == "incident_report":
+        out["mentions"] = write_mentions(clean, chunk, ctx, out_dir)
     for folder, name in (("messy", f"{part}.csv"), ("answer_key", f"{part}.parquet")):
         path = Path(out_dir) / folder / table_name / name
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -420,6 +425,19 @@ def write_chunk(table_name: str, chunk: int, ctx: dict, out_dir: Path) -> dict:
             rows = key.num_rows
         out[folder] = {"name": name, "rows": rows, "sha256": core.sha256(path)}
     return out
+
+
+def write_mentions(clean: pa.Table, chunk: int, ctx: dict, out_dir: Path) -> dict:
+    """The incident reports' mention key for one chunk (reports.py): composed again from the chunk's own stream,
+    checked against the clean narratives, written to mention_key/incident_report; its manifest entry."""
+    start = clean["incident_report_id"][0].as_py()
+    again, mentions = reports.compose(stream(ctx["seed"], "incident_report", chunk), start, clean.num_rows, ctx)
+    if not again["narrative"].equals(clean["narrative"]):
+        raise ValueError(f"incident_report chunk {chunk}: composing again gave other narratives than the clean table")
+    path = Path(out_dir) / reports.MENTIONS / f"part-{chunk:05d}.parquet"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    pq.write_table(mentions, path, compression="zstd", use_dictionary=True, write_statistics=True)
+    return {"name": path.name, "rows": mentions.num_rows, "sha256": core.sha256(path)}
 
 
 def build_mess(out_dir: Path, ctx: dict, built: dict, workers: int = 1) -> dict:
@@ -438,4 +456,8 @@ def build_mess(out_dir: Path, ctx: dict, built: dict, workers: int = 1) -> dict:
             e = entries.setdefault(f"{folder}/{t}", {"rows": 0, "files": []})
             e["rows"] += files[folder]["rows"]
             e["files"].append(files[folder])
+        if "mentions" in files:
+            e = entries.setdefault(reports.MENTIONS, {"rows": 0, "files": []})
+            e["rows"] += files["mentions"]["rows"]
+            e["files"].append(files["mentions"])
     return entries

@@ -81,3 +81,11 @@ models:
   description: Fights each mission ran into, as written.
   config:
     alias: mission_incident
+- name: wb_incident_report
+  description: Incident reports as written, free text included (Priority 5).
+  config:
+    alias: incident_report
+  columns:
+  - name: narrative
+    meta:
+      sensitivity: personal

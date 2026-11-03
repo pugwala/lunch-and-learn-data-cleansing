@@ -5,10 +5,11 @@
 Needs the stack, with the world built (world_refresh and world_monthly_job) and om_sync.py and om_to_rdf.py run
 after it. The tests check that:
   - OpenMetadata's glossary has the world's terms (Incident, Location, Participant, Power, Power Use, Damage
-    Assessment, Charge, Court Outcome, Team, Mission, Person Key, Person Role) with their typed relations, the new
-    occursAt among them (Incident occurs at Location);
+    Assessment, Charge, Court Outcome, Team, Mission, Person Key, Person Role, Incident Report) with their typed
+    relations, the new occursAt among them (Incident occurs at Location);
   - every world_bronze, world_silver and world_gold table is in OpenMetadata, names and birth dates are tagged
-    Personal where they live (bronze and silver), a team's STG group Restricted, and columns link to the terms they
+    Personal where they live (bronze and silver), a team's STG group Restricted, an incident report's
+    narrative Personal and free text (PIIType.FreeText, set by the tagger), and columns link to the terms they
     mean, a column qualified by table where its name means different things in different tables (a court's
     outcome is not a fight's);
   - Fuseki has the same: the relations, the columns' terms, person_key deduced pseudonymous like the SID;
@@ -25,7 +26,7 @@ from test_om_sync import LAKEHOUSE, OM, get, om  # noqa: F401  (om is a fixture)
 from lakehouse import lake
 
 WORLD_TERMS = {"Incident", "Location", "Participant", "Power", "Power Use", "Damage Assessment", "Charge",
-               "Court Outcome", "Team", "Mission", "Person Key", "Person Role"}
+               "Court Outcome", "Team", "Mission", "Person Key", "Person Role", "Incident Report"}
 WORLD_SCHEMAS = ("world_bronze", "world_silver", "world_gold")
 TERMS = {t["name"]: t for t in GLOSSARY["terms"]}
 
@@ -57,6 +58,7 @@ def test_openmetadata_has_the_worlds_terms_and_typed_relations(om):
     assert ("isAbout", "Incident") in rels("Charge")
     assert ("identifies", "Person") in rels("Person Key")
     assert ("partOf", "Incident") in rels("Participant")
+    assert ("isAbout", "Incident") in rels("Incident Report")
 
 
 # --- tables, tags and links in OpenMetadata --------------------------------------------------------------------
@@ -81,6 +83,9 @@ def test_personal_and_restricted_columns_are_tagged_where_they_live(om):
             assert "Sensitivity.Personal" in got[col], (fqn, col)
     for fqn in ("world_silver.team", "world_gold.dim_team"):
         assert "Sensitivity.Restricted" in tags(om, fqn)["stg_group"], fqn
+    for fqn in ("world_bronze.incident_report", "world_silver.incident_report"):
+        got = tags(om, fqn)["narrative"]
+        assert {"Sensitivity.Personal", "PIIType.FreeText"} <= got, (fqn, got)
 
 
 def test_columns_link_to_the_terms_they_mean_qualified_where_names_clash(om):
@@ -103,6 +108,8 @@ def test_fuseki_has_the_worlds_relations_and_column_meanings():
     assert ask("ASK { term:incident lh:occursAt term:location }")
     assert ask('ASK { ?c lh:table "world_gold.fct_damage" ; lh:name "cost_usd" ; lh:means term:damage-assessment }')
     assert ask('ASK { ?c lh:table "world_silver.person" ; lh:name "birth_date" ; lh:sensitivity lh:Personal }')
+    assert ask("ASK { term:incident-report lh:isAbout term:incident }")
+    assert ask('ASK { ?c lh:table "world_silver.incident_report" ; lh:name "narrative" ; lh:sensitivity lh:Personal }')
 
 
 def test_person_key_is_deduced_pseudonymous_like_the_sid():

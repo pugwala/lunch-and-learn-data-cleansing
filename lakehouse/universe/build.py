@@ -2,7 +2,7 @@
 
 Extracts today's people from course 1's pinned handoff (lakehouse/handoff, checked against its lock), builds every table in dependency order with world.py's factories,
 then (for a whole build) each table's messy CSV copy and answer key (mess.py), and writes the manifest. Fights come after people, and power uses after participants, because each reads
-the tables before it. The default folder is /lake/landing/universe/<scale>. A build replaces the folder's tables;
+the tables before it; incident reports come last, because they read the fights, the people and the damage. The default folder is /lake/landing/universe/<scale>. A build replaces the folder's tables;
 manifest.verify() then checks every file.
 """
 import argparse
@@ -13,17 +13,17 @@ import time
 from functools import partial
 from pathlib import Path
 
-from . import core, courts, fights, manifest, mess, missions, scale, world, writer
+from . import core, courts, fights, manifest, mess, missions, reports, scale, world, writer
 
 ORDER = ["location", "power", "team", "person", "person_power", "team_member",
          "incident", "participant", "power_use", "damage",
-         "charge", "disposition", "mission", "mission_member", "mission_incident"]
+         "charge", "disposition", "mission", "mission_member", "mission_incident", "incident_report"]
 FACTORIES = {"location": world.location, "power": world.power, "team": world.team, "person": world.person,
              "person_power": world.person_power, "team_member": world.team_member,
              "incident": fights.incident, "participant": fights.participant, "power_use": fights.power_use,
              "damage": fights.damage, "charge": courts.charge, "disposition": courts.disposition,
              "mission": missions.mission, "mission_member": missions.mission_member,
-             "mission_incident": missions.mission_incident}
+             "mission_incident": missions.mission_incident, "incident_report": reports.incident_report}
 DEFAULT_ROOT = Path("/lake/landing/universe")
 
 

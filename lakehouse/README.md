@@ -926,6 +926,34 @@ uninsured and conviction filters dropped, the calendar starting with the custody
 forgetting Insurance, contracts keyed by model name again, and the Custody status table listing every product.
 OpenMetadata names dbt's `INTEGER` as `INT`; `om_sync.py` translates it, or the contract is refused.
 
+**Priority 5, incident reports, the free text (`universe/reports.py`).** The last table of the approved model:
+what someone wrote about a fight, about 200,000 at M (10.8 s to build). Bigger fights are written up more often (a
+weighted sample of the fight plan), one report per fight at most, in three kinds:
+
+| Kind | At M | Written by | Reads like |
+| --- | --- | --- | --- |
+| `field report` | 148k | A hero who was in the fight | Third person: the scene, each suspect (name, alias, SID, DOB), the powers used, who was caught, the help, the damage, the signature |
+| `witness statement` | 32k | A civilian who was in it | First person, signed with their own name and phone number |
+| `desk report` | 18k | Nobody (the desk) | The call as taken, sometimes with a records check on the suspect |
+
+The narrative reads like people write: dates and times several ways, 10% in capitals, 15% with typos, 2.5% junk
+(`SEE ATTACHED`, `TBD`, null). It names people, which is the point: names, aliases, SIDs, birth dates, heroes' real
+names and witnesses' phone numbers (fictional `555-01xx` numbers only). A third key sits beside `messy/` and
+`answer_key/`:
+
+| Folder | At M | What's in it |
+| --- | --- | --- |
+| `mention_key/incident_report/part-NNNNN.parquet` | 1.9M rows | One row per personal detail in a narrative: `incident_report_id`, `start_pos` and `end_pos` (characters, from 0, end excluded), `kind` (`person_name`, `alias`, `sid`, `birth_date`, `phone`), `as_written`, `person_id`, and `truth` as the person table holds it (`LAST, FIRST`, the ISO date, `NNN-555-01NN`) |
+
+The mess never touches the narrative (it is in no class of `mess.SPEC`), and silver keeps it exactly, so the key's
+places hold in `world_silver.incident_report` too: a text session can grade redaction on the lake itself. The other
+columns get the usual mess (`filed_at`, `report_kind`, the links). With no rule change, the tagger finds the
+narrative by its values (`PIIType.FreeText`) and both tables become `Governance.PII` and, through lineage, CJIS; the
+glossary's **Incident Report** term is about Incident and related to Person. Tests:
+`pytest lakehouse/tests/test_universe_reports.py` (13; 12 mutations all caught) and `test_world_lake.py` (silver
+keeps every narrative; 3 dbt mutations caught). Rebuilt at M beside the live world, every one of the 75 existing
+files was byte-identical; only the four new folders were added.
+
 ## Test status
 
 **Before a push, or in CI:** `bash lakehouse/ci/checks.sh` runs every check that needs no secrets and no running stack,
@@ -984,14 +1012,15 @@ only says there's nothing to check. Its first run passed all 14 checks on a GitH
 | Custody mart (`mart_custody`, enforced contracts): 7 acceptance tests (`test_custody_marts.py`) and 3 dbt tests, each seen failing first; a deliberate type change was refused by dbt | On the VM |
 | Custody products on Cube (three views; the MCP server picks the view that has the dimension): 10 acceptance tests (`test_custody_cube.py`), each seen failing first | On the VM |
 | Product descriptors, OpenMetadata domain, data products and contracts, DCAT in Fuseki, product freshness and coverage alerts: 17 acceptance tests (`test_products.py`, one per product where a test checks each), each seen failing first; a made-up view in a descriptor failed its test, and a 30-hour-old refresh fired `DataProductStale` | On the VM |
-| Automatic tags (`tagging/`, the `governance/tags` step, `om_sync.py`'s five classifications): 33 tests in `test_tagging.py` and 5 acceptance tests in `test_tags.py`, seen failing first; 6 mutations caught. Live: 54 CJIS tables, 26 with personal data, 86 personal columns, all 42 hand tags found, search by tag finds exactly the tagged tables, and `om_sync.py --check` is in step | On the VM |
+| Automatic tags (`tagging/`, the `governance/tags` step, `om_sync.py`'s five classifications): 33 tests in `test_tagging.py` and 5 acceptance tests in `test_tags.py`, seen failing first; 6 mutations caught. Live: 56 CJIS tables, 28 with personal data, 88 personal columns (since Priority 5's narratives), all 44 hand tags found, search by tag finds exactly the tagged tables, and `om_sync.py --check` is in step | On the VM |
 | Course 1's add-on (`LAKEHOUSE_COURSE1`: dbt, Cube, Superset, Dagster, the notebook alert, bootstrap): 10 tests in `test_course1_addon.py` and 1 bats test, seen failing first; 8 mutations caught. `checks.sh` builds dbt and loads Dagster with it off, and asks Cube's image which files it loads both ways; the live lab (on) passed `daily_lake` and every acceptance test as before | On the VM |
 | Course 1's handoff (`handoff/`: publish, the 19 numbers on the files, the contract, adopt, the lock; `universe` and the daily load reading from it): 9 tests in `test_handoff.py`, 6 in `test_lake_load.py` and 4 in `test_universe.py`, seen failing first (the code scan named 14 places `universe` reached into course 1); 12 mutations all caught. The world built from the handoff is byte-identical to the lake-built one at S and M, and the lake landed from it matched every ref, bronze and silver table from before | On the VM |
 | The world's data products (three descriptors, two domains, two inputs, four Cube views, monthly contracts, the Fights, Damage and Courts dashboard, freshness from Dagster materializations): 19 acceptance tests (`test_world_products.py`), all seen failing first; 7 mutations all caught | On the VM |
+| Incident reports, the free text (`universe/reports.py`, the mention key, the world's bronze and silver, the Incident Report term): 13 tests in `test_universe_reports.py`, 1 more in `test_world_lake.py` and the reports' checks in `test_world_meaning.py`, all seen failing first; 15 mutations all caught. Live at M: 200,000 reports, 1,893,406 mentions, every one at its place in silver; the tagger tags the narrative free text on its own | On the VM |
 
 ## Next phases
 
-**Dataset expansion:** chunks 2 (the generator foundation) and 3 (people, powers and places) are done; next is chunk 4, fights: participants, power uses and damages.
+**Dataset expansion:** chunks 0 to 9 and Priority 5 (incident reports) are done, so the approved model is complete; next is chunk 10, the scale-up to L with benchmarks.
 
 Phases 0 to 6 are done: OpenMetadata holds the glossary and the sensitivity tags, the tags drive Cube's masks,
 Fuseki serves the same meaning as SPARQL, and Prometheus, Grafana and Alertmanager watch the platform, the pipeline

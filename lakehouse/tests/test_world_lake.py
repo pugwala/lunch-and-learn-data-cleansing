@@ -11,7 +11,8 @@ ref.nibrs_offenses and silver.hero_offenders' keys and sentence dates. The tests
   - every messy row lands in bronze and in silver, nothing dropped;
   - silver finds the duplicate people and the out-of-order dates the key lists (its precision and recall);
   - gold keeps names and birth dates out, and its facts hold every silver row;
-  - a month rebuilt on its own (vars world_from/world_to, as a Dagster partition runs it) gives the same rows.
+  - a month rebuilt on its own (vars world_from/world_to, as a Dagster partition runs it) gives the same rows;
+  - silver keeps every incident report's narrative exactly as written, so the mention key's places hold there.
 """
 import json
 import os
@@ -29,7 +30,7 @@ from lakehouse.universe import build, manifest  # noqa: E402
 
 DBT = Path(__file__).resolve().parents[1] / "dbt"
 MONTH = ("2015-06-01", "2015-07-01")
-MONTHLY = ["participant", "power_use", "damage", "charge", "disposition", "mission_incident"]
+MONTHLY = ["participant", "power_use", "damage", "charge", "disposition", "mission_incident", "incident_report"]
 
 
 def dbt(tmp: Path, db: Path, root: Path, *args, extra_vars=None) -> subprocess.CompletedProcess:
@@ -113,12 +114,23 @@ def test_silver_finds_the_duplicate_people_and_out_of_order_dates(world):
 def test_gold_keeps_personal_data_out_and_its_facts_hold_every_silver_row(world):
     """No names or birth dates in gold; one gold person per resolved person; facts row for row with silver."""
     cols = {r[0] for r in query(world, "SELECT column_name FROM information_schema.columns WHERE table_schema = 'world_gold'")}
-    assert not cols & {"last_name", "first_name", "alias", "birth_date", "codename"}
+    assert not cols & {"last_name", "first_name", "alias", "birth_date", "codename", "narrative"}
     assert one(world, "SELECT count(*) FROM world_gold.dim_person") == one(
         world, "SELECT count(DISTINCT person_key) FROM world_silver.person")
     for fact, table in [("fct_incident", "incident"), ("fct_participation", "participant"), ("fct_power_use", "power_use"),
                         ("fct_damage", "damage"), ("fct_charge", "charge"), ("fct_mission", "mission")]:
         assert one(world, f"SELECT count(*) FROM world_gold.{fact}") == one(world, f"SELECT count(*) FROM world_silver.{table}"), fact
+
+
+def test_silver_keeps_every_narrative_as_written(world):
+    """Every report's silver narrative is the clean one (null where it is null), and every mention in the key is the
+    silver text at its place: a text session can grade redaction on the lake itself."""
+    assert one(world, """SELECT count(*) FROM world_silver.incident_report s
+                         FULL JOIN read_parquet('$root/incident_report/*.parquet') c USING (incident_report_id)
+                         WHERE s.narrative IS DISTINCT FROM c.narrative""") == 0
+    assert one(world, """SELECT count(*) FROM read_parquet('$root/mention_key/incident_report/*.parquet') m
+                         JOIN world_silver.incident_report s USING (incident_report_id)
+                         WHERE substr(s.narrative, m.start_pos + 1, m.end_pos - m.start_pos) IS DISTINCT FROM m.as_written""") == 0
 
 
 def fingerprint(world, schema, table, month):

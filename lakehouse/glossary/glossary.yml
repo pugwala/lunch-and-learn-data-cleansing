@@ -212,6 +212,18 @@ terms:
     relations:
       - {type: isAbout, term: Incident}
 
+  - name: Incident Report
+    definition: >
+      What someone wrote about a fight, in their own words: a hero's field report, a civilian's witness statement,
+      or the desk's note of the call. The narrative is free text that names people (names, aliases, SIDs, birth
+      dates, heroes' real names, witnesses' phone numbers), so it is personal data however it is used; the mention
+      key (mention_key/incident_report in the world's build) says exactly where each one is, for redaction work.
+    synonyms: [report, write-up, narrative, witness statement, field report]
+    columns: [incident_report_id, narrative]
+    relations:
+      - {type: isAbout, term: Incident}
+      - {type: relatedTo, term: Person}
+
   - name: Charge
     definition: >
       An accusation against a villain captured in a fight: the NIBRS offense code and the day it was filed, on or

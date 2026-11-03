@@ -59,6 +59,10 @@
     "mission_incident": {"cols": [["mission_incident_id", "id"], ["mission_id", "fk:mission"],
                                   ["incident_id", "fk:incident"]],
                          "month": ["incident_id", "incident"]},
+    "incident_report": {"cols": [["incident_report_id", "id"], ["incident_id", "fk:incident"],
+                                 ["author_person_id", "fk:person"], ["report_kind", "code"],
+                                 ["filed_at", "timestamp"], ["narrative", "text"]],
+                        "month": ["incident_id", "incident"]},
   }) }}
 {% endmacro %}
 

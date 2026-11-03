@@ -29,3 +29,5 @@ UNION ALL
 SELECT 'mission_member' AS table_name, mission_member_id AS id, unnest(issues, recursive := true) FROM {{ ref('ws_mission_member') }}
 UNION ALL
 SELECT 'mission_incident' AS table_name, mission_incident_id AS id, unnest(issues, recursive := true) FROM {{ ref('ws_mission_incident') }}
+UNION ALL
+SELECT 'incident_report' AS table_name, incident_report_id AS id, unnest(issues, recursive := true) FROM {{ ref('ws_incident_report') }}
